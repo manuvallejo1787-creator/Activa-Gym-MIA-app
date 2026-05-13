@@ -642,7 +642,12 @@ const emptyCliente=()=>({
 // ════════════════════════════════════════════════════════════════════════════
 export default function App(){
   const s=mkS();
-  const [tab,setTab]=useState('clientes');
+  const [tab,setTab]=useState(()=>{
+    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
+  });
+  useEffect(()=>{
+    try { localStorage.setItem('activa_tab',tab); } catch {}
+  },[tab]);
   const [exs,setExs]=useState(DB0);
   const [session,setSession]=useState({obj:null,blocks:[],name:'',cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],notas:''});
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
@@ -675,8 +680,19 @@ export default function App(){
   const [overrideState,setOverrideState]=useState(null);
   const [addBType,setAddBType]=useState('');
   const [addBPos,setAddBPos]=useState('');
-  const [brand,setBrand]=useState({gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'});
-  const [clientWizard,setClientWizard]=useState(null); // {cli, step}
+  // brand persiste en localStorage — no se pierde al cambiar de pestaña
+  const [brand,setBrand]=useState(()=>{
+    try {
+      const saved=localStorage.getItem('activa_brand');
+      return saved ? JSON.parse(saved) : {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'};
+    } catch { return {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'}; }
+  });
+  // Guardar brand en localStorage cada vez que cambia
+  useEffect(()=>{
+    try { localStorage.setItem('activa_brand', JSON.stringify(brand)); } catch {}
+  },[brand]);
+  const [clientWizard,setClientWizard]=useState(null);
+
   const logoInputRef=useRef();
   const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
 
@@ -789,11 +805,11 @@ export default function App(){
     {title:'Síntesis y plan',           icon:'📋',fase:2},
   ];
 
-  const ClientWizardModal=()=>{
+  const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening})=>{
     if(!clientWizard)return null;
     const [step,setStep]=useState(clientWizard.step||0);
-    const [form,setForm]=useState({...clientWizard.cli});
-    const [sc,setSc]=useState({...clientWizard.cli.screening});
+    const [form,setForm]=useState(()=>({...clientWizard.cli}));
+    const [sc,setSc]=useState(()=>({...clientWizard.cli.screening}));
     const set=(k,v)=>setForm(f=>({...f,[k]:v}));
     const setSCK=(k,v)=>setSc(f=>({...f,[k]:v}));
     const isNew=!clientWizard.cli.screeningCompleto;
@@ -1212,7 +1228,7 @@ export default function App(){
             <div style={{fontWeight:800,fontSize:15}}>{form.nombre?`${form.nombre} ${form.apellido}`:'Alta de nuevo cliente'}</div>
             <div style={{fontSize:11,color:G3,marginTop:2}}>{WIZARD_STEPS[step].fase===1?'📋 Fase 1 — Autocompletado':WIZARD_STEPS[step].fase==='transicion'?'💾 Guardar progreso':'🩺 Fase 2 — Evaluación profesional'}</div>
           </div>
-          <button onClick={()=>setClientWizard(null)} style={s.btnG}>✕</button>
+          <button onClick={()=>{setClientWizard(null);}} style={s.btnG}>✕</button>
         </div>
         {/* Barra de pasos */}
         <div style={{display:'flex',gap:3,marginBottom:16,overflowX:'auto'}}>
@@ -1956,7 +1972,7 @@ export default function App(){
 
   return(
     <div style={s.page}>
-      {clientWizard&&<ClientWizardModal/>}
+      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...
@@ -1986,9 +2002,9 @@ export default function App(){
         ))}
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
-        {tab==='clientes'&&<ClientesTab/>}
-        {tab==='session'&&<SessionTab/>}
-        {tab==='rehab'&&<RehabTab/>}
+        {tab==='clientes'&&{ClientesTab()}}
+        {tab==='session'&&{SessionTab()}}
+        {tab==='rehab'&&{RehabTab()}}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
@@ -1997,9 +2013,9 @@ export default function App(){
               .catch(e=>console.error('Error sincronizando con gym:',e));
           }}
         />}
-        {tab==='export'&&<ExportTab/>}
-        {tab==='db'&&<DBTab/>}
-        {tab==='brand'&&<BrandingTab/>}
+        {tab==='export'&&{ExportTab()}}
+        {tab==='db'&&{DBTab()}}
+        {tab==='brand'&&{BrandingTab()}}
       </div>
     </div>
   );

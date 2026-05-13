@@ -239,6 +239,11 @@ const fs={
 // ══════════════════════════════════════════════════════════════════════════
 export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient }){
   const [view,setView]=useState('dashboard');
+  // Estado levantado de sub-componentes (evita pérdida de foco en inputs)
+  const [protFase,setProtFase]=useState('restaura');
+  const [protReg,setProtReg]=useState('lumbar');
+  const [altaPacId,setAltaPacId]=useState('');
+  const [pacForm,setPacForm]=useState(null); // estado del formulario de paciente
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
   const { pacientes: dbPacientes, loading: dbLoading, error: dbError, savePaciente: dbSavePaciente, deletePaciente: dbDeletePaciente, saveEvaluacion: dbSaveEvaluacion } = useFisioPacientes();
   const [pacientes, setPacientes] = useState([]);
@@ -299,6 +304,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
     dbSavePaciente(p).catch(e=>console.error('Error guardando paciente:',e));
     setShowPacForm(false);
     setEditingPac(null);
+    setPacForm(null);
   };
 
   // ── DASHBOARD ──────────────────────────────────────────────────────────
@@ -1060,9 +1066,9 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
 
   // ── PROTOCOLOS ────────────────────────────────────────────────────────
   const Protocolos=()=>{
-    const [selFase,setSelFase]=useState('restaura');
-    const fase=FASES_BASE[selFase];
-    const [selReg,setSelReg]=useState('lumbar');
+    const selFase=protFase; const setSelFase=setProtFase;
+    const fase=FASES_BASE[selFase]||FASES_BASE['restaura'];
+    const selReg=protReg; const setSelReg=setProtReg;
     return(
       <div style={{padding:'14px'}}>
         <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Protocolos y Criterios de Evolución</div>
@@ -1083,11 +1089,11 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
             <div>
               <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:5,textTransform:'uppercase'}}>Para ingresar a esta fase</div>
-              {fase.criterios_base_ingreso.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:TL,flexShrink:0}}>✓</span>{c}</div>)}
+              {fase.criterios_ingreso.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:TL,flexShrink:0}}>✓</span>{c}</div>)}
             </div>
             <div>
               <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:5,textTransform:'uppercase'}}>Para avanzar a la siguiente</div>
-              {fase.criterios_base_avance.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:AM,flexShrink:0}}>→</span>{c}</div>)}
+              {fase.criterios_avance.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:AM,flexShrink:0}}>→</span>{c}</div>)}
             </div>
           </div>
           <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:6,padding:'10px 12px'}}>
@@ -1126,7 +1132,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
 
   // ── ALTAS CLÍNICAS ────────────────────────────────────────────────────
   const AltasCli=()=>{
-    const [selPac,setSelPac]=useState('');
+    const selPac=altaPacId; const setSelPac=setAltaPacId;
     const pac=pacientes.find(p=>p.id===selPac);
     const last=pac?.evaluaciones[pac.evaluaciones.length-1];
     const rp=last?calcROMpct(last.rom,pac.region):null;
@@ -1211,14 +1217,15 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
   // ── FORMULARIO PACIENTE ───────────────────────────────────────────────
   const PacienteForm=()=>{
     if(!editingPac)return null;
-    const [form,setForm]=useState({...editingPac});
-    const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+    // Inicializar pacForm si cambió el paciente que se edita
+    if(!pacForm||pacForm.id!==editingPac.id){ setPacForm({...editingPac}); return null; }
+    const form=pacForm; const set=(k,v)=>setPacForm(f=>({...f,[k]:v}));
     return(
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
         <div style={{background:WH,borderRadius:12,padding:22,width:'100%',maxWidth:440,marginBottom:20}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:14}}>
             <div style={{fontWeight:800,fontSize:14,color:NV}}>{form.nombre?`${form.nombre} ${form.apellido}`:'Nuevo paciente'}</div>
-            <button onClick={()=>{setShowPacForm(false);setEditingPac(null);}} style={fs.btnG}>✕</button>
+            <button onClick={()=>{setShowPacForm(false);setEditingPac(null);setPacForm(null);}} style={fs.btnG}>✕</button>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
             <div><span style={fs.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={fs.inp}/></div>
@@ -1232,7 +1239,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
             {gymClients.length>0&&<div style={{gridColumn:'1/-1'}}><span style={fs.lbl}>Vincular con cliente del gym</span><select value={form.gym_clienteId||''} onChange={e=>set('gym_clienteId',e.target.value)} style={{...fs.sel,width:'100%'}}><option value=''>Sin vinculación</option>{gymClients.map(c=><option key={c.id} value={c.id}>{c.nombre} {c.apellido}</option>)}</select></div>}
             <div style={{gridColumn:'1/-1'}}><span style={fs.lbl}>Notas internas</span><textarea value={form.notas||''} onChange={e=>set('notas',e.target.value)} rows={2} style={{...fs.inp,resize:'vertical'}}/></div>
           </div>
-          <button onClick={()=>savePaciente(form)} disabled={!form.nombre||!form.apellido||!form.documento} style={{...fs.btnTL,width:'100%',padding:'10px',opacity:(!form.nombre||!form.apellido||!form.documento)?.4:1}}>Guardar paciente</button>
+          <button onClick={()=>{savePaciente(pacForm);setPacForm(null);}} disabled={!pacForm?.nombre||!pacForm?.apellido||!pacForm?.documento} style={{...fs.btnTL,width:'100%',padding:'10px',opacity:(!form.nombre||!form.apellido||!form.documento)?.4:1}}>Guardar paciente</button>
         </div>
       </div>
     );
@@ -1294,8 +1301,8 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
 
   // ── RENDER PRINCIPAL ──────────────────────────────────────────────────
   const VIEWS={
-    dashboard:<Dashboard/>,pacientes:<PacientesView/>,'ver-paciente':<VerPaciente/>,'nueva-eval':<NuevaEval/>,'ver-eval':<VerEval/>,
-    kpis:<KPIs/>,protocolos:<Protocolos/>,altas:<AltasCli/>,
+    dashboard:{Dashboard()},pacientes:{PacientesView()},'ver-paciente':{VerPaciente()},'nueva-eval':{NuevaEval()},'ver-eval':{VerEval()},
+    kpis:{KPIs()},protocolos:{Protocolos()},altas:{AltasCli()},
     reevals:<div style={{padding:'14px'}}><div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Re-evaluaciones</div>{pacientes.filter(p=>p.evaluaciones.length>0).map(p=>{const l=p.evaluaciones[p.evaluaciones.length-1];return(<div key={p.id} style={{...fs.card,borderLeft:`4px solid ${AM}`,marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><div style={{fontSize:12,fontWeight:700}}>{p.nombre} {p.apellido}</div><div style={{fontSize:10,color:GM}}>Última eval.: {l?.fecha} · {FASES_BASE[l?.fase]?.badge}</div>{l?.objetivo&&<div style={{fontSize:10,color:TL}}>🎯 "{l.objetivo}"</div>}</div><button onClick={()=>{setCurrentPac(p);setCurrentEval({...emptyEval(),tipo:'reeval',region:p.region,objetivo:l?.objetivo||''});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'4px 10px'}}>Re-evaluar</button></div></div>);})}
     {pacientes.filter(p=>p.evaluaciones.length>0).length===0&&<div style={{...fs.card,textAlign:'center',padding:24,color:GM}}>Sin pacientes para re-evaluar.</div>}</div>,
   };
@@ -1324,7 +1331,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         </button>
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
-        {VIEWS[view]||<Dashboard/>}
+        {VIEWS[view]||{Dashboard()}}
       </div>
     </div>
   );
