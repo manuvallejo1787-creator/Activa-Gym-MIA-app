@@ -1,22 +1,25 @@
-// supabase.js — Cliente de Supabase
-// Las variables de entorno se configuran en Vercel (Settings → Environment Variables)
-// Para desarrollo local: crear archivo .env.local con estas variables
-
+// supabase.js — Cliente robusto, nunca crashea la app
 import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('⚠️ Faltan las variables de entorno de Supabase. Verificar .env.local o Vercel Environment Variables.')
+let supabaseClient = null
+
+try {
+  if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true },
+      realtime: { params: { eventsPerSecond: 10 } },
+    })
+    console.log('✅ Supabase conectado:', SUPABASE_URL)
+  } else {
+    console.warn('⚠️ Variables Supabase no encontradas — modo local activo')
+  }
+} catch (e) {
+  console.error('Error inicializando Supabase:', e.message)
+  supabaseClient = null
 }
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  realtime: {
-    params: {
-      eventsPerSecond: 10,
-    },
-  },
-})
-
-export default supabase
+export const supabase = supabaseClient
+export const isSupabaseReady = supabaseClient !== null
