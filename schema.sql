@@ -109,6 +109,39 @@ alter publication supabase_realtime add table gym_clients;
 alter publication supabase_realtime add table fisio_pacientes;
 alter publication supabase_realtime add table fisio_evaluaciones;
 
+
+-- ─── TABLA: EJERCICIOS ───────────────────────────────────────────────────
+create table if not exists ejercicios (
+  id            text primary key,
+  nombre        text not null,
+  bloque        text not null,
+  musculos      text default '',
+  contraccion   text default '',
+  patron        text default '',
+  nivel         text default 'Principiante',
+  equipo        text default '',
+  regresion     text default '',
+  progresion    text default '',
+  media_url     text default '',
+  media_tipo    text default 'imagen',
+  media_desc    text default '',
+  custom        boolean default false,
+  created_at    timestamptz default now(),
+  updated_at    timestamptz default now()
+);
+
+create trigger ejercicios_updated_at
+  before update on ejercicios
+  for each row execute function update_updated_at();
+
+alter table ejercicios enable row level security;
+
+create policy "public_all_ejercicios"
+  on ejercicios for all
+  using (true) with check (true);
+
+alter publication supabase_realtime add table ejercicios;
+
 -- ─── VERIFICACIÓN ────────────────────────────────────────────
 select 'gym_clients' as tabla, count(*) as filas from gym_clients
 union all

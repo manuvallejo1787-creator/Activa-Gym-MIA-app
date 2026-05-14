@@ -255,3 +255,110 @@ function mapEvalToDB(pacienteId, ev) {
     data:{...rest,eva_reposo,objetivo,diagnosticoPT,plan},
   }
 }
+
+// ─── HOOK: Ejercicios (base de datos de ejercicios) ──────────────────────
+export function useEjercicios(initialExercises=[]) {
+  const [exs, setExs]     = useState(initialExercises)
+  const [loading, setLoading] = useState(true)
+  const [dbMode, setDbMode]   = useState(isSupabaseReady)
+  const initialized           = useState(false)
+
+  const fetchEjercicios = useCallback(async () => {
+    if (!isSupabaseReady) {
+      setExs(initialExercises)
+      setLoading(false)
+      return
+    }
+    try {
+      const { data, error } = await supabase
+        .from('ejercicios')
+        .select('*')
+        .order('bloque', { ascending: true })
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        // DB has exercises — use them
+        setExs(data.map(mapEjFromDB))
+        setDbMode(true)
+      } else {
+        // DB empty — seed with initial exercises
+        const rows = initialExercises.map(mapEjToDB)
+        const { error: insertError } = await supabase
+          .from('ejercicios')
+          .upsert(rows, { onConflict: 'id' })
+        if (insertError) throw insertError
+        setExs(initialExercises)
+        setDbMode(true)
+        console.log('✅ Ejercicios iniciales cargados en Supabase:', rows.length)
+      }
+    } catch (e) {
+      console.error('DB ejercicios error:', e.message)
+      setExs(initialExercises)
+      setDbMode(false)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchEjercicios()
+    if (!isSupabaseReady) return
+    const ch = supabase.channel('ejercicios_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ejercicios' },
+        payload => {
+          if (payload.eventType === 'INSERT')
+            setExs(p => [...p, mapEjFromDB(payload.new)])
+          if (payload.eventType === 'UPDATE')
+            setExs(p => p.map(e => e.id === payload.new.id ? mapEjFromDB(payload.new) : e))
+          if (payload.eventType === 'DELETE')
+            setExs(p => p.filter(e => e.id !== payload.old.id))
+        })
+      .subscribe()
+    return () => supabase.removeChannel(ch)
+  }, [fetchEjercicios])
+
+  const saveEjercicio = useCallback(async (ex) => {
+    if (dbMode && isSupabaseReady) {
+      const { error } = await supabase
+        .from('ejercicios')
+        .upsert(mapEjToDB(ex), { onConflict: 'id' })
+      if (error) throw error
+    } else {
+      setExs(p => p.find(e => e.id === ex.id)
+        ? p.map(e => e.id === ex.id ? ex : e)
+        : [...p, ex])
+    }
+  }, [dbMode])
+
+  const deleteEjercicio = useCallback(async (id) => {
+    if (dbMode && isSupabaseReady) {
+      const { error } = await supabase.from('ejercicios').delete().eq('id', id)
+      if (error) throw error
+    } else {
+      setExs(p => p.filter(e => e.id !== id))
+    }
+  }, [dbMode])
+
+  return { exs, loading, dbMode, saveEjercicio, deleteEjercicio, setExs }
+}
+
+function mapEjFromDB(r) {
+  return {
+    id: r.id, nombre: r.nombre||'', bloque: r.bloque||'movilidad',
+    musculos: r.musculos||'', contraccion: r.contraccion||'',
+    patron: r.patron||'', nivel: r.nivel||'Principiante',
+    equipo: r.equipo||'', regresion: r.regresion||'', progresion: r.progresion||'',
+    mediaUrl: r.media_url||'', mediaTipo: r.media_tipo||'imagen',
+    mediaDesc: r.media_desc||'', custom: r.custom||false,
+  }
+}
+function mapEjToDB(e) {
+  return {
+    id: e.id, nombre: e.nombre, bloque: e.bloque,
+    musculos: e.musculos||'', contraccion: e.contraccion||'',
+    patron: e.patron||'', nivel: e.nivel||'Principiante',
+    equipo: e.equipo||'', regresion: e.regresion||'', progresion: e.progresion||'',
+    media_url: e.mediaUrl||'', media_tipo: e.mediaTipo||'imagen',
+    media_desc: e.mediaDesc||'', custom: e.custom||false,
+  }
+}
