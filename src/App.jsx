@@ -2002,9 +2002,9 @@ export default function App(){
         ))}
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
-        {tab==='clientes'&&{ClientesTab()}}
-        {tab==='session'&&{SessionTab()}}
-        {tab==='rehab'&&{RehabTab()}}
+        {tab==='clientes'&&ClientesTab()}
+        {tab==='session'&&SessionTab()}
+        {tab==='rehab'&&RehabTab()}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
@@ -2013,9 +2013,9 @@ export default function App(){
               .catch(e=>console.error('Error sincronizando con gym:',e));
           }}
         />}
-        {tab==='export'&&{ExportTab()}}
-        {tab==='db'&&{DBTab()}}
-        {tab==='brand'&&{BrandingTab()}}
+        {tab==='export'&&ExportTab()}
+        {tab==='db'&&DBTab()}
+        {tab==='brand'&&BrandingTab()}
       </div>
     </div>
   );
