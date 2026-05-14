@@ -1301,8 +1301,8 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
 
   // ── RENDER PRINCIPAL ──────────────────────────────────────────────────
   const VIEWS={
-    dashboard:{Dashboard()},pacientes:{PacientesView()},'ver-paciente':{VerPaciente()},'nueva-eval':{NuevaEval()},'ver-eval':{VerEval()},
-    kpis:{KPIs()},protocolos:{Protocolos()},altas:{AltasCli()},
+    dashboard:Dashboard(),pacientes:PacientesView(),'ver-paciente':VerPaciente(),'nueva-eval':NuevaEval(),'ver-eval':VerEval(),
+    kpis:KPIs(),protocolos:Protocolos(),altas:AltasCli(),
     reevals:<div style={{padding:'14px'}}><div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Re-evaluaciones</div>{pacientes.filter(p=>p.evaluaciones.length>0).map(p=>{const l=p.evaluaciones[p.evaluaciones.length-1];return(<div key={p.id} style={{...fs.card,borderLeft:`4px solid ${AM}`,marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><div style={{fontSize:12,fontWeight:700}}>{p.nombre} {p.apellido}</div><div style={{fontSize:10,color:GM}}>Última eval.: {l?.fecha} · {FASES_BASE[l?.fase]?.badge}</div>{l?.objetivo&&<div style={{fontSize:10,color:TL}}>🎯 "{l.objetivo}"</div>}</div><button onClick={()=>{setCurrentPac(p);setCurrentEval({...emptyEval(),tipo:'reeval',region:p.region,objetivo:l?.objetivo||''});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'4px 10px'}}>Re-evaluar</button></div></div>);})}
     {pacientes.filter(p=>p.evaluaciones.length>0).length===0&&<div style={{...fs.card,textAlign:'center',padding:24,color:GM}}>Sin pacientes para re-evaluar.</div>}</div>,
   };
