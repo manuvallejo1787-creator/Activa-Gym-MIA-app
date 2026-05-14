@@ -1331,7 +1331,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         </button>
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
-        {VIEWS[view]||{Dashboard()}}
+        {VIEWS[view]||Dashboard()}
       </div>
     </div>
   );
