@@ -1610,6 +1610,74 @@ export default function App(){
     );
   };
 
+  // ── EXFORM — Componente propio (tiene useState, debe ser <JSX/>) ────────────
+  const ExForm=({ex, onSave, onClose, exs, s})=>{
+    const emptyExLocal={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:'',mediaUrl:'',mediaTipo:'imagen',mediaDesc:''};
+    const [form,setF2]=useState(ex||emptyExLocal);
+    const set=(k,v)=>setF2(f=>({...f,[k]:v}));
+    const regRef=exs.find(e=>e.id===form.regresion);
+    const progRef=exs.find(e=>e.id===form.progresion);
+    const isVideo=form.mediaUrl&&(form.mediaUrl.includes('youtube')||form.mediaUrl.includes('youtu.be')||form.mediaUrl.includes('vimeo'));
+    const getYTEmbed=(url)=>{
+      const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&\s]+)/);
+      return m?`https://www.youtube.com/embed/${m[1]}`:null;
+    };
+    return(
+      <OverlayWrap wide>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
+          <button onClick={onClose} style={s.btnG}>✕</button>
+        </div>
+        <div style={{maxHeight:'60vh',overflowY:'auto',paddingRight:4}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
+            <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>set('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+            <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>set('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
+            {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
+              <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={s.inp}/></div>
+            ))}
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión (ID o texto)</span><input value={form.regresion||''} onChange={e=>set('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión (ID o texto)</span><input value={form.progresion||''} onChange={e=>set('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
+          </div>
+          {/* MEDIA — Imagen o Video */}
+          <div style={{background:G1,borderRadius:8,padding:'12px',marginTop:4,border:`1px solid ${G2}`}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>📎 Imagen / Video del ejercicio</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={s.lbl}>URL de imagen o video</span>
+                <input value={form.mediaUrl||''} onChange={e=>set('mediaUrl',e.target.value)} style={s.inp} placeholder="https://youtube.com/watch?v=... o https://i.imgur.com/..."/>
+                <div style={{fontSize:10,color:G3,marginTop:3}}>YouTube, Vimeo, o link directo a imagen (jpg, png, gif)</div>
+              </div>
+              <div><span style={s.lbl}>Tipo</span>
+                <select value={form.mediaTipo||'imagen'} onChange={e=>set('mediaTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value='imagen'>📷 Imagen</option>
+                  <option value='video'>🎥 Video (YouTube/Vimeo)</option>
+                  <option value='gif'>🎞️ GIF animado</option>
+                </select>
+              </div>
+              <div><span style={s.lbl}>Descripción del media</span><input value={form.mediaDesc||''} onChange={e=>set('mediaDesc',e.target.value)} style={s.inp} placeholder="Ej: Demostración técnica"/></div>
+            </div>
+            {/* Preview */}
+            {form.mediaUrl&&(
+              <div style={{background:WH,borderRadius:6,padding:8,border:`1px solid ${G2}`}}>
+                <div style={{fontSize:10,color:G3,marginBottom:6,fontWeight:700,textTransform:'uppercase'}}>Vista previa</div>
+                {isVideo&&getYTEmbed(form.mediaUrl)
+                  ?<div style={{position:'relative',paddingBottom:'40%',height:0,overflow:'hidden',borderRadius:6}}>
+                      <iframe src={getYTEmbed(form.mediaUrl)} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',border:'none',borderRadius:6}} allowFullScreen title="preview"/>
+                    </div>
+                  :<img src={form.mediaUrl} alt="preview" style={{maxWidth:'100%',maxHeight:180,borderRadius:6,objectFit:'cover',display:'block'}}
+                      onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='block'}}/>
+                }
+                <div style={{display:'none',fontSize:11,color:R,marginTop:4}}>⚠ No se pudo cargar la imagen. Verificá la URL.</div>
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
+      </OverlayWrap>
+    );
+  };
+
   // ── TAB: BASE DE EJERCICIOS ───────────────────────────────────────────────
   const DBTab=()=>{
     const [editingExLocal,setEditingExLocal]=useState(null);
@@ -1621,34 +1689,7 @@ export default function App(){
     };
     return(
       <div style={{padding:'12px 14px'}}>
-        {showExFormLocal&&(
-          <OverlayWrap>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-              <div style={{fontWeight:700,fontSize:14}}>{editingExLocal?.id?'Editar':'Nuevo'} ejercicio</div>
-              <button onClick={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} style={s.btnG}>✕</button>
-            </div>
-            {(()=>{
-              const [form,setFormEx]=useState(editingExLocal||emptyEx);
-              const regRef=exs.find(e=>e.id===form.regresion);const progRef=exs.find(e=>e.id===form.progresion);
-              const setF=(k,v)=>setFormEx(f=>({...f,[k]:v}));
-              return(
-                <div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-                    <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre</span><input value={form.nombre} onChange={e=>setF('nombre',e.target.value)} style={s.inp}/></div>
-                    <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>setF('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
-                    <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>setF('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
-                    {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
-                      <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]} onChange={e=>setF(k,e.target.value)} style={s.inp}/></div>
-                    ))}
-                    <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión</span><input value={form.regresion} onChange={e=>setF('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
-                    <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión</span><input value={form.progresion} onChange={e=>setF('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
-                  </div>
-                  <button onClick={()=>saveExLocal(form)} style={{...s.btnR,width:'100%'}}>Guardar ejercicio</button>
-                </div>
-              );
-            })()}
-          </OverlayWrap>
-        )}
+        {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
           <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
           <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
@@ -1662,12 +1703,24 @@ export default function App(){
         </div>
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
-            <thead><tr style={{background:BK,color:WH}}>{['Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
+            <thead><tr style={{background:BK,color:WH}}>{['','Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
             <tbody>
               {filteredExs.map((ex,i)=>{
                 const rr=exs.find(e=>e.id===ex.regresion);const pr=exs.find(e=>e.id===ex.progresion);
+                const hasMedia=ex.mediaUrl&&ex.mediaUrl.length>0;
                 return(
                   <tr key={ex.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
+                    <td style={{padding:'4px 6px',width:40}}>
+                      {hasMedia
+                        ?<div style={{width:34,height:34,borderRadius:4,overflow:'hidden',background:G2,flexShrink:0,cursor:'pointer'}} onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}}>
+                            {(ex.mediaTipo==='video'||ex.mediaUrl?.includes('youtube')||ex.mediaUrl?.includes('youtu.be'))
+                              ?<div style={{width:34,height:34,background:'#CC0000',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>▶</div>
+                              :<img src={ex.mediaUrl} alt="" style={{width:34,height:34,objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>
+                            }
+                          </div>
+                        :<div style={{width:34,height:34,borderRadius:4,background:G1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:G3}}>📷</div>
+                      }
+                    </td>
                     <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
                     <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.tag}</span></td>
                     <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
@@ -1682,14 +1735,13 @@ export default function App(){
                   </tr>
                 );
               })}
-              {filteredExs.length===0&&<tr><td colSpan={8} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
+              {filteredExs.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
     );
   };
-
   // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
   const ExportTab=()=>{
     const hasSession=session.obj&&session.blocks.length>0;
