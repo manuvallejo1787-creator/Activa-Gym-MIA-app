@@ -186,6 +186,7 @@ function mapClientFromDB(r) {
     fechaIngreso: r.fecha_ingreso||'', fechaEval: r.fecha_eval||'',
     notasInternas: r.notas_internas||'', screeningCompleto: r.screening_completo||false,
     screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
+    periodizacion: r.periodizacion||'',
   }
 }
 function mapClientToDB(c) {
@@ -199,6 +200,7 @@ function mapClientToDB(c) {
     fecha_ingreso: c.fechaIngreso||null, fecha_eval: c.fechaEval||null,
     notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
     screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
+    periodizacion: c.periodizacion||'',
   }
 }
 function mapClientUpdatesToDB(u) {
@@ -361,4 +363,68 @@ function mapEjToDB(e) {
     media_url: e.mediaUrl||'', media_tipo: e.mediaTipo||'imagen',
     media_desc: e.mediaDesc||'', custom: e.custom||false,
   }
+}
+
+// ─── HOOK: Tests de Fuerza Máxima ─────────────────────────────────────────
+export function useFuerzaTests(clientId) {
+  const [tests,setTests]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clientId){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('fuerza_tests').select('*').eq('gym_client_id',clientId).order('fecha',{ascending:false})
+      if(error)throw error
+      setTests(data||[])
+    }catch(e){console.error('fuerza_tests:',e.message)}
+    finally{setLoading(false)}
+  },[clientId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!clientId)return
+    const ch=supabase.channel('ft_'+clientId)
+      .on('postgres_changes',{event:'*',schema:'public',table:'fuerza_tests',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,clientId])
+  const saveTest=useCallback(async(t)=>{
+    if(isSupabaseReady){const{error}=await supabase.from('fuerza_tests').upsert({...t,gym_client_id:clientId},{onConflict:'id'});if(error)throw error}
+    else setTests(p=>p.find(x=>x.id===t.id)?p.map(x=>x.id===t.id?t:x):[t,...p])
+  },[clientId])
+  const deleteTest=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('fuerza_tests').delete().eq('id',id)
+    else setTests(p=>p.filter(x=>x.id!==id))
+  },[])
+  return{tests,loading,saveTest,deleteTest,refetch:fetch}
+}
+
+// ─── HOOK: Planes de Periodización ────────────────────────────────────────
+export function usePlanesCliente(clientId) {
+  const [planes,setPlanes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clientId){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('planes_periodizacion').select('*').eq('gym_client_id',clientId).order('created_at',{ascending:false})
+      if(error)throw error
+      setPlanes(data||[])
+    }catch(e){console.error('planes:',e.message)}
+    finally{setLoading(false)}
+  },[clientId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!clientId)return
+    const ch=supabase.channel('planes_'+clientId)
+      .on('postgres_changes',{event:'*',schema:'public',table:'planes_periodizacion',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,clientId])
+  const savePlan=useCallback(async(p)=>{
+    if(isSupabaseReady){const{error}=await supabase.from('planes_periodizacion').upsert({...p,gym_client_id:clientId},{onConflict:'id'});if(error)throw error}
+    else setPlanes(p2=>p2.find(x=>x.id===p.id)?p2.map(x=>x.id===p.id?p:x):[p,...p2])
+  },[clientId])
+  const deletePlan=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('planes_periodizacion').delete().eq('id',id)
+    else setPlanes(p=>p.filter(x=>x.id!==id))
+  },[])
+  return{planes,loading,savePlan,deletePlan,refetch:fetch}
 }

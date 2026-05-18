@@ -98,60 +98,89 @@ const FMS_TESTS=[
 // ─── TESTS ORTOPÉDICOS ESPECÍFICOS ────────────────────────────────────────
 const TESTS_ESP={
   hombro:[
-    {n:'Hawkins-Kennedy',como:'Flex 90°, codo 90°. Rotación interna pasiva forzada.',indica:'Pinzamiento subacromial',positivo:'Dolor en el arco de RI',sens:'79%',esp:'59%'},
-    {n:'Neer',como:'Estabilizar escápula. Elevar brazo en flexión con pulgar hacia abajo.',indica:'Pinzamiento subacromial',positivo:'Dolor en elevación anterior',sens:'72%',esp:'60%'},
-    {n:'Empty Can (Jobe)',como:'90° abd, 30° flex, RI. Resistencia a la elevación.',indica:'Lesión supraespinoso',positivo:'Debilidad o dolor',sens:'69%',esp:'66%'},
-    {n:"Speed's Test",como:'90° flex, codo extendido, supinación. Resistencia a flexión.',indica:'Tendinopatía bíceps / SLAP',positivo:'Dolor en corredera bicipital',sens:'54%',esp:'81%'},
-    {n:'Apprehensión + Relocation',como:'Abd 90°, RE progresiva. + si apprehensión. Presión posterior: desaparece.',indica:'Inestabilidad glenohumeral anterior',positivo:'Sensación de inestabilidad',sens:'72%',esp:'96%'},
+    {n:'Hawkins-Kennedy',como:'Flex hombro 90°, codo 90°. Evaluador rota internamente el brazo de forma pasiva y forzada buscando reproducir dolor.',indica:'Pinzamiento subacromial',positivo:'Dolor en el arco de RI',sens:'79%',esp:'59%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Hawkins-Kennedy_test.jpg/320px-Hawkins-Kennedy_test.jpg',posicion:'Sentado o de pie',estructura:'Supraespinoso, bursa subacromial'},
+    {n:'Neer',como:'Estabilizar escápula con una mano. Con la otra, elevar el brazo extendido y en RI pasivamente hacia la flexión máxima. Simula compresión del supraespinoso bajo el acromion.',indica:'Pinzamiento subacromial',positivo:'Dolor en elevación anterior entre 70-120°',sens:'72%',esp:'60%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Neer_test.jpg/320px-Neer_test.jpg',posicion:'Sentado',estructura:'Supraespinoso, bursa subacromial'},
+    {n:'Empty Can (Jobe)',como:'Hombro 90° abd en plano escapular (30° anterior), RI máxima (pulgar hacia abajo). Evaluar fuerza ante resistencia en esa posición.',indica:'Lesión supraespinoso',positivo:'Debilidad y/o dolor reproducido',sens:'69%',esp:'66%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/Empty_can_test.jpg/320px-Empty_can_test.jpg',posicion:'De pie o sentado',estructura:'Supraespinoso, manguito rotador'},
+    {n:"Speed's Test",como:'Hombro 90° flexión, codo extendido, supinación. Resistencia a la flexión aplicada por el evaluador. Buscar dolor localizado en la corredera bicipital.',indica:'Tendinopatía del bíceps / Lesión SLAP',positivo:'Dolor localizado en corredera bicipital anterior',sens:'54%',esp:'81%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Speed_test.jpg/320px-Speed_test.jpg',posicion:'De pie',estructura:'Tendón del bíceps largo, labrum superior'},
+    {n:'Apprehensión + Relocation',como:'Supino. Abd 90° y RE progresiva. Test + si el paciente expresa miedo o trata de frenarlo. Inmediatamente aplicar presión posterior sobre cabeza humeral (Relocation): debe desaparecer la apprehensión.',indica:'Inestabilidad glenohumeral anterior',positivo:'Sensación de inestabilidad/miedo + alivio con relocation',sens:'72%',esp:'96%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Apprehension_test.jpg/320px-Apprehension_test.jpg',posicion:'Supino',estructura:'Ligamento glenohumeral anterior, labrum'},
+    {n:"O'Brien (SLAP)",como:'90° flex, 15° aducción. Primero con RI (pulgar abajo) → resistencia a la flexión. Luego con RE (pulgar arriba) → misma resistencia. Test + si dolor en RI que desaparece o disminuye significativamente en RE.',indica:'Lesión SLAP labral',positivo:'Dolor profundo en RI que desaparece en RE',sens:'78%',esp:'91%',img:'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/OBrien_test.jpg/320px-OBrien_test.jpg',posicion:'De pie',estructura:'Labrum superior, tendón del bíceps'},
+    {n:'Yocum Test',como:'El paciente coloca la mano ipsilateral sobre el hombro contralateral. El evaluador presiona el codo hacia abajo mientras el paciente eleva activamente el codo sin elevar el hombro. Test + si reproduce dolor.',indica:'Pinzamiento subacromial / lesión manguito',positivo:'Dolor en la zona subacromial',sens:'79%',esp:'56%',img:'',posicion:'De pie o sentado',estructura:'Supraespinoso, bursa subacromial'},
+    {n:'Cross-Body Adduction (Scarf)',como:'Elevar el brazo a 90° flex. El evaluador aduce horizontalmente el brazo hacia el hombro contralateral. Buscar dolor en la cara anterior del hombro (AC) o posterior (capsular).',indica:'Patología acromioclavicular / capsulitis',positivo:'Dolor en articulación AC o posterior del hombro',sens:'77%',esp:'79%',img:'',posicion:'De pie',estructura:'Articulación acromioclavicular, cápsula posterior'},
   ],
   codo:[
-    {n:"Cozen's (Tenista)",como:'Puño cerrado, desviación radial. Resistencia a extensión de muñeca con codo extendido.',indica:'Epicondilalgia lateral',positivo:'Dolor en epicóndilo lateral',sens:'84%',esp:'72%'},
-    {n:'Test del Golfista',como:'Flexión resistida de muñeca y pronación con codo extendido.',indica:'Epicondilalgia medial',positivo:'Dolor en epicóndilo medial',sens:'89%',esp:'55%'},
-    {n:'Test de Tinel (cubital)',como:'Percusión sobre el canal epitrócleo-olecraneano.',indica:'Síndrome del túnel cubital',positivo:'Parestesias en dedos IV-V',sens:'70%',esp:'98%'},
+    {n:"Cozen's (Tenista)",como:'Paciente con puño cerrado y desviación radial. Resistencia a la extensión de muñeca con el codo extendido. Buscar dolor sobre el epicóndilo lateral.',indica:'Epicondilalgia lateral (Codo de tenista)',positivo:'Dolor sobre el epicóndilo lateral',sens:'84%',esp:'72%',img:'',posicion:'De pie o sentado',estructura:'Extensores del carpo, origen en epicóndilo lateral'},
+    {n:'Test del Golfista (Medial)',como:'Resistencia a la flexión de muñeca y pronación con el codo extendido. Buscar dolor sobre el epicóndilo medial.',indica:'Epicondilalgia medial (Codo de golfista)',positivo:'Dolor sobre el epicóndilo medial',sens:'89%',esp:'55%',img:'',posicion:'De pie o sentado',estructura:'Flexores del carpo, origen en epitróclea'},
+    {n:'Test de Tinel Cubital',como:'Percusión suave y progresiva sobre el canal epitrócleo-olecraneano (gotera epitroclear). Buscar parestesias distales.',indica:'Síndrome del túnel cubital',positivo:'Parestesias en dedos anular y meñique (IV-V)',sens:'70%',esp:'98%',img:'',posicion:'Codo flexionado 90°',estructura:'Nervio cubital'},
+    {n:'Test del Codo de Tenista Resistido',como:'Codo a 90°, puño cerrado. Paciente extiende la muñeca contra resistencia máxima del evaluador. Variante más sensible del Cozen.',indica:'Epicondilalgia lateral',positivo:'Dolor intenso en epicóndilo lateral',sens:'88%',esp:'68%',img:'',posicion:'Sentado',estructura:'Extensor carpi radialis brevis'},
+    {n:'Estrés en Valgo (LCM)',como:'Codo 20-30° de flexión para desbloquear el olécranon. Aplicar fuerza en valgo. Evaluar dolor medial o apertura articular.',indica:'Lesión del ligamento colateral medial',positivo:'Dolor medial o inestabilidad palpable',sens:'65%',esp:'60%',img:'',posicion:'Supino con codo fuera de la camilla',estructura:'Ligamento colateral medial (LCM)'},
+    {n:'Prueba de Inestabilidad Lateral Rotatoria',como:'Supino, brazo overhead. Codo a 40° flex, supinación + valgo + compresión axial mientras se extiende. Test + si el paciente expresa apprehensión o se objetiva subluxación radial.',indica:'Inestabilidad lateral del codo',positivo:'Apprehensión o subluxación visible',sens:'52%',esp:'95%',img:'',posicion:'Supino',estructura:'Ligamento colateral lateral radial'},
   ],
   rodilla:[
-    {n:'Lachman',como:'30° flex. Mano proximal fija fémur. Mano distal tracciona tibia hacia anterior.',indica:'Rotura LCA',positivo:'Traslación anterior excesiva o endpoint blando',sens:'85%',esp:'94%'},
-    {n:'McMurray',como:'Flexión máxima. RE+extensión (menisco medial). RI+extensión (lateral). Buscar click.',indica:'Lesión meniscal',positivo:'Click audible/palpable + dolor en interlínea',sens:'60%',esp:'70%'},
-    {n:'Thessaly (20°)',como:'Apoyo monopodal 20° flex. Rotación D e I × 3. Buscar dolor en interlínea.',indica:'Lesión meniscal',positivo:'Dolor o sensación de bloqueo',sens:'89%',esp:'97%'},
-    {n:'Estrés en Valgo 0°/30°',como:'Fuerza en valgo a 0° y 30°.',indica:'Lesión LCM',positivo:'Apertura medial o dolor',sens:'78%',esp:'62%'},
-    {n:'Pivot Shift',como:'Extensión+RI+valgo → flexión. Buscar clunk de subluxación.',indica:'Inestabilidad rotatoria LCA',positivo:'Clunk visible',sens:'32%',esp:'98%'},
+    {n:'Lachman',como:'30° flex. Mano proximal estabiliza el fémur. Mano distal tracciona la tibia hacia anterior con firmeza y rapidez. Evaluar excursión y calidad del endpoint (duro vs blando).',indica:'Rotura total o parcial del LCA',positivo:'Traslación anterior excesiva o endpoint blando/ausente',sens:'85%',esp:'94%',img:'',posicion:'Supino',estructura:'Ligamento cruzado anterior (LCA)'},
+    {n:'McMurray',como:'Flexión máxima de rodilla. Para menisco medial: RE del pie + extensión gradual. Para menisco lateral: RI del pie + extensión. Buscar click doloroso o palpable en interlínea.',indica:'Lesión meniscal',positivo:'Click audible/palpable con dolor en interlínea articular',sens:'60%',esp:'70%',img:'',posicion:'Supino',estructura:'Menisco medial / lateral'},
+    {n:'Thessaly (20°)',como:'Apoyo monopodal a 20° de flexión. El evaluador sostiene las manos del paciente. Rotación interna y externa del cuerpo 3 veces en cada dirección. Buscar dolor o sensación de bloqueo en interlínea.',indica:'Lesión meniscal (más sensible que McMurray)',positivo:'Dolor o sensación de bloqueo en interlínea',sens:'89%',esp:'97%',img:'',posicion:'Monopodal',estructura:'Menisco medial / lateral'},
+    {n:'Cajón Anterior',como:'90° flex, pie apoyado en la camilla. Tracción anterior de la tibia con ambas manos. Comparar excursión con el lado contralateral.',indica:'Rotura LCA (menos sensible que Lachman)',positivo:'Traslación anterior > 5mm o diferencia bilateral',sens:'62%',esp:'88%',img:'',posicion:'Supino',estructura:'Ligamento cruzado anterior'},
+    {n:'Pivot Shift',como:'Extensión completa + RI de tibia + fuerza en valgo → flexionar progresivamente la rodilla. El test es + si se objetiva clunk o subluxación-reducción de la meseta tibial.',indica:'Inestabilidad rotatoria anterolateral (LCA)',positivo:'Clunk palpable o visible de subluxación/reducción',sens:'32%',esp:'98%',img:'',posicion:'Supino relajado',estructura:'LCA, banda IT, cápsula'},
+    {n:'Estrés en Valgo 0°/30°',como:'Fuerza en valgo a 0° (evalúa LCM + cápsula posteromedial) y a 30° (LCM aislado). Medir apertura y dolor medial.',indica:'Lesión del ligamento colateral medial',positivo:'Apertura medial o dolor en valgo',sens:'78%',esp:'62%',img:'',posicion:'Supino',estructura:'Ligamento colateral medial'},
+    {n:'Estrés en Varo',como:'Fuerza en varo a 0° y 30°.',indica:'Lesión del ligamento colateral lateral',positivo:'Apertura lateral o dolor en varo',sens:'25%',esp:'97%',img:'',posicion:'Supino',estructura:'Ligamento colateral lateral'},
+    {n:'Cajón Posterior',como:'90° flex. Empuje posterior de la tibia. Comparar con contralateral.',indica:'Rotura del LCP',positivo:'Traslación posterior > 5mm',sens:'90%',esp:'99%',img:'',posicion:'Supino',estructura:'Ligamento cruzado posterior (LCP)'},
+    {n:'Appley (Compresión + Tracción)',como:'Prono, rodilla 90°. Compresión axial + rotación (lesión meniscal). Tracción + rotación (lesión ligamentosa). Dolor diferencial orienta.',indica:'Lesión meniscal o ligamentosa',positivo:'Dolor en compresión: meniscal / en tracción: ligamentoso',sens:'58%',esp:'70%',img:'',posicion:'Prono',estructura:'Meniscos, ligamentos colaterales'},
   ],
   columna:[
-    {n:'Slump Test',como:'Sentado: slump → flex cervical → extensión rodilla → dorsiflexión. Ext. cervical debe aliviar.',indica:'Tensión neural / hernia L4-S1',positivo:'Reproducción síntomas + alivio con ext. cervical',sens:'83%',esp:'55%'},
-    {n:'SLR (Lasègue)',como:'Supino. Elevar pierna extendida. + si dolor irradiado entre 30-70°.',indica:'Compresión raíz L4-S1',positivo:'Dolor irradiado en pierna 30-70°',sens:'80%',esp:'40%'},
-    {n:'FABER (Patrick)',como:'Posición figura 4. Presión suave sobre rodilla.',indica:'Articulación SI / patología cadera',positivo:'Dolor en ingle o SI ipsilateral',sens:'57%',esp:'71%'},
-    {n:"Kemp's Test",como:'Bipedestación. Extensión + rotación + inclinación ipsilateral + compresión axial.',indica:'Estenosis foraminal / facetaria',positivo:'Reproducción dolor radicular',sens:'60%',esp:'92%'},
+    {n:'Slump Test',como:'Sentado. (1) Slump torácico y lumbar, (2) flex cervical máxima, (3) extensión de rodilla, (4) dorsiflexión de tobillo. Si + (síntomas): extensión cervical debe aliviarlos.',indica:'Tensión neural / hernia discal L4-S1',positivo:'Reproducción síntomas + alivio con extensión cervical',sens:'83%',esp:'55%',img:'',posicion:'Sentado al borde de camilla',estructura:'Dura madre, raíces nerviosas L4-S1'},
+    {n:'SLR (Lasègue)',como:'Supino. Elevar pierna extendida pasivamente. Test + si reproduce dolor radicular entre 30-70°. Ampliar con dorsiflexión (Bragard) o flex plantar contralateral (Crossed SLR).',indica:'Compresión raíz nerviosa L4-S1',positivo:'Dolor irradiado en pierna entre 30-70° de elevación',sens:'80%',esp:'40%',img:'',posicion:'Supino',estructura:'Raíces L4, L5, S1'},
+    {n:'FABER (Patrick)',como:'Supino. Posición de figura 4 (flex + abd + RE de cadera). Presión suave y progresiva sobre la rodilla. Comparar altura bilateral.',indica:'Articulación sacroilíaca / patología de cadera',positivo:'Dolor en ingle (cadera) o en SI ipsilateral',sens:'57%',esp:'71%',img:'',posicion:'Supino',estructura:'Articulación sacroilíaca, cápsula de cadera'},
+    {n:"Kemp's Test",como:'Bipedestación. Extensión + rotación + inclinación lateral ipsilateral + compresión axial manual. Test muy específico para facetas.',indica:'Estenosis foraminal / patología facetaria',positivo:'Reproducción de dolor radicular ipsilateral',sens:'60%',esp:'92%',img:'',posicion:'Bipedestación',estructura:'Facetas articulares, foramen intervertebral'},
+    {n:'Test de Spring (PA)',como:'Prono. Presión postero-anterior sobre apófisis espinosa de cada nivel. Evaluar dolor y movilidad segmentaria.',indica:'Hipomobilidad segmentaria / disfunción discal-facetaria',positivo:'Dolor localizado + sensación de rigidez',sens:'65%',esp:'54%',img:'',posicion:'Prono',estructura:'Disco, facetas, ligamentos interspinosos'},
+    {n:'Test de Gillet (Marcha SI)',como:'Bipedestación. El evaluador coloca pulgares en EIPS y en S2. El paciente eleva la rodilla ipsilateral. El pulgar de la EIPS debe moverse hacia abajo con normalidad.',indica:'Bloqueo o hipomobilidad de articulación sacroilíaca',positivo:'Ausencia de movimiento inferior de la EIPS ipsilateral',sens:'43%',esp:'68%',img:'',posicion:'Bipedestación',estructura:'Articulación sacroilíaca'},
   ],
   lumbar:[
-    {n:'SLR (Lasègue)',como:'Supino. Elevar pierna extendida. + si dolor irradiado entre 30-70°.',indica:'Compresión raíz L4-S1',positivo:'Dolor irradiado 30-70°',sens:'80%',esp:'40%'},
-    {n:'Slump Test',como:'Sentado. Slump → flex cervical → ext. rodilla. Ext. cervical alivia.',indica:'Tensión neural',positivo:'Reproducción + alivio con ext. cervical',sens:'83%',esp:'55%'},
-    {n:"Kemp's Test",como:'Extensión + rotación + inclinación + compresión axial.',indica:'Patología facetaria',positivo:'Dolor ipsilateral',sens:'60%',esp:'92%'},
+    {n:'SLR (Lasègue)',como:'Supino. Elevación pasiva de la pierna extendida. + si dolor radicular entre 30-70°. Ampliar con Bragard (dorsiflexión al ángulo doloroso).',indica:'Compresión raíces L4-S1 / hernia discal',positivo:'Dolor irradiado en pierna 30-70°',sens:'80%',esp:'40%',img:'',posicion:'Supino',estructura:'Raíces L4, L5, S1'},
+    {n:'Slump Test',como:'Sentado. Slump → flex cervical → ext. rodilla → dorsiflexión. Extensión cervical debe aliviar.',indica:'Tensión neural lumbar',positivo:'Reproducción de síntomas + alivio extensión cervical',sens:'83%',esp:'55%',img:'',posicion:'Sentado',estructura:'Nervio ciático, meninges'},
+    {n:"Kemp's Test",como:'Extensión + rotación + inclinación + compresión axial ipsilateral.',indica:'Patología facetaria lumbar',positivo:'Reproducción dolor lumbar o radicular ipsilateral',sens:'60%',esp:'92%',img:'',posicion:'Bipedestación',estructura:'Facetas articulares L1-L5'},
+    {n:'Test de Schober Modificado',como:'Marcar L5-S1 y 10cm arriba. En flexión máxima la distancia debe aumentar ≥4cm. En extensión debe reducirse.',indica:'Limitación de movilidad lumbar / espondiloartropatía',positivo:'Incremento < 4cm en flexión',sens:'52%',esp:'89%',img:'',posicion:'Bipedestación',estructura:'Columna lumbar'},
+    {n:'FADIR Lumbar',como:'Flexión lumbar → adición → RI de cadera en decúbito. Puede reproducir síntomas de cadera que se confunden con lumbalgia.',indica:'Diagnóstico diferencial lumbar vs cadera',positivo:'Dolor en ingle (cadera) vs dolor lumbar',sens:'57%',esp:'71%',img:'',posicion:'Supino',estructura:'Articulación coxofemoral, cápsula'},
   ],
   tobillo:[
-    {n:'Cajón Anterior',como:'Sentado, tobillo neutro. Tracción anterior del calcáneo.',indica:'Lesión LPA anterior',positivo:'Traslación > 5mm o endpoint blando',sens:'80%',esp:'74%'},
-    {n:'Thompson (Aquiles)',como:'Prono, pie fuera de camilla. Comprimir masa gemelar.',indica:'Rotura tendón de Aquiles',positivo:'Ausencia de plantar-flexión',sens:'96%',esp:'93%'},
-    {n:'Squeeze Test',como:'Comprimir tibia y peroné en tercio medio.',indica:'Fractura / lesión sindesmosis',positivo:'Dolor distal al comprimir',sens:'84%',esp:'82%'},
+    {n:'Cajón Anterior de Tobillo',como:'Sentado, tobillo neutro (0°). Estabilizar la tibia con una mano. Con la otra, tracción anterior firme y sostenida del calcáneo. Comparar con contralateral.',indica:'Lesión del ligamento peroneoastragalino anterior (LPAA)',positivo:'Traslación anterior > 5mm o endpoint blando/diferencia bilateral',sens:'80%',esp:'74%',img:'',posicion:'Sentado al borde',estructura:'Ligamento peroneoastragalino anterior (LPAA)'},
+    {n:'Talar Tilt (Inclinación del astrágalo)',como:'Decúbito lateral. Tobillo neutro. Inversión forzada pasiva del astrágalo. Comparar con contralateral. Radiografía confirma.',indica:'Lesión ligamentaria lateral compleja (LPCA + LPAA)',positivo:'Apertura > 10° vs contralateral',sens:'65%',esp:'77%',img:'',posicion:'Supino / lateral',estructura:'Ligamento peroneocalcáneo (LPCA)'},
+    {n:'Thompson (Aquiles)',como:'Prono, pie fuera de la camilla. Comprimir la masa muscular gemelar con ambas manos. Observar si se produce plantar-flexión del tobillo.',indica:'Rotura completa del tendón de Aquiles',positivo:'Ausencia de plantar-flexión al comprimir el gemelo',sens:'96%',esp:'93%',img:'',posicion:'Prono',estructura:'Tendón de Aquiles'},
+    {n:'Squeeze Test (Sindesmosis)',como:'Comprimir firmemente tibia y peroné a nivel del tercio medio de la pierna. Observar dolor distal en la sindesmosis.',indica:'Lesión de la sindesmosis tibioperonea / fractura de estrés',positivo:'Dolor distal en la sindesmosis al comprimir proximal',sens:'84%',esp:'82%',img:'',posicion:'Supino',estructura:'Sindesmosis tibioperonea'},
+    {n:'Ottawa Ankle Rules (screening)',como:'Evaluar: ¿dolor óseo en zona de 6cm posteriores maléolo lat/med? ¿Incapacidad para cargar peso? Si cualquiera es +, radiografía indicada.',indica:'Fractura de tobillo o pie (criterio para rx)',positivo:'Cualquier criterio positivo → derivar a rx',sens:'96–99%',esp:'26–40%',img:'',posicion:'De pie / sentado',estructura:'Maléolos, 5° metatarsiano, navicular'},
+    {n:'Arco de Movimiento Doloroso (ROM)',como:'Evaluar ROM activo y pasivo: dorsiflexión, plantar-flexión, inversión, eversión. Reproducir dolor y comparar bilateral.',indica:'Lesión ligamentaria, tendinopatía, inestabilidad crónica',positivo:'Dolor reproducido en algún rango específico',sens:'N/A',esp:'N/A',img:'',posicion:'Sentado o supino',estructura:'Ligamentos, tendones, cápsula articular'},
   ],
   cadera:[
-    {n:'FABER (Patrick)',como:'Figura 4. Presión sobre rodilla.',indica:'Articulación SI / cadera',positivo:'Dolor en ingle o SI',sens:'57%',esp:'71%'},
-    {n:'FADIR',como:'Flex 90°, aducción + RI pasiva.',indica:'Pinzamiento femoroacetabular',positivo:'Dolor en ingle anterior',sens:'78%',esp:'10%'},
-    {n:'Thomas Test',como:'Decúbito supino. Flexionar ambas rodillas al pecho. Soltar una.',indica:'Retracción psoas',positivo:'Extensión incompleta de cadera',sens:'89%',esp:'45%'},
+    {n:'FABER (Patrick)',como:'Supino. Figura 4: flex + abd + RE de cadera. Presión sobre rodilla. + si dolor en ingle (cadera) o SI ipsilateral.',indica:'Articulación sacroilíaca / coxofemoral',positivo:'Dolor en ingle o SI reproducido',sens:'57%',esp:'71%',img:'',posicion:'Supino',estructura:'Articulación sacroilíaca, cápsula de cadera'},
+    {n:'FADIR (Pinzamiento)',como:'Supino. Flex 90° → aducción → RI pasiva máxima. Reproducir dolor en ingle anterior / lateral.',indica:'Pinzamiento femoroacetabular (FAI)',positivo:'Dolor en ingle anterior o lateral reproducido',sens:'78%',esp:'10%',img:'',posicion:'Supino',estructura:'Labrum acetabular, cuello femoral, acetábulo'},
+    {n:'Thomas Test',como:'Supino. Flexionar ambas rodillas al pecho. Soltar una hacia la extensión. Evaluar si la pierna suelta alcanza la camilla.',indica:'Retracción del psoas-ilíaco / flexores de cadera',positivo:'Extensión incompleta = retracción del psoas',sens:'89%',esp:'45%',img:'',posicion:'Supino',estructura:'Psoas-ilíaco, recto femoral'},
+    {n:'Ober Test',como:'Decúbito lateral, pierna inferior flexionada. Elevar y abducir la pierna superior, extender cadera y dejar caer. Si queda arriba: retracción de la banda IT.',indica:'Retracción de la banda iliotibial / TFL',positivo:'La pierna no desciende por debajo del plano de la camilla',sens:'N/A',esp:'N/A',img:'',posicion:'Decúbito lateral',estructura:'Banda iliotibial, tensor fascia lata'},
+    {n:'Sign of the Buttock',como:'Supino. SLR pasivo. Si al llegar al ángulo de dolor se flexiona la rodilla y el dolor NO disminuye: buscar patología profunda del glúteo.',indica:'Masa retroglútea / bursitis / neoplasia',positivo:'Dolor NO se alivia al flexionar la rodilla',sens:'N/A',esp:'N/A',img:'',posicion:'Supino',estructura:'Región glútea profunda'},
+    {n:'Trendelenburg Test',como:'Monopodal. Observar la pelvis contralateral. Normal: se mantiene horizontal o sube. Positivo: pelvis contralateral cae.',indica:'Debilidad del glúteo medio ipsilateral',positivo:'Caída de la hemipelvis contralateral',sens:'73%',esp:'77%',img:'',posicion:'Bipedestación',estructura:'Glúteo medio, TFL, fascia lata'},
   ],
   muneca:[
-    {n:'Phalen Test',como:'Flexión máxima de muñeca durante 60 seg.',indica:'Síndrome del túnel carpiano',positivo:'Parestesias dedos I-III',sens:'68%',esp:'73%'},
-    {n:'Tinel en muñeca',como:'Percusión sobre el túnel carpiano.',indica:'Síndrome del túnel carpiano',positivo:'Parestesias dedos I-III',sens:'50%',esp:'77%'},
-    {n:'Watson (escafoides)',como:'Presión sobre escafoides + desviación radial.',indica:'Inestabilidad escafo-lunar',positivo:'Click o dolor',sens:'69%',esp:'66%'},
+    {n:'Phalen Test',como:'Mantener ambas muñecas en flexión máxima (dorsos enfrentados) durante 60 segundos. Buscar parestesias.',indica:'Síndrome del túnel carpiano',positivo:'Parestesias en dedos I-III en < 60 segundos',sens:'68%',esp:'73%',img:'',posicion:'Sentado',estructura:'Nervio mediano, túnel carpiano'},
+    {n:'Tinel en muñeca',como:'Percusión suave con el dedo o martillo sobre el túnel carpiano (cara anterior de muñeca).',indica:'Síndrome del túnel carpiano',positivo:'Parestesias distales en dedos I-III',sens:'50%',esp:'77%',img:'',posicion:'Sentado',estructura:'Nervio mediano'},
+    {n:'Watson (Escafoides)',como:'Presión sobre el tubérculo del escafoides + desviar muñeca desde ulnar a radial. Test + si click o dolor.',indica:'Inestabilidad escafo-lunar',positivo:'Click audible/palpable o dolor en escafoides',sens:'69%',esp:'66%',img:'',posicion:'Sentado',estructura:'Ligamento escafo-lunar'},
+    {n:'Test de Finkelstein',como:'Pulgar dentro del puño + desviar en cubital pasivamente. Buscar dolor en tabaquera anatómica.',indica:'Tenosinovitis de De Quervain',positivo:'Dolor intenso en la tabaquera anatómica',sens:'89%',esp:'14%',img:'',posicion:'Sentado',estructura:'Abductor largo y extensor corto del pulgar'},
+    {n:'Grind Test (CMC 1°)',como:'Compresión axial + rotación del pulgar sobre el trapecio (articulación trapeciometacarpiana).',indica:'Artrosis trapeciometacarpiana (rizartrosis)',positivo:'Dolor y/o crepitación en la base del pulgar',sens:'53%',esp:'47%',img:'',posicion:'Sentado',estructura:'Articulación CMC del pulgar, trapecio'},
+    {n:'Estrés TFCC (Ballotement)',como:'Sujetar cúbito y radio por separado. Movimiento anteroposterior alternado. Buscar dolor o inestabilidad.',indica:'Lesión del fibrocartílago triangular (TFCC)',positivo:'Dolor o inestabilidad distal cúbito-radio',sens:'N/A',esp:'N/A',img:'',posicion:'Sentado',estructura:'TFCC, articulación radiocubital distal'},
   ],
   esc:[
-    {n:'Hawkins-Kennedy',como:'Flex 90°, codo 90°. Rotación interna pasiva.',indica:'Pinzamiento subacromial',positivo:'Dolor en el arco',sens:'79%',esp:'59%'},
-    {n:'Escápula alada activa',como:'Push-up en pared. Observar protracción escapular.',indica:'Disfunción serrato anterior / largo torácico',positivo:'Escápula despegada del tórax',sens:'N/A',esp:'N/A'},
+    {n:'Hawkins-Kennedy',como:'Flex hombro 90°, codo 90°. Rotación interna pasiva forzada.',indica:'Pinzamiento subacromial',positivo:'Dolor en el arco de movimiento',sens:'79%',esp:'59%',img:'',posicion:'Sentado',estructura:'Supraespinoso, bursa subacromial'},
+    {n:'Escápula Alada (Activo)',como:'Push-up en pared con las dos manos a la misma altura. Observar si alguna escápula se despega del tórax durante el movimiento.',indica:'Disfunción del serrato anterior o del largo torácico',positivo:'Escápula despegada visiblemente del tórax',sens:'N/A',esp:'N/A',img:'',posicion:'De pie frente a pared',estructura:'Serrato anterior, nervio torácico largo'},
+    {n:'Test de Compresión Acromioclavicular',como:'Compresión directa sobre la articulación AC. Buscar dolor localizado.',indica:'Patología de la articulación acromioclavicular',positivo:'Dolor reproducido sobre la AC',sens:'79%',esp:'50%',img:'',posicion:'Sentado',estructura:'Articulación acromioclavicular'},
+    {n:'Shoulder Shrug Sign',como:'Pedirle al paciente que eleve el hombro con carga. Observar si compensa elevando el hombro antes de abducir.',indica:'Inhibición del serrato / disfunción escapular',positivo:'Elevación precoz del hombro antes de 90° abd',sens:'N/A',esp:'N/A',img:'',posicion:'De pie',estructura:'Trapecio superior, serrato anterior'},
   ],
   cervical:[
-    {n:'Spurling',como:'Flexión lateral + extensión + compresión axial ipsilateral.',indica:'Compresión radicular cervical',positivo:'Reproducción dolor radicular ipsilateral',sens:'30%',esp:'93%'},
-    {n:'Distracción cervical',como:'Tracción manual de la cabeza.',indica:'Compresión radicular',positivo:'Alivio del dolor radicular',sens:'44%',esp:'90%'},
-    {n:'Upper Limb Tension Test (ULTT)',como:'Depresión escapular + extensión codo + supinación + ext. muñeca + inclinación cervical contralateral.',indica:'Tensión neural miembro superior',positivo:'Reproducción síntomas + alivio con inclinación ipsilateral',sens:'97%',esp:'22%'},
+    {n:'Spurling (Compresión Foraminal)',como:'Flexión lateral cervical hacia el lado sintomático + extensión + compresión axial con las manos del evaluador. Buscar reproducción del dolor radicular ipsilateral.',indica:'Compresión radicular cervical / estenosis foraminal',positivo:'Reproducción del dolor radicular ipsilateral',sens:'30%',esp:'93%',img:'',posicion:'Sentado',estructura:'Foramen intervertebral, raíces C5-C7'},
+    {n:'Distracción Cervical',como:'Tracción axial manual suave de la cabeza (5-15kg). Si los síntomas radiculares se alivian: patología compresiva. Si empeoran: patología ligamentosa.',indica:'Compresión radicular cervical',positivo:'Alivio del dolor radicular con la tracción',sens:'44%',esp:'90%',img:'',posicion:'Supino',estructura:'Raíces cervicales, disco, foramen'},
+    {n:'ULTT (Tensión Neural MMSS)',como:'Depresión escapular → extensión de codo → supinación → extensión de muñeca y dedos → rotación externa de hombro → abducción → inclinación cervical contralateral.',indica:'Tensión neural miembro superior / lesión C5-C7',positivo:'Reproducción síntomas + alivio con inclinación ipsilateral',sens:'97%',esp:'22%',img:'',posicion:'Supino',estructura:'Plexo braquial, nervio mediano'},
+    {n:'Test de Adson (TOS)',como:'Localizar el pulso radial. Pedirle al paciente que inspire profundo, extienda el cuello y rote la cabeza hacia el lado evaluado. Buscar desaparición del pulso.',indica:'Síndrome de salida torácica (TOS)',positivo:'Disminución o desaparición del pulso radial',sens:'79%',esp:'76%',img:'',posicion:'Sentado',estructura:'Arteria subclavia, plexo braquial'},
+    {n:'Rotación Cervical en Flexión (ULFT)',como:'Flexión máxima cervical. Luego rotar hacia cada lado. ROM normal: ≥ 44°. Limitación + síntomas sugiere disfunción C1-C2.',indica:'Disfunción cervical alta C0-C1-C2 / cefalea cervicogénica',positivo:'ROM < 44° y/o reproducción de cefalea o síntomas cervicales',sens:'91%',esp:'90%',img:'',posicion:'Sentado',estructura:'C0-C1-C2, articulación atlantoaxial'},
+    {n:'Test de Estabilidad del Ligamento Transverso (Sharp-Purser)',como:'Paciente sentado. Evaluador estabiliza el axis con una mano. Con la otra, presión posterior sobre la frente. + si click o reducción de síntomas neurológicos.',indica:'Inestabilidad del ligamento transverso del atlas',positivo:'Click o alivio de síntomas neurológicos con la maniobra',sens:'69%',esp:'96%',img:'',posicion:'Sentado, CONTRAINDICADO en trauma reciente',estructura:'Ligamento transverso del atlas (C1)'},
   ],
 };
+
 
 // ─── RED FLAGS ────────────────────────────────────────────────────────────
 const RED_FLAGS=[
@@ -192,7 +221,8 @@ const EVAL_STEPS=[
   {title:'Escalas Funcionales',icon:'📊'},{title:'Evaluación Postural',icon:'🔍'},
   {title:'ROM — Goniometría',icon:'📐'},{title:'Fuerza Muscular',icon:'💪'},
   {title:'Control Motor',icon:'⚡'},{title:'FMS',icon:'🏃'},
-  {title:'Tests Específicos',icon:'🎯'},{title:'Síntesis y Plan',icon:'✅'},
+  {title:'Screening Multi-Región',icon:'🎯'},{title:'Antropometría',icon:'📸'},
+  {title:'Síntesis y Plan',icon:'✅'},
 ];
 
 const emptyEval=()=>({
@@ -207,6 +237,9 @@ const emptyEval=()=>({
   birddog:'',deadbug:'',fms:{},testsEsp:{},
   diagnosticoPT:'',hipotesis:'',objetivos_tratamiento:'',plan:'',fase:'restaura',prox_eval:'',notas:'',
   criterios_personalizados:[],
+  regiones_screened:[],
+  antrop:{peso:'',talla:'',imc:'',perCintura:'',perCadera:'',perBrazo:'',pliegues:'',obs:''},
+  imagenes_antrop:[],
 });
 
 const emptyPaciente=()=>({
@@ -871,33 +904,193 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         );
         case 10: return(
           <div>
-            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>🎯 Tests ortopédicos específicos — {REGIONES_LIST.find(r=>r.k===ev.region)?.label}</div>
-            {testsKeys.map(t=>(
-              <div key={t.n} style={fs.card}>
-                <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>{t.n}</div>
-                <div style={{fontSize:11,color:GD,background:BG,padding:'8px',borderRadius:5,marginBottom:8,lineHeight:1.6}}>
-                  <strong>Cómo:</strong> {t.como}<br/><strong>Indica:</strong> {t.indica}<br/>
-                  <strong>Positivo:</strong> {t.positivo}<br/>
-                  <span style={{color:GM}}>Sens: {t.sens} · Esp: {t.esp}</span>
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
+              🎯 <strong>Screening Multi-Región</strong> — Seleccioná las regiones que quieras evaluar. Podés seleccionar más de una.
+            </div>
+            {/* Selector de regiones */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5,marginBottom:12}}>
+              {Object.keys(TESTS_ESP).map(reg=>{
+                const info=REGIONES_LIST.find(r=>r.k===reg)||{label:reg};
+                const sel=(ev.regiones_screened||[]).includes(reg);
+                return(
+                  <div key={reg} onClick={()=>setCurrentEval(p=>({...p,regiones_screened:sel?(p.regiones_screened||[]).filter(r=>r!==reg):[...(p.regiones_screened||[]),reg]}))} style={{cursor:'pointer',padding:'8px 5px',borderRadius:7,border:`2px solid ${sel?NV:GL}`,background:sel?`${NV}15`:WH,textAlign:'center',transition:'all .15s'}}>
+                    <div style={{fontSize:10,fontWeight:sel?700:400,color:sel?NV:GD}}>{info.label}</div>
+                    {sel&&<div style={{fontSize:9,color:TL,marginTop:2}}>✓ {(TESTS_ESP[reg]||[]).length} tests</div>}
+                  </div>
+                );
+              })}
+            </div>
+            {(ev.regiones_screened||[]).length===0&&(
+              <div style={{...fs.card,textAlign:'center',padding:20,borderStyle:'dashed',color:GM,fontSize:12}}>Seleccioná al menos una región para ver la batería de tests correspondiente.</div>
+            )}
+            {/* Tests por cada región seleccionada */}
+            {(ev.regiones_screened||[]).map(reg=>{
+              const tests=TESTS_ESP[reg]||[];
+              const regionInfo=REGIONES_LIST.find(r=>r.k===reg)||{label:reg};
+              return(
+                <div key={reg} style={{marginBottom:14}}>
+                  <div style={{fontSize:12,fontWeight:800,color:NV,marginBottom:8,paddingBottom:4,borderBottom:`2px solid ${NV}`}}>
+                    {regionInfo.label} — {tests.length} tests disponibles
+                  </div>
+                  {tests.map(t=>{
+                    const resD=ev.testsEsp[t.n+'_Derecho']||'';
+                    const resI=ev.testsEsp[t.n+'_Izquierdo']||'';
+                    const anyPos=resD==='positivo'||resI==='positivo';
+                    const anyDone=resD||resI;
+                    return(
+                      <div key={t.n} style={{...fs.card,borderLeft:`4px solid ${anyPos?RJ:anyDone?GN:GL}`,marginBottom:8,padding:'10px 12px'}}>
+                        <div style={{display:'flex',gap:10,alignItems:'flex-start'}}>
+                          {/* Imagen si existe */}
+                          {t.img&&(
+                            <div style={{flexShrink:0,width:80,height:70,borderRadius:5,overflow:'hidden',background:BG,border:`1px solid ${GL}`}}>
+                              <img src={t.img} alt={t.n} style={{width:80,height:70,objectFit:'cover'}} onError={e=>{e.target.style.display='none';e.target.parentNode.style.background='#EFF6FF';}}/>
+                            </div>
+                          )}
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:700,marginBottom:3}}>
+                              {t.n}
+                              {anyPos&&<span style={{marginLeft:8,...fs.tag(RJ)}}>⚠ POSITIVO</span>}
+                              {anyDone&&!anyPos&&<span style={{marginLeft:8,...fs.tag(GN)}}>✓ REALIZADO</span>}
+                            </div>
+                            <div style={{fontSize:10,color:GD,background:BG,borderRadius:5,padding:'6px 8px',marginBottom:6,lineHeight:1.6}}>
+                              <strong>🏥 Indica:</strong> {t.indica}<br/>
+                              <strong>📍 Posición:</strong> {t.posicion}<br/>
+                              <strong>🫀 Estructura:</strong> {t.estructura}
+                            </div>
+                            <details style={{marginBottom:6}}>
+                              <summary style={{fontSize:10,color:TL,cursor:'pointer',fontWeight:700}}>📋 Ver procedimiento detallado</summary>
+                              <div style={{background:'#F0FDF4',border:`1px solid #86EFAC`,borderRadius:5,padding:'8px',marginTop:4,fontSize:11,color:GD,lineHeight:1.6}}>
+                                <strong>Cómo realizar:</strong> {t.como}<br/>
+                                <strong>Test positivo:</strong> {t.positivo}<br/>
+                                <span style={{color:GM}}>Sensibilidad: {t.sens} · Especificidad: {t.esp}</span>
+                              </div>
+                            </details>
+                            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                              {['Derecho','Izquierdo'].map(lado=>{
+                                const val=ev.testsEsp[t.n+'_'+lado]||'';
+                                const bg=val==='positivo'?'#FEE2E2':val==='negativo'?'#DCFCE7':WH;
+                                return(
+                                  <div key={lado}>
+                                    <span style={{...fs.lbl,marginBottom:2}}>{lado}</span>
+                                    <select value={val} onChange={e=>setTestEsp(t.n+'_'+lado,e.target.value)} style={{...fs.sel,width:'100%',background:bg,borderColor:val==='positivo'?RJ:val==='negativo'?GN:GL}}>
+                                      <option value=''>— Sin realizar —</option>
+                                      <option value='negativo'>✓ Negativo</option>
+                                      <option value='positivo'>⚠ Positivo</option>
+                                      <option value='dudoso'>≈ Dudoso</option>
+                                      <option value='no_aplica'>N/A</option>
+                                    </select>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {/* Campo notas por test */}
+                            <input value={ev.testsEsp[t.n+'_nota']||''} onChange={e=>setTestEsp(t.n+'_nota',e.target.value)} placeholder="Notas de este test..." style={{...fs.inp,marginTop:5,fontSize:10}} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Resumen de la región */}
+                  {tests.some(t=>ev.testsEsp[t.n+'_Derecho']||ev.testsEsp[t.n+'_Izquierdo'])&&(()=>{
+                    const positivos=tests.filter(t=>ev.testsEsp[t.n+'_Derecho']==='positivo'||ev.testsEsp[t.n+'_Izquierdo']==='positivo');
+                    return(
+                      <div style={{background:positivos.length>0?'#FEE2E2':'#DCFCE7',border:`1px solid ${positivos.length>0?'#FCA5A5':'#86EFAC'}`,borderRadius:6,padding:'8px 12px',marginTop:4}}>
+                        <div style={{fontSize:11,fontWeight:700,color:positivos.length>0?RJ:GN}}>
+                          Resumen {regionInfo.label}: {positivos.length} test/s positivos
+                        </div>
+                        {positivos.length>0&&<div style={{fontSize:10,color:RJ,marginTop:2}}>{positivos.map(t=>t.n).join(', ')}</div>}
+                      </div>
+                    );
+                  })()}
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                  {['Derecho','Izquierdo'].map(lado=>(
-                    <div key={lado}><span style={fs.lbl}>{lado}</span>
-                      <select value={ev.testsEsp[t.n+'_'+lado]||''} onChange={e=>setTestEsp(t.n+'_'+lado,e.target.value)} style={{...fs.sel,width:'100%'}}>
-                        <option value=''>— Sin realizar —</option>
-                        <option value='negativo'>Negativo ✓</option>
-                        <option value='positivo'>Positivo ⚠</option>
-                        <option value='dudoso'>Dudoso ≈</option>
-                        <option value='no_aplica'>No aplica</option>
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         );
         case 11: return(
+          <div>
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
+              📸 <strong>Antropometría y Análisis Corporal</strong> — Medidas corporales + adjuntar imágenes de análisis de composición corporal.
+            </div>
+            {/* Medidas antropométricas */}
+            <div style={{...fs.card,marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Medidas antropométricas</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8}}>
+                {[['peso','Peso (kg)','kg'],['talla','Talla (cm)','cm'],['imc','IMC (calculado)','kg/m²'],['perCintura','Per. cintura (cm)','cm'],['perCadera','Per. cadera (cm)','cm'],['perBrazo','Per. brazo (cm)','cm']].map(([k,lbl,unit])=>{
+                  const val=ev.antrop?.[k]||'';
+                  let calculado='';
+                  if(k==='imc'&&ev.antrop?.peso&&ev.antrop?.talla){
+                    const imc=(parseFloat(ev.antrop.peso)/Math.pow(parseFloat(ev.antrop.talla)/100,2)).toFixed(1);
+                    calculado=` (${imc})`;
+                  }
+                  return(
+                    <div key={k}>
+                      <span style={fs.lbl}>{lbl}{calculado}</span>
+                      <input type="number" value={val} onChange={e=>setCurrentEval(p=>({...p,antrop:{...(p.antrop||{}),[k]:e.target.value}}))} placeholder={unit} style={fs.inp}/>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* ICC */}
+              {ev.antrop?.perCintura&&ev.antrop?.perCadera&&(()=>{
+                const icc=(parseFloat(ev.antrop.perCintura)/parseFloat(ev.antrop.perCadera)).toFixed(2);
+                const riesgo=icc>0.9?'Riesgo alto':'Normal';
+                return<div style={{background:parseFloat(icc)>0.9?'#FEE2E2':'#DCFCE7',borderRadius:5,padding:'6px 10px',fontSize:11,fontWeight:700,color:parseFloat(icc)>0.9?RJ:GN}}>ICC: {icc} — {riesgo} (umbral H: 0.90 / M: 0.85)</div>;
+              })()}
+              <div style={{marginTop:8}}>
+                <span style={fs.lbl}>Pliegues cutáneos / % grasa corporal</span>
+                <input value={ev.antrop?.pliegues||''} onChange={e=>setCurrentEval(p=>({...p,antrop:{...(p.antrop||{}),'pliegues':e.target.value}}))} placeholder="Ej: subescapular 12mm, suprailiaco 15mm, % grasa 18%" style={fs.inp}/>
+              </div>
+              <div style={{marginTop:8}}>
+                <span style={fs.lbl}>Observaciones antropométricas</span>
+                <textarea value={ev.antrop?.obs||''} onChange={e=>setCurrentEval(p=>({...p,antrop:{...(p.antrop||{}),'obs':e.target.value}}))} rows={2} style={{...fs.inp,resize:'vertical'}} placeholder="Distribución de grasa, asimetrías visibles, contextura..."/>
+              </div>
+            </div>
+            {/* Imágenes de análisis corporal */}
+            <div style={fs.card}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>📸 Imágenes de análisis corporal</div>
+              <div style={{fontSize:11,color:GD,background:BG,borderRadius:5,padding:'6px 10px',marginBottom:10}}>
+                Adjuntá fotos de análisis de composición corporal, scanner DEXA, InBody, o análisis postural fotográfico. Las imágenes se guardan directamente en el historial del paciente.
+              </div>
+              {/* Upload de imagen */}
+              <div style={{marginBottom:10}}>
+                <label style={{display:'block',background:'#EFF6FF',border:'2px dashed #93C5FD',borderRadius:7,padding:'14px',textAlign:'center',cursor:'pointer',fontSize:11,color:'#1D4ED8'}}>
+                  <input type="file" accept="image/*" multiple style={{display:'none'}} onChange={e=>{
+                    Array.from(e.target.files).forEach(file=>{
+                      const reader=new FileReader();
+                      reader.onload=ev2=>{
+                        const img={id:'img_'+Date.now()+'_'+Math.random().toString(36).slice(2),nombre:file.name,tipo:file.type,data:ev2.target.result,fecha:new Date().toISOString().split('T')[0],desc:''};
+                        setCurrentEval(p=>({...p,imagenes_antrop:[...(p.imagenes_antrop||[]),img]}));
+                      };
+                      reader.readAsDataURL(file);
+                    });
+                    e.target.value='';
+                  }}/>
+                  📷 Tocá para seleccionar imágenes (JPG, PNG) — podés seleccionar varias a la vez
+                </label>
+              </div>
+              {/* Galería de imágenes cargadas */}
+              {(ev.imagenes_antrop||[]).length===0&&(
+                <div style={{textAlign:'center',padding:16,color:GM,fontSize:11}}>Sin imágenes adjuntadas.</div>
+              )}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8}}>
+                {(ev.imagenes_antrop||[]).map((img,i)=>(
+                  <div key={img.id} style={{background:BG,borderRadius:7,overflow:'hidden',border:`1px solid ${GL}`}}>
+                    <img src={img.data} alt={img.nombre} style={{width:'100%',height:140,objectFit:'cover',display:'block'}}/>
+                    <div style={{padding:'6px 8px'}}>
+                      <input value={img.desc||''} onChange={e=>setCurrentEval(p=>({...p,imagenes_antrop:(p.imagenes_antrop||[]).map((x,j)=>j===i?{...x,desc:e.target.value}:x)}))} placeholder="Descripción (ej: Vista anterior, InBody 12/03)" style={{...fs.inp,fontSize:10,marginBottom:4}}/>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                        <span style={{fontSize:9,color:GM}}>{img.fecha}</span>
+                        <button onClick={()=>setCurrentEval(p=>({...p,imagenes_antrop:(p.imagenes_antrop||[]).filter((_,j)=>j!==i)}))} style={{background:'none',border:'none',color:RJ,cursor:'pointer',fontSize:11}}>🗑</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+        case 12: return(
           <div>
             {/* Resumen de KPIs */}
             {(()=>{
@@ -1161,6 +1354,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
       ${last.diagnosticoPT?`<div style="margin-top:14px;font-size:11px"><strong>Diagnóstico PT:</strong> ${last.diagnosticoPT}</div>`:''}
       ${last.plan?`<div style="margin-top:6px;font-size:11px"><strong>Indicaciones post-alta:</strong> ${last.plan}</div>`:''}
       <div class="sig"><div class="sig-line">Firma del Fisioterapeuta<br/>${last.evaluador||'_______________'}</div><div class="sig-line">Firma del Paciente<br/>${pac.nombre} ${pac.apellido}</div></div>
+      ${ev.antrop&&(ev.antrop.peso||ev.antrop.talla)?`<div class="sec"><div class="sec-title">Antropometría</div><div class="sec-body" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:11px">${ev.antrop.peso?'<div>Peso: <strong>'+ev.antrop.peso+' kg</strong></div>':''}${ev.antrop.talla?'<div>Talla: <strong>'+ev.antrop.talla+' cm</strong></div>':''}${ev.antrop.imc||ev.antrop.peso&&ev.antrop.talla?'<div>IMC: <strong>'+(ev.antrop.imc||(parseFloat(ev.antrop.peso)/Math.pow(parseFloat(ev.antrop.talla)/100,2)).toFixed(1))+'</strong></div>':''}${ev.antrop.perCintura?'<div>Cin: <strong>'+ev.antrop.perCintura+' cm</strong></div>':''}${ev.antrop.perCadera?'<div>Cad: <strong>'+ev.antrop.perCadera+' cm</strong></div>':''}${ev.antrop.pliegues?'<div style="grid-column:1/-1"><strong>Pliegues:</strong> '+ev.antrop.pliegues+'</div>':''}</div></div>`:''}
       <div class="footer">FisioActiva Colonia · Método Activa Integra · ${new Date().toLocaleDateString('es-ES')}</div>
       <script>window.onload=()=>{window.print()}<\/script></body></html>`;
       const w=window.open('','_blank');w.document.write(html);w.document.close();
@@ -1289,6 +1483,20 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         {ev.motivo&&<div style={fs.card}><div style={{fontSize:11,fontWeight:700,marginBottom:4}}>Anamnesis</div><div style={{fontSize:12,color:GD}}>{ev.motivo}</div></div>}
         {Object.keys(ev.rom||{}).length>0&&<div style={fs.card}><div style={{fontSize:11,fontWeight:700,marginBottom:8}}>ROM</div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>{(ROM_NORMS[ev.region]||ROM_NORMS.lumbar).filter(n=>ev.rom[n.mov]).map(n=>{const v=ev.rom[n.mov];const p=n.normal>0?Math.round(parseFloat(v)/n.normal*100):0;return<div key={n.mov} style={{display:'flex',justifyContent:'space-between',padding:'4px 7px',background:BG,borderRadius:4,fontSize:11}}><span>{n.mov}</span><span style={{fontWeight:700,color:p>90?GN:p>70?AM:RJ}}>{v}° ({p}%)</span></div>})}</div></div>}
         {ev.diagnosticoPT&&<div style={{...fs.card,borderLeft:`3px solid ${TL}`}}><div style={{fontSize:11,fontWeight:700,marginBottom:4}}>Diagnóstico PT</div><div style={{fontSize:12,color:GD}}>{ev.diagnosticoPT}</div></div>}
+
+        {(ev.imagenes_antrop||[]).length>0&&(
+          <div style={{...fs.card,borderLeft:`3px solid ${TL}`}}>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>📸 Análisis corporal ({ev.imagenes_antrop.length} imágenes)</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+              {ev.imagenes_antrop.map((img,i)=>(
+                <div key={i} style={{borderRadius:6,overflow:'hidden',border:`1px solid ${GL}`,cursor:'pointer'}} onClick={()=>window.open(img.data,'_blank')}>
+                  <img src={img.data} alt={img.desc||img.nombre} style={{width:'100%',height:80,objectFit:'cover',display:'block'}}/>
+                  {img.desc&&<div style={{padding:'4px 6px',fontSize:9,color:GD,background:BG}}>{img.desc}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {ev.criterios_personalizados?.length>0&&(
           <div style={{...fs.card,borderLeft:`3px solid ${NV}`,background:'#EFF6FF'}}>
             <div style={{fontSize:11,fontWeight:700,marginBottom:6,color:'#1D4ED8'}}>Criterios de evolución personalizados</div>
