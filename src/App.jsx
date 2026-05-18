@@ -7,6 +7,7 @@ import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuraci
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
 const G1='#F4F4F4', G2='#E0E0E0', G3='#999999', G4='#555555';
+const GN='#16A34A', AM='#D97706', RJ='#DC2626', BG='#F4F4F4';
 
 // ─── SEMÁFORO ───────────────────────────────────────────────────────────────
 const SF={
@@ -46,8 +47,8 @@ const BLOCKS={
   fuerza:       {label:'Fuerza',            pos:[3,4],       tag:'FZA',color:'#CC0000'},
   accesorios:   {label:'Accesorios',        pos:[3,4,5],     tag:'ACC',color:'#4B5563'},
   cardio:       {label:'Cardio',            pos:[5,6,7],     tag:'CAR',color:'#990000'},
-  flex_recovery:{label:'Flex/Recovery',     pos:[2,5,6,7],   tag:'FLX',color:'#1F2937'},
-  propiocepcion:{label:'Propiocepción',     pos:[2,3,4,5,6,7],tag:'PRO',color:'#7a0000'},
+  flex_recovery:{emoji:'🌿',label:'Flex/Recovery',     pos:[2,5,6,7],   tag:'FLX',color:'#1F2937'},
+  propiocepcion:{emoji:'⚖️',label:'Propiocepción',     pos:[2,3,4,5,6,7],tag:'PRO',color:'#7a0000'},
   funcional:    {label:'Funcional Integr.', pos:[2,3,4,5,6,7],tag:'FUN',color:'#374151'},
 };
 
@@ -1511,7 +1512,7 @@ export default function App(){
                     <span style={{fontWeight:700,fontSize:14}}>{c.nombre} {c.apellido}</span>
                     {c.documento&&<span style={{fontSize:10,color:G3}}>CI {c.documento}</span>}
                     <span style={{fontSize:15}}>{sf.emoji}</span>
-                    <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:99}}>{nv.badge} {nv.label}</span>
+                    <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:99}}>{nv.emoji} {nv.badge} {nv.label}</span>
                     {!c.screeningCompleto&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #F59E0B'}}>⏳ Evaluación pendiente</span>}
                   {c.periodizacion&&<span style={{background:'#F5F3FF',color:'#7C3AED',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #C4B5FD'}}>📅 {PERIODIZACIONES[c.periodizacion]?.nombre?.split(' ').slice(0,2).join(' ')}</span>}
                     {isLinked&&<span style={{background:'#DCFCE7',color:'#16A34A',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #86EFAC'}}>● EN SESIÓN</span>}
@@ -1900,10 +1901,10 @@ export default function App(){
                       }
                     </td>
                     <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.tag}</span></td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.emoji} {BLOCKS[ex.bloque]?.tag}</span></td>
                     <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
                     <td style={{padding:'7px 8px',color:G4,fontSize:10,maxWidth:140}}>{ex.patron}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{ex.nivel}</span></td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{NIVEL_EMOJI?.[ex.nivel]} {ex.nivel}</span></td>
                     <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{rr?rr.nombre:ex.regresion||'—'}</td>
                     <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{pr?pr.nombre:ex.progresion||'—'}</td>
                     <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}>
@@ -2327,8 +2328,8 @@ export default function App(){
         {showForm&&<FuerzaForm onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
         {showPlan&&<PlanForm onClose={()=>setShowPlan(false)}/>}
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>Tests de Fuerza Máxima · Planificación</div>
-          <div style={{fontSize:11,color:G3}}>Tests cada 4 meses · Integrado a criterios de evolución · 8 sistemas de periodización</div>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
+          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
         </div>
         {/* Selector de cliente */}
         <div style={{...s.card,marginBottom:12}}>
@@ -2403,7 +2404,7 @@ export default function App(){
                   const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
                   return(
                     <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
-                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{tf.nombre}</div>
+                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{['🏋️','⬆️','🫷','🤚','🍑','🧗'][TESTS_FUERZA.indexOf(tf)]||'💪'} {tf.nombre}</div>
                       <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
                       {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
                       {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
@@ -2508,7 +2509,7 @@ export default function App(){
         </div>
       </div>
       <div style={{...s.tabBar,background:'#141414',borderBottomColor:brand.colorPrimary}}>
-        {[['clientes',`Clientes${clients.length>0?` (${clients.length})`:''}`,],['session','Constructor'],['fuerza','💪 Fuerza'],['rehab','Rehabilitación'],['fisio','🏥 FisioActiva'],['export','Exportar'],['db','Ejercicios'],['brand','Centro']].map(([k,lbl])=>(
+        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
           <button key={k} onClick={()=>setTab(k)} style={s.tb(tab===k,brand.colorPrimary)}>{lbl}</button>
         ))}
       </div>

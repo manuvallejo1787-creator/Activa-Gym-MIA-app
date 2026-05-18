@@ -4,7 +4,7 @@
 // ─── FASES DEL MÉTODO ACTIVA INTEGRA ─────────────────────────────────────
 export const FASES_METODO={
   restaura:{
-    label:'RESTAURA', badge:'N0', color:'#374151', semaforo:'rojo',
+    label:'RESTAURA', badge:'N0', color:'#374151', semaforo:'rojo', emoji:'🔴',
     criterios_ingreso:[
       'Dolor activo > 4/10 en reposo',
       'Déficit ROM > 30%',
@@ -29,7 +29,7 @@ export const FASES_METODO={
     desc_clinica:'Fase de rehabilitación activa. Conduce el fisioterapeuta. El entrenador no interviene hasta semáforo amarillo.',
   },
   activa:{
-    label:'ACTIVA', badge:'N1', color:'#1D4ED8', semaforo:'amarillo',
+    label:'ACTIVA', badge:'N1', color:'#1D4ED8', semaforo:'amarillo', emoji:'🟡',
     criterios_ingreso:[
       'EVA ≤ 3/10 en movimiento',
       'ROM > 70% del normal',
@@ -54,7 +54,7 @@ export const FASES_METODO={
     desc_clinica:'Fase de base de movimiento. El entrenador trabaja en coordinación con el fisio. Restricciones activas documentadas.',
   },
   potencia:{
-    label:'POTENCIA', badge:'N2', color:'#7C3AED', semaforo:'amarillo',
+    label:'POTENCIA', badge:'N2', color:'#7C3AED', semaforo:'amarillo', emoji:'🟣',
     criterios_ingreso:[
       'EVA ≤ 2/10',
       'ROM > 85% del normal',
@@ -79,7 +79,7 @@ export const FASES_METODO={
     desc_clinica:'Fase de desarrollo de capacidades. El entrenador lidera. Fisio preventivo activo en monitoreo.',
   },
   rinde:{
-    label:'RINDE', badge:'N3', color:'#CC0000', semaforo:'verde',
+    label:'RINDE', badge:'N3', color:'#CC0000', semaforo:'verde', emoji:'🔥',
     criterios_ingreso:[
       'Alta clínica funcional emitida',
       'Todos los criterios de alta cumplidos',

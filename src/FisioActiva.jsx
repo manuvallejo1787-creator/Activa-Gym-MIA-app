@@ -210,9 +210,16 @@ const calcFMSTotal=(fms)=>Object.values(fms||{}).reduce((s,v)=>s+(parseInt(v)||0
 const calcDN4=(dn4)=>Object.values(dn4||{}).filter(Boolean).length;
 
 const REGIONES_LIST=[
-  {k:'cervical',label:'Cervical'},{k:'hombro',label:'Hombro'},{k:'codo',label:'Codo'},
-  {k:'muneca',label:'Muñeca'},{k:'esc',label:'Cintura Esc.'},{k:'columna',label:'Columna'},
-  {k:'lumbar',label:'Lumbar'},{k:'cadera',label:'Cadera'},{k:'rodilla',label:'Rodilla'},{k:'tobillo',label:'Tobillo'},
+  {k:'cervical',label:'Cervical',     emoji:'🔵',color:'#2563EB', desc:'C0–C7'},
+  {k:'hombro',  label:'Hombro',       emoji:'🟣',color:'#7C3AED', desc:'Glenohumeral'},
+  {k:'codo',    label:'Codo',         emoji:'🟤',color:'#92400E', desc:'Humeroradial'},
+  {k:'muneca',  label:'Muñeca',       emoji:'🟡',color:'#B45309', desc:'Radiocarpiana'},
+  {k:'esc',     label:'Cintura Esc.', emoji:'⚫',color:'#374151', desc:'Escapular'},
+  {k:'columna', label:'Columna',      emoji:'🟠',color:'#C2410C', desc:'Cervical-dorsal'},
+  {k:'lumbar',  label:'Lumbar',       emoji:'🔴',color:'#CC0000', desc:'L1–L5'},
+  {k:'cadera',  label:'Cadera',       emoji:'🟢',color:'#16A34A', desc:'Coxofemoral'},
+  {k:'rodilla', label:'Rodilla',      emoji:'🔷',color:'#0284C7', desc:'Tibiofemoral'},
+  {k:'tobillo', label:'Tobillo',      emoji:'🟠',color:'#EA580C', desc:'Tibiotarsiana'},
 ];
 
 const EVAL_STEPS=[
@@ -347,9 +354,9 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
     const enRestora=pacientes.filter(p=>{const l=p.evaluaciones[p.evaluaciones.length-1];return l?.fase==='restaura';}).length;
     return(
       <div style={{padding:'14px'}}>
-        <div style={{...fs.cardNV,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 18px'}}>
+        <div style={{...fs.cardNV,display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 18px',flexWrap:'wrap',gap:10}}>
           <div>
-            <div style={{fontSize:17,fontWeight:800,color:WH}}>FisioActiva — Sistema Clínico</div>
+            <div style={{fontSize:17,fontWeight:800,color:WH}}>🏥 FisioActiva — Sistema Clínico</div>
             <div style={{fontSize:11,color:'#93C5FD',marginTop:2}}>Evaluación Funcional · Rehabilitación · Alta Clínica · Método Activa Integra</div>
           </div>
           <div style={{display:'flex',gap:16}}>
@@ -443,7 +450,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
                   <span style={{fontSize:14,fontWeight:700}}>{p.nombre} {p.apellido}</span>
                   {p.documento&&<span style={{fontSize:10,color:GM}}>CI {p.documento}</span>}
-                  {fase&&<span style={{...fs.tag(FASES_BASE[fase]?.color||GM)}}>{FASES_BASE[fase]?.badge} {FASES_BASE[fase]?.label}</span>}
+                  {fase&&<span style={{...fs.tag(FASES_BASE[fase]?.color||GM)}}>{FASES_BASE[fase]?.emoji||''} {FASES_BASE[fase]?.badge} {FASES_BASE[fase]?.label}</span>}
                   {ei&&<span style={{...fs.tag(ei.color)}}>EVA {last.eva_reposo}</span>}
                   {rp&&<span style={{...fs.tag(rp>90?GN:rp>70?AM:RJ)}}>ROM {rp}%</span>}
                   {p.gym_clienteId&&<span style={{background:'#EFF6FF',color:'#1D4ED8',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #93C5FD'}}>🔗 GYM</span>}
@@ -617,7 +624,18 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
           <div style={{display:'flex',flexDirection:'column',gap:10}}>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
               <div><span style={fs.lbl}>Tipo</span><select value={ev.tipo} onChange={e=>set('tipo',e.target.value)} style={{...fs.sel,width:'100%'}}><option value='inicial'>Evaluación Inicial</option><option value='reeval'>Re-evaluación</option><option value='alta'>Evaluación de Alta</option></select></div>
-              <div><span style={fs.lbl}>Región</span><select value={ev.region} onChange={e=>set('region',e.target.value)} style={{...fs.sel,width:'100%'}}>{REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}</select></div>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={fs.lbl}>Región principal</span>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5,marginTop:4}}>
+                  {REGIONES_LIST.map(r=>(
+                    <div key={r.k} onClick={()=>set('region',r.k)} style={{cursor:'pointer',padding:'7px 4px',borderRadius:7,border:`2px solid ${ev.region===r.k?r.color:GL}`,background:ev.region===r.k?`${r.color}18`:WH,textAlign:'center',transition:'all .15s'}}>
+                      <div style={{fontSize:18}}>{r.emoji}</div>
+                      <div style={{fontSize:9,fontWeight:ev.region===r.k?700:400,color:ev.region===r.k?r.color:GD,marginTop:1,lineHeight:1.2}}>{r.label}</div>
+                      <div style={{fontSize:8,color:GM}}>{r.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div><span style={fs.lbl}>Fecha</span><input type="date" value={ev.fecha} onChange={e=>set('fecha',e.target.value)} style={fs.inp}/></div>
               <div><span style={fs.lbl}>Evaluador/a</span><input value={ev.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={fs.inp} placeholder="Nombre del profesional"/></div>
             </div>
@@ -630,8 +648,9 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
               <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginTop:4}}>
                 {Object.entries(FASES_BASE).map(([k,v])=>(
                   <div key={k} onClick={()=>set('fase',k)} style={{padding:'9px 6px',borderRadius:7,border:`2px solid ${ev.fase===k?v.color:GL}`,background:ev.fase===k?`${v.color}15`:WH,cursor:'pointer',textAlign:'center'}}>
-                    <div style={{fontSize:10,fontWeight:700,color:ev.fase===k?v.color:GD}}>{v.badge}</div>
-                    <div style={{fontSize:9,color:ev.fase===k?v.color:GM,marginTop:2}}>{v.label}</div>
+                    <div style={{fontSize:16,marginBottom:2}}>{v.emoji||v.badge}</div>
+                    <div style={{fontSize:9,fontWeight:700,color:ev.fase===k?v.color:GD}}>{v.badge}</div>
+                    <div style={{fontSize:8,color:ev.fase===k?v.color:GM,marginTop:1}}>{v.label}</div>
                   </div>
                 ))}
               </div>
@@ -876,7 +895,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         );
         case 9: return(
           <div>
-            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>🏃 FMS — Total máximo 21. Score ≤ 14: mayor riesgo de lesión.</div>
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>🏃 FMS — Functional Movement Screen · Total máximo 21/21 · Score ≤ 14 = mayor riesgo de lesión · 7 patrones de movimiento</div>
             {FMS_TESTS.map(t=>{
               const score=ev.fms[t.id];
               return(
@@ -907,19 +926,29 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
               🎯 <strong>Screening Multi-Región</strong> — Seleccioná las regiones que quieras evaluar. Podés seleccionar más de una.
             </div>
-            {/* Selector de regiones */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5,marginBottom:12}}>
+            {/* Selector de regiones — visual con emojis */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:14}}>
               {Object.keys(TESTS_ESP).map(reg=>{
-                const info=REGIONES_LIST.find(r=>r.k===reg)||{label:reg};
+                const info=REGIONES_LIST.find(r=>r.k===reg)||{label:reg,emoji:'📍',color:NV};
                 const sel=(ev.regiones_screened||[]).includes(reg);
                 return(
-                  <div key={reg} onClick={()=>setCurrentEval(p=>({...p,regiones_screened:sel?(p.regiones_screened||[]).filter(r=>r!==reg):[...(p.regiones_screened||[]),reg]}))} style={{cursor:'pointer',padding:'8px 5px',borderRadius:7,border:`2px solid ${sel?NV:GL}`,background:sel?`${NV}15`:WH,textAlign:'center',transition:'all .15s'}}>
-                    <div style={{fontSize:10,fontWeight:sel?700:400,color:sel?NV:GD}}>{info.label}</div>
-                    {sel&&<div style={{fontSize:9,color:TL,marginTop:2}}>✓ {(TESTS_ESP[reg]||[]).length} tests</div>}
+                  <div key={reg} onClick={()=>setCurrentEval(p=>({...p,regiones_screened:sel?(p.regiones_screened||[]).filter(r=>r!==reg):[...(p.regiones_screened||[]),reg]}))}
+                    style={{cursor:'pointer',padding:'10px 6px',borderRadius:8,border:`2px solid ${sel?info.color:GL}`,background:sel?`${info.color}18`:WH,textAlign:'center',transition:'all .15s',boxShadow:sel?`0 2px 8px ${info.color}30`:'none'}}>
+                    <div style={{fontSize:22,marginBottom:3}}>{info.emoji}</div>
+                    <div style={{fontSize:10,fontWeight:sel?700:400,color:sel?info.color:GD,lineHeight:1.2}}>{info.label}</div>
+                    {sel
+                      ?<div style={{fontSize:9,color:TL,marginTop:3,fontWeight:700}}>✓ {(TESTS_ESP[reg]||[]).length} tests</div>
+                      :<div style={{fontSize:8,color:GM,marginTop:2}}>{info.desc}</div>
+                    }
                   </div>
                 );
               })}
             </div>
+            {(ev.regiones_screened||[]).length>0&&(
+              <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:6,padding:'6px 10px',marginBottom:10,fontSize:10,color:'#1D4ED8'}}>
+                <strong>Regiones seleccionadas:</strong> {(ev.regiones_screened||[]).map(r=>REGIONES_LIST.find(x=>x.k===r)?.emoji+' '+REGIONES_LIST.find(x=>x.k===r)?.label).join(' · ')}
+              </div>
+            )}
             {(ev.regiones_screened||[]).length===0&&(
               <div style={{...fs.card,textAlign:'center',padding:20,borderStyle:'dashed',color:GM,fontSize:12}}>Seleccioná al menos una región para ver la batería de tests correspondiente.</div>
             )}
@@ -929,8 +958,10 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
               const regionInfo=REGIONES_LIST.find(r=>r.k===reg)||{label:reg};
               return(
                 <div key={reg} style={{marginBottom:14}}>
-                  <div style={{fontSize:12,fontWeight:800,color:NV,marginBottom:8,paddingBottom:4,borderBottom:`2px solid ${NV}`}}>
-                    {regionInfo.label} — {tests.length} tests disponibles
+                  <div style={{fontSize:12,fontWeight:800,marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${regionInfo.color||NV}`,display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:20}}>{regionInfo.emoji}</span>
+                    <span style={{color:regionInfo.color||NV}}>{regionInfo.label}</span>
+                    <span style={{fontSize:10,color:GM,fontWeight:400}}>— {tests.length} tests disponibles</span>
                   </div>
                   {tests.map(t=>{
                     const resD=ev.testsEsp[t.n+'_Derecho']||'';
@@ -1175,7 +1206,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
         <div style={{display:'flex',gap:3,marginBottom:10,overflowX:'auto',paddingBottom:2}}>
           {EVAL_STEPS.map((st,i)=>(
             <div key={i} onClick={()=>i<evalStep&&setEvalStep(i)} style={{padding:'4px 7px',borderRadius:5,background:i===evalStep?NV:i<evalStep?GL:BG,color:i===evalStep?WH:GD,fontSize:9,fontWeight:i===evalStep?700:400,cursor:i<evalStep?'pointer':'default',flexShrink:0,border:`1px solid ${i===evalStep?NV:GL}`}}>
-              {i<evalStep?'✓':st.icon} {i+1}
+              {i<evalStep?'✓ '+st.icon:st.icon}
             </div>
           ))}
         </div>
