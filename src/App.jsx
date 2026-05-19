@@ -74,6 +74,7 @@ function checkRestriction(ex, client){
 }
 
 const NIVEL_COLOR={Principiante:'#16A34A',Intermedio:'#D97706',Avanzado:'#CC0000'};
+const NIVEL_EMOJI={Principiante:'🌱',Intermedio:'🌿',Avanzado:'🔥'};
 
 // ─── LOGO ───────────────────────────────────────────────────────────────────
 const DefaultLogo=({h=40,gymName='ACTIVA',gymSub='FITNESS CLUB'})=>(
@@ -2474,7 +2475,7 @@ export default function App(){
         </div>
       )}
       <div style={{...s.hdr,background:brand.colorBg,borderBottomColor:brand.colorPrimary}}>
-        <HeaderLogo/>
+        HeaderLogo()
         <div style={{display:'flex',gap:14,alignItems:'center'}}>
           <div style={{textAlign:'right'}}>
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
@@ -2526,7 +2527,7 @@ export default function App(){
               .catch(e=>console.error('Error sincronizando con gym:',e));
           }}
         />}
-        {tab==='export'&&<ExportTab/>}
+        {tab==='export'&&ExportTab()}
         {tab==='db'&&<DBTab/>}
         {tab==='brand'&&<BrandingTab/>}
       </div>

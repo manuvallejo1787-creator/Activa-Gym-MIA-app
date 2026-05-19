@@ -1548,7 +1548,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
 
   return(
     <div style={{background:BG,minHeight:'100vh',fontFamily:'Arial,sans-serif'}}>
-      {showPacForm&&<PacienteForm/>}
+      {showPacForm&&PacienteForm()}
       {dbLoading&&(
         <div style={{background:'#0A3D62',color:'#fff',textAlign:'center',padding:'5px',fontSize:11,fontFamily:'Arial,sans-serif'}}>
           ⏳ Sincronizando datos...
