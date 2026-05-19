@@ -337,3 +337,139 @@ export const colorDuracion = (minutos) => {
   if (minutos <= 70) return { color: '#D97706', label: 'Larga' };
   return { color: '#DC2626', label: 'Muy larga' };
 };
+
+// ─── MAPEO EJERCICIO → TEST DE FUERZA ────────────────────────────────────
+// Mapea palabras clave del nombre del ejercicio al test de 1RM más relevante
+const EXERCISE_TEST_MAP = [
+  { testId: 'squat',    keywords: ['sentadilla','squat','goblet','búlgara','bulgara','pistol','front squat'] },
+  { testId: 'deadlift', keywords: ['peso muerto','deadlift','romanian','rdl','rumano','stiff','sumo','trap bar','hex bar'] },
+  { testId: 'bench',    keywords: ['press banca','bench press','banca','pecho','press inclinado','press declinado','aperturas'] },
+  { testId: 'press_mil',keywords: ['press militar','press hombro','overhead','push press','push jerk','arnold','deltoid','press vertical'] },
+  { testId: 'hip_thrust',keywords: ['hip thrust','puente de glúteo','glute bridge','empuje de cadera','hip extension'] },
+  { testId: 'pull_ups', keywords: ['dominada','pull-up','chin-up','jalón','jalon','pulldown','remo vertical'] },
+];
+
+export const getTestIdForExercise = (nombreEjercicio) => {
+  if (!nombreEjercicio) return null;
+  const nombre = nombreEjercicio.toLowerCase();
+  for (const { testId, keywords } of EXERCISE_TEST_MAP) {
+    if (keywords.some(kw => nombre.includes(kw))) return testId;
+  }
+  return null;
+};
+
+// ─── TABLA % 1RM POR REPETICIONES (Prilepin adaptado) ────────────────────
+// reps → porcentaje del 1RM que permite completarlas con buena técnica
+const REPS_TO_PCT_1RM = {
+  1: 100, 2: 97, 3: 93, 4: 90, 5: 87, 6: 85,
+  7: 83,  8: 80, 9: 77, 10: 75, 11: 73, 12: 70,
+  15: 65, 20: 60, 25: 55, 30: 50,
+};
+
+const getPctFor1RM = (reps) => {
+  const n = parseInt(reps);
+  if (isNaN(n) || n < 1) return null;
+  // Exact match
+  if (REPS_TO_PCT_1RM[n]) return REPS_TO_PCT_1RM[n];
+  // Interpolate
+  const keys = Object.keys(REPS_TO_PCT_1RM).map(Number).sort((a,b)=>a-b);
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (n >= keys[i] && n <= keys[i+1]) {
+      const t = (n - keys[i]) / (keys[i+1] - keys[i]);
+      return Math.round(REPS_TO_PCT_1RM[keys[i]] * (1-t) + REPS_TO_PCT_1RM[keys[i+1]] * t);
+    }
+  }
+  return null;
+};
+
+// ─── PARSE REPS DE UNA FASE DE PERIODIZACIÓN ────────────────────────────
+// "8–12" → average 10; "1–3" → 2; "3–5" → 4
+const parseRepsFromPhase = (repsStr) => {
+  if (!repsStr) return null;
+  const str = repsStr.replace('–','-').replace('—','-');
+  if (str.includes('-')) {
+    const parts = str.split('-').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+    if (parts.length >= 2) return Math.round((parts[0] + parts[1]) / 2);
+  }
+  const n = parseInt(str);
+  return isNaN(n) ? null : n;
+};
+
+// ─── SUGERENCIA DE PESO PRINCIPAL ────────────────────────────────────────
+// Dado un ejercicio, los tests del cliente y la fase activa del plan,
+// devuelve un objeto con la sugerencia de peso y los cálculos
+export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null) => {
+  const testId = getTestIdForExercise(nombreEjercicio);
+  if (!testId || !testsCliente.length) return null;
+
+  // Buscar el test más reciente para ese ejercicio
+  const testData = testsCliente
+    .filter(t => t.test_id === testId)
+    .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+  if (!testData.length) return null;
+
+  const last = testData[0];
+  const rm1 = parseFloat(last.rm1_real || last.rm1_calculado);
+  if (!rm1 || isNaN(rm1)) return null;
+
+  // Si hay fase de plan, usar sus reps para calcular el %
+  let pct = null;
+  let repsTarget = null;
+  let rirTarget = null;
+  let intensidadLabel = null;
+
+  if (fasePlan) {
+    repsTarget = parseRepsFromPhase(fasePlan.reps);
+    rirTarget = fasePlan.rir;
+    intensidadLabel = fasePlan.intensidad;
+    // Also derive % from intensity label if available
+    if (fasePlan.intensidad) {
+      const intensidad = fasePlan.intensidad.toLowerCase();
+      if (intensidad.includes('muy alta') || intensidad.includes('máxima')) pct = 90;
+      else if (intensidad.includes('alta')) pct = 82;
+      else if (intensidad.includes('moderada')) pct = 72;
+      else if (intensidad.includes('baja-moderada') || intensidad.includes('baja')) pct = 62;
+    }
+    // Reps-based % takes priority (more precise)
+    if (repsTarget) {
+      const repsPct = getPctFor1RM(repsTarget);
+      if (repsPct) pct = repsPct;
+    }
+  }
+
+  // Default: suggest 70% if no plan
+  if (!pct) pct = 70;
+
+  // Adjust for RIR (each RIR point = ~5% reduction)
+  const rir = parseInt(rirTarget) || 2;
+  const pctConRIR = Math.max(pct - (rir * 3), 50);
+
+  const pesoSugerido = Math.round(rm1 * pctConRIR / 100 / 2.5) * 2.5; // round to nearest 2.5kg
+  const pesoMin = Math.round(rm1 * (pctConRIR - 5) / 100 / 2.5) * 2.5;
+  const pesoMax = Math.round(rm1 * (pctConRIR + 3) / 100 / 2.5) * 2.5;
+
+  return {
+    testId,
+    rm1,
+    rm1Fecha: last.fecha,
+    pct: pctConRIR,
+    pesoSugerido,
+    pesoRango: `${pesoMin}–${pesoMax} kg`,
+    repsTarget: repsTarget ? `${fasePlan.reps}` : null,
+    rir: rirTarget,
+    intensidad: intensidadLabel,
+    diasDesdeTest: Math.floor((new Date() - new Date(last.fecha)) / 86400000),
+    testVencido: Math.floor((new Date() - new Date(last.fecha)) / 86400000) > 120,
+  };
+};
+
+// ─── SUGERENCIAS PARA UN BLOQUE COMPLETO ─────────────────────────────────
+export const sugerirPesosBloque = (exercises, exsDB, testsCliente, fasePlan) => {
+  return exercises.map(be => {
+    const ex = exsDB.find(e => e.id === be.exId);
+    if (!ex) return { exId: be.exId, sugerencia: null };
+    const sugerencia = sugerirPeso(ex.nombre, testsCliente, fasePlan);
+    return { exId: be.exId, nombre: ex.nombre, sugerencia };
+  }).filter(x => x.sugerencia !== null);
+};

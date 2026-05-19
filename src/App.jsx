@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, genId } from "./db.js";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -845,6 +845,13 @@ export default function App(){
   const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
 
   const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
+  // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
+  const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
+  // Fase activa del plan de periodización del cliente
+  const activeFasePlan=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
+  },[activeClient]);
 
   // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
   const suggestBlocks=(obj)=>{
@@ -1739,6 +1746,30 @@ export default function App(){
               </div>
               {isExp&&(
                 <div style={{padding:'10px 12px',background:'#fafafa',borderTop:`1px solid ${G2}`}}>
+                  {/* SUGERENCIAS DE PESO DEL BLOQUE */}
+                  {activeClientTests?.length>0&&block.exercises.length>0&&(()=>{
+                    const sugs=sugerirPesosBloque(block.exercises,exs,activeClientTests,activeFasePlan);
+                    if(!sugs.length)return null;
+                    return(
+                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',marginBottom:8}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'#7C3AED',marginBottom:6}}>
+                          💡 Sugerencias de peso para este bloque
+                          {activeFasePlan&&<span style={{fontSize:9,color:'#9F7AEA',fontWeight:400,marginLeft:6}}>— {activeFasePlan.nombre} · {activeFasePlan.reps} reps · RIR {activeFasePlan.rir}</span>}
+                        </div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:5}}>
+                          {sugs.map(({exId,nombre,sugerencia:sg})=>(
+                            <div key={exId} style={{background:'#EDE9FE',borderRadius:5,padding:'5px 8px'}}>
+                              <div style={{fontSize:9,color:'#6D28D9',fontWeight:700,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nombre}</div>
+                              <div style={{fontSize:14,fontWeight:800,color:'#4C1D95'}}>{sg.pesoSugerido} <span style={{fontSize:9,fontWeight:400}}>kg</span></div>
+                              <div style={{fontSize:8,color:'#7C3AED'}}>rango: {sg.pesoRango}</div>
+                              <div style={{fontSize:8,color:'#9F7AEA'}}>{sg.pct}% de {sg.rm1}kg 1RM</div>
+                              {sg.testVencido&&<div style={{fontSize:8,color:'#F59E0B',fontWeight:700}}>⚠ Test vencido</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {/* Sugerencia de periodización activa */}
                   {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
                     const per=PERIODIZACIONES[activeClient.periodizacion];
@@ -1761,15 +1792,39 @@ export default function App(){
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
                     return(
-                      <div key={be.exId} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':G2}`,borderRadius:6,padding:'7px 10px',marginBottom:5}}>
-                        <div>
-                          <div style={{fontSize:12,fontWeight:600}}>{ex.nombre}</div>
-                          <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
-                          {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
-                          {rest==='warn'&&<div style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:10,color:'#92400E',display:'inline-block',marginTop:2}}>⚠ Restricción activa</div>}
-                        </div>
-                        <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px'}}>×</button>
-                      </div>
+                      {(()=>{
+                        const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
+                        return(
+                          <div key={be.exId} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:6,padding:'7px 10px',marginBottom:5}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:12,fontWeight:600}}>{ex.nombre}</div>
+                                <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
+                                {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
+                                {rest==='warn'&&<div style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:10,color:'#92400E',display:'inline-block',marginTop:2}}>⚠ Restricción activa</div>}
+                              </div>
+                              <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                            </div>
+                            {sug&&(
+                              <div style={{marginTop:5,background:'#F5F3FF',borderRadius:5,padding:'5px 8px',border:'1px solid #C4B5FD'}}>
+                                <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
+                                  <span style={{fontSize:10,color:'#7C3AED',fontWeight:700}}>💡 Sugerencia de peso</span>
+                                  <span style={{fontSize:13,fontWeight:800,color:'#4C1D95'}}>{sug.pesoSugerido} kg</span>
+                                  <span style={{fontSize:10,color:'#6D28D9'}}>rango: {sug.pesoRango}</span>
+                                  <span style={{fontSize:9,color:'#7C3AED'}}>{sug.pct}% del 1RM</span>
+                                  {sug.repsTarget&&<span style={{fontSize:9,color:'#7C3AED'}}>· {sug.repsTarget} reps</span>}
+                                  {sug.rir&&<span style={{fontSize:9,color:'#7C3AED'}}>· RIR {sug.rir}</span>}
+                                </div>
+                                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginTop:2}}>
+                                  <span style={{fontSize:9,color:'#9F7AEA'}}>1RM registrado: <strong>{sug.rm1} kg</strong> ({sug.rm1Fecha})</span>
+                                  {sug.testVencido&&<span style={{fontSize:9,color:'#F59E0B',fontWeight:700}}>⚠ Test vencido ({sug.diasDesdeTest} días)</span>}
+                                  {sug.intensidad&&<span style={{fontSize:9,color:'#9F7AEA'}}>Intensidad: {sug.intensidad}</span>}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     );
                   })}
                   {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&(
@@ -1781,21 +1836,25 @@ export default function App(){
                       <div style={s.lbl}>Ejercicios del bloque</div>
                       <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
                         {exs.filter(e=>e.bloque===block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
+                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
                           const added=block.exercises.some(be=>be.exId===ex.id);
                           const rest=checkRestriction(ex,activeClient);
-                          const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':WH;
+                          const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':pickSug?'#FAF5FF':WH;
                           return(
-                            <div key={ex.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 6px',borderBottom:`1px solid ${G2}`,background:bgColor,opacity:added?.4:1}}>
-                              <div>
-                                <div style={{fontSize:11,fontWeight:600}}>{ex.nombre}
-                                  {rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>BLOQUEADO</span>}
-                                  {rest==='warn'&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>⚠ RESTRICCIÓN</span>}
+                            <div key={ex.id} style={{background:bgColor,opacity:added?.4:1,borderBottom:`1px solid ${G2}`,borderLeft:pickSug?'3px solid #C4B5FD':'3px solid transparent',padding:'5px 6px'}}>
+                              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontSize:11,fontWeight:600}}>{ex.nombre}
+                                    {rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>BLOQUEADO</span>}
+                                    {rest==='warn'&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>⚠ RESTRICCIÓN</span>}
+                                  </div>
+                                  <div style={{fontSize:10,color:G3}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
+                                  {pickSug&&<div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontWeight:700}}>💡 {pickSug.pesoSugerido} kg ({pickSug.pesoRango}) · {pickSug.pct}% 1RM{pickSug.repsTarget?` · ${pickSug.repsTarget} reps`:''}</div>}
                                 </div>
-                                <div style={{fontSize:10,color:G3}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
-                              </div>
-                              {!added&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:rest==='warn'?'#D97706':brand.colorPrimary}}>+</button>}
+                              {!added&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:rest==='warn'?'#D97706':brand.colorPrimary,flexShrink:0}}>+</button>}
                               {!added&&rest==='block'&&<span style={{fontSize:10,color:R,fontWeight:700}}>🚫</span>}
                               {added&&<span style={{fontSize:10,color:G3}}>✓</span>}
+                              </div>
                             </div>
                           );
                         })}

@@ -387,9 +387,16 @@ export function useFuerzaTests(clientId) {
     return()=>supabase.removeChannel(ch)
   },[fetch,clientId])
   const saveTest=useCallback(async(t)=>{
-    if(isSupabaseReady){const{error}=await supabase.from('fuerza_tests').upsert({...t,gym_client_id:clientId},{onConflict:'id'});if(error)throw error}
-    else setTests(p=>p.find(x=>x.id===t.id)?p.map(x=>x.id===t.id?t:x):[t,...p])
-  },[clientId])
+    if(!clientId) throw new Error('No hay cliente seleccionado')
+    const toSave={...t, gym_client_id:clientId}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('fuerza_tests').upsert(toSave,{onConflict:'id'})
+      if(error) throw error
+      await fetch() // refetch to update UI immediately
+    } else {
+      setTests(p=>p.find(x=>x.id===t.id)?p.map(x=>x.id===t.id?toSave:x):[toSave,...p])
+    }
+  },[clientId, fetch])
   const deleteTest=useCallback(async(id)=>{
     if(isSupabaseReady)await supabase.from('fuerza_tests').delete().eq('id',id)
     else setTests(p=>p.filter(x=>x.id!==id))
