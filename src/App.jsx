@@ -868,9 +868,20 @@ export default function App(){
   const addExToBlock=(blockId,exId,override=false,note='')=>{
     setSession(p=>({...p,blocks:p.blocks.map(b=>{
       if(b.id!==blockId||b.exercises.length>=5)return b;
-      return{...b,exercises:[...b.exercises,{exId,override,note}]};
+      const exEntry={exId,override,note,
+        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
+        pesoSug:'',pesoReal:'',anotacion:''};
+      return{...b,exercises:[...b.exercises,exEntry]};
     })}));
   };
+  const updateExParam=(blockId,exId,key,val)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
+  })}));
+  const updateExParams=(blockId,exId,params)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,params:{...(be.params||{}), ...params}}:be)};
+  })}));
   const removeExFromBlock=(blockId,exId)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
     if(b.id!==blockId)return b;
     return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
@@ -907,16 +918,45 @@ export default function App(){
 
   // ─── EXPORTAR PDF ────────────────────────────────────────────────────────
   const exportPDF=()=>{
-    const rows=session.blocks.map(b=>{
+    // One row per exercise (not per block)
+    const rows=session.blocks.flatMap(b=>{
       const bd=BLOCKS[b.type];
-      const exList=b.exercises.map(be=>{const ex=exs.find(e=>e.id===be.exId);return ex?`${ex.nombre}${be.override?' [OVR]':''}`:be.exId;}).join(' / ');
-      return`<tr><td style="background:${bd.color};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;">${b.position}</td><td style="background:${bd.color};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;">${bd.label}</td><td style="padding:6px 10px;font-size:11px;">${exList||'—'}</td><td style="padding:6px 10px;font-size:11px;text-align:center;">${b.params.series}</td><td style="padding:6px 10px;font-size:11px;text-align:center;">${b.params.reps}</td><td style="padding:6px 10px;font-size:11px;text-align:center;">${b.params.rpe}</td><td style="padding:6px 10px;font-size:11px;text-align:center;">${b.params.tempo}</td><td style="padding:6px 10px;font-size:11px;text-align:center;">${b.params.descanso}</td></tr>`;
+      const bgBlock=bd.color;
+      if(b.exercises.length===0){
+        return[`<tr>
+          <td style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;text-align:center;">${b.position}</td>
+          <td style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;">${bd.emoji||''} ${bd.label}</td>
+          <td colspan="7" style="padding:6px 10px;font-size:11px;color:#999;font-style:italic;">Sin ejercicios cargados</td>
+        </tr>`];
+      }
+      return b.exercises.map((be,idx)=>{
+        const ex=exs.find(e=>e.id===be.exId);
+        const exNombre=ex?ex.nombre:be.exId;
+        const p=be.params||b.params;
+        const pesoCell=be.pesoSug||be.pesoReal
+          ?`<span style="color:#7C3AED;font-weight:700;">${be.pesoSug?be.pesoSug+' kg (sug.)':''}</span>${be.pesoSug&&be.pesoReal?' / ':''}<span style="color:#166534;font-weight:700;">${be.pesoReal?be.pesoReal+' kg (real)':''}</span>`
+          :'—';
+        const bloqueCel=idx===0
+          ?`<td rowspan="${b.exercises.length}" style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;text-align:center;vertical-align:middle;">${b.position}</td>
+             <td rowspan="${b.exercises.length}" style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;vertical-align:middle;">${bd.emoji||''} ${bd.label}</td>`
+          :'';
+        return`<tr style="border-bottom:1px solid #e0e0e0;">
+          ${bloqueCel}
+          <td style="padding:5px 10px;font-size:11px;font-weight:600;">${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:8px;padding:1px 5px;border-radius:99px;font-weight:700;">OVR</span>':''}</td>
+          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.series||'—'}</td>
+          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.reps||'—'}</td>
+          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.tempo||'—'}</td>
+          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.descanso||'—'}</td>
+          <td style="padding:5px 10px;font-size:11px;">${pesoCell}</td>
+          <td style="padding:5px 10px;font-size:11px;color:#666;font-style:italic;">${be.anotacion||''}</td>
+        </tr>`;
+      });
     }).join('');
     const sfBanner=activeClient?`<div style="margin-bottom:14px;padding:10px 14px;border-radius:6px;background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};font-size:11px;"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
     const logoHtml=brand.logoImg
       ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:50px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:22px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-family:Arial,sans-serif;font-size:10px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
       :`<div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${session.name}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:28px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:14px;margin-bottom:18px}table{width:100%;border-collapse:collapse;margin-top:12px}th{background:#1a1a1a;color:#fff;padding:8px 10px;font-size:10px;text-align:left;text-transform:uppercase;letter-spacing:.06em}td{border-bottom:1px solid #e0e0e0}tr:nth-child(even) td{background:#f9f9f9}.footer{margin-top:24px;font-size:10px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:10px}.notas{margin-top:14px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:10px 14px;font-size:11px;color:#555}@media print{body{padding:16px}}</style></head><body><div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">${session.name}</div><div style="font-size:10px;color:#666;margin-top:3px">Nivel: ${activeClient?NIVEL[activeClient.nivel].label:'—'} · Cliente: ${session.cliente||'—'} · Fecha: ${session.fecha}</div></div></div>${sfBanner}<table><thead><tr><th>#</th><th>Bloque</th><th>Ejercicios</th><th>Series</th><th>Reps</th><th>RPE</th><th>Tempo</th><th>Descanso</th></tr></thead><tbody>${rows}</tbody></table>${session.notas?`<div class="notas"><strong>Notas:</strong> ${session.notas}</div>`:''}<div class="footer">${brand.gymName} · ${brand.gymSub} · ${new Date().toLocaleDateString('es-ES')}</div><script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${session.name}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:28px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:14px;margin-bottom:18px}table{width:100%;border-collapse:collapse;margin-top:12px}th{background:#1a1a1a;color:#fff;padding:8px 10px;font-size:10px;text-align:left;text-transform:uppercase;letter-spacing:.06em}td{border-bottom:1px solid #e0e0e0}tr:nth-child(even) td{background:#f9f9f9}.footer{margin-top:24px;font-size:10px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:10px}.notas{margin-top:14px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:10px 14px;font-size:11px;color:#555}@media print{body{padding:16px}}</style></head><body><div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">${session.name}</div><div style="font-size:10px;color:#666;margin-top:3px">Nivel: ${activeClient?NIVEL[activeClient.nivel].label:'—'} · Cliente: ${session.cliente||'—'} · Fecha: ${session.fecha}</div></div></div>${sfBanner}<table><thead><tr><th style="width:32px">#</th><th>Bloque</th><th>Ejercicio</th><th>Series</th><th>Reps</th><th>Tempo</th><th>Descanso</th><th>Peso</th><th>Anotaciones</th></tr></thead><tbody>${rows}</tbody></table>${session.notas?`<div class="notas"><strong>Notas:</strong> ${session.notas}</div>`:''}<div class="footer">${brand.gymName} · ${brand.gymSub} · ${new Date().toLocaleDateString('es-ES')}</div><script>window.onload=()=>{window.print()}<\/script></body></html>`;
     const w=window.open('','_blank');w.document.write(html);w.document.close();
   };
 
@@ -1792,35 +1832,59 @@ export default function App(){
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
                     const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
+                    const exParams=be.params||block.params;
+                    // Seed peso sugerido the first time
+                    if(sug&&be.pesoSug===''&&sug.pesoSugerido){
+                      setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
+                    }
                     return(
-                          <div key={be.exId} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:6,padding:'7px 10px',marginBottom:5}}>
-                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                              <div style={{flex:1}}>
-                                <div style={{fontSize:12,fontWeight:600}}>{ex.nombre}</div>
-                                <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
-                                {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
-                                {rest==='warn'&&<div style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:10,color:'#92400E',display:'inline-block',marginTop:2}}>⚠ Restricción activa</div>}
-                              </div>
-                              <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
-                            </div>
-                            {sug&&(
-                              <div style={{marginTop:5,background:'#F5F3FF',borderRadius:5,padding:'5px 8px',border:'1px solid #C4B5FD'}}>
-                                <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
-                                  <span style={{fontSize:10,color:'#7C3AED',fontWeight:700}}>💡 Sugerencia de peso</span>
-                                  <span style={{fontSize:13,fontWeight:800,color:'#4C1D95'}}>{sug.pesoSugerido} kg</span>
-                                  <span style={{fontSize:10,color:'#6D28D9'}}>rango: {sug.pesoRango}</span>
-                                  <span style={{fontSize:9,color:'#7C3AED'}}>{sug.pct}% del 1RM</span>
-                                  {sug.repsTarget&&<span style={{fontSize:9,color:'#7C3AED'}}>· {sug.repsTarget} reps</span>}
-                                  {sug.rir&&<span style={{fontSize:9,color:'#7C3AED'}}>· RIR {sug.rir}</span>}
-                                </div>
-                                <div style={{display:'flex',gap:10,flexWrap:'wrap',marginTop:2}}>
-                                  <span style={{fontSize:9,color:'#9F7AEA'}}>1RM registrado: <strong>{sug.rm1} kg</strong> ({sug.rm1Fecha})</span>
-                                  {sug.testVencido&&<span style={{fontSize:9,color:'#F59E0B',fontWeight:700}}>⚠ Test vencido ({sug.diasDesdeTest} días)</span>}
-                                  {sug.intensidad&&<span style={{fontSize:9,color:'#9F7AEA'}}>Intensidad: {sug.intensidad}</span>}
-                                </div>
-                              </div>
-                            )}
+                      <div key={be.exId} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:7,padding:'8px 10px',marginBottom:6}}>
+                        {/* Cabecera ejercicio */}
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:5}}>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:700}}>{ex.nombre}</div>
+                            <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
+                            {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
+                            {rest==='warn'&&<span style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:9,color:'#92400E'}}>⚠ Restricción</span>}
                           </div>
+                          <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                        </div>
+                        {/* Parámetros individuales por ejercicio */}
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4,marginBottom:5}}>
+                          {[['series','Series'],['reps','Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Desc.']].map(([k,lbl])=>(
+                            <div key={k}>
+                              <div style={{fontSize:8,color:G3,marginBottom:1,textTransform:'uppercase'}}>{lbl}</div>
+                              <input value={exParams[k]||''} onChange={e=>updateExParams(block.id,be.exId,{[k]:e.target.value})}
+                                style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Peso sugerido + real + anotaciones */}
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:4}}>
+                          <div>
+                            <div style={{fontSize:8,color:'#7C3AED',marginBottom:1,textTransform:'uppercase',fontWeight:700}}>💡 Peso sugerido</div>
+                            <div style={{position:'relative'}}>
+                              <input value={be.pesoSug||''} onChange={e=>updateExParam(block.id,be.exId,'pesoSug',e.target.value)}
+                                placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
+                                style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
+                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1}}>rango: {sug.pesoRango} · {sug.pct}% 1RM</div>}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:GN,marginBottom:1,textTransform:'uppercase',fontWeight:700}}>✓ Peso real usado</div>
+                            <input value={be.pesoReal||''} onChange={e=>updateExParam(block.id,be.exId,'pesoReal',e.target.value)}
+                              placeholder="kg"
+                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:'#F0FDF4',color:'#166534',outline:'none'}}/>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:G4,marginBottom:1,textTransform:'uppercase'}}>📝 Anotaciones</div>
+                            <input value={be.anotacion||''} onChange={e=>updateExParam(block.id,be.exId,'anotacion',e.target.value)}
+                              placeholder="Notas de esta serie..."
+                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
+                          </div>
+                        </div>
+                        {sug?.testVencido&&<div style={{fontSize:8,color:'#F59E0B',marginTop:3,fontWeight:700}}>⚠ Test de fuerza vencido ({sug.diasDesdeTest} días) — peso puede estar desactualizado</div>}
+                      </div>
                     );
                   })}
                   {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&(

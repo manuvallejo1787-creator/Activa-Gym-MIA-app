@@ -56,7 +56,7 @@ export const TESTS_FUERZA = [
     protocolo: 'BASE sin peso: registrar máx. repeticiones con peso corporal (agarre prono, rango completo). Si el cliente completa >8 reps con buena técnica, agregar lastre progresivo para estimar 1RM. Si no llega a 1 rep, registrar asistencia negativa (excéntrico) como referencia.',
     referencia: { masculino: 0.3, femenino: 0.1 },
     unidad: 'lastre adicional × peso corporal',
-    nivel: { debil: 0, promedio: 0.05, bueno: 0.25, elite: 0.5 },
+    nivel: { debil: 0, promedio: 0.2, bueno: 0.5, elite: 0.8 },
     nota_sin_peso: true,
   },
 ];
@@ -73,8 +73,18 @@ export const calcular1RM = (peso, reps) => {
 
 export const nivelFuerza = (test, rm1, pesoCorporal) => {
   if (!rm1 || !pesoCorporal) return null;
-  const ratio = rm1 / pesoCorporal;
   const n = test.nivel;
+  // For pull-ups: ratio = additional weight / bodyweight
+  // A person completing reps with bodyweight (0 lastre) is Principiante minimum
+  if (test.id === 'pull_ups') {
+    const lastre = rm1 - pesoCorporal; // rm1 includes bodyweight for pull-ups
+    const ratio = Math.max(lastre / pesoCorporal, 0);
+    if (ratio >= n.elite)    return { label: 'Elite',       color: '#7C3AED' };
+    if (ratio >= n.bueno)    return { label: 'Avanzado',    color: '#16A34A' };
+    if (ratio >= n.promedio) return { label: 'Intermedio',  color: '#D97706' };
+    return { label: 'Principiante', color: '#CC0000' }; // any completed rep = Principiante
+  }
+  const ratio = rm1 / pesoCorporal;
   if (ratio >= n.elite)   return { label: 'Elite',    color: '#7C3AED' };
   if (ratio >= n.bueno)   return { label: 'Avanzado', color: '#16A34A' };
   if (ratio >= n.promedio)return { label: 'Intermedio',color: '#D97706' };
