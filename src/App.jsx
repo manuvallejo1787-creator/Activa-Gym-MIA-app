@@ -638,7 +638,7 @@ const DB0=[
   {id:'f13',nombre:'Sentadilla con pausa (3 seg)',bloque:'fuerza',musculos:'Cuádriceps, glúteo, core',contraccion:'Isométrica-concéntrica',patron:'Empuje bilateral piernas',nivel:'Intermedio',equipo:'Barra, rack',regresion:'f01',progresion:'Sentadilla con cadenas'},
   {id:'f14',nombre:'Peso muerto sumo',bloque:'fuerza',musculos:'Aductores, glúteo, isquiotibiales, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Bisagra bilateral apertura 45°',nivel:'Intermedio',equipo:'Barra',regresion:'f02',progresion:'Peso muerto sumo con déficit'},
   {id:'f15',nombre:'Remo Yates (con supinación)',bloque:'fuerza',musculos:'Dorsal, bíceps, romboides',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal inclinado',nivel:'Intermedio',equipo:'Barra',regresion:'f06',progresion:'Remo Yates con pausa'},
-  {id:'f16',nombre:'Press banca con agarre cerrado',bloque:'fuerza',musculos:'Tríceps, pectoral interior, deltoides ant.',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal estrecho',nivel:'Intermedio',equipo:'Barra, banco',regresion:'f03',progresion:'Con pausa en el pecho'},
+  {id:'f16',nombre:'Press pecho en banco plano agarre cerrado',bloque:'fuerza',musculos:'Tríceps, pectoral interior, deltoides ant.',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal estrecho',nivel:'Intermedio',equipo:'Barra, banco',regresion:'f03',progresion:'Con pausa en el pecho'},
   {id:'f17',nombre:'Good morning con barra',bloque:'fuerza',musculos:'Isquiotibiales, glúteo, erector espinal',contraccion:'Excéntrica-concéntrica',patron:'Bisagra bilateral con carga axial',nivel:'Avanzado',equipo:'Barra',regresion:'f09',progresion:'Good morning con pausa'},
   {id:'f18',nombre:'Press Arnold con mancuernas',bloque:'fuerza',musculos:'Deltoides, tríceps, pectoral superior',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical con rotación',nivel:'Intermedio',equipo:'Mancuernas',regresion:'f04',progresion:'Press Arnold con pausa'},
   {id:'f19',nombre:'Sentadilla búlgara con barra',bloque:'fuerza',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Empuje unilateral carga axial',nivel:'Avanzado',equipo:'Barra, banco',regresion:'f11',progresion:'Con pausa abajo'},
@@ -1791,10 +1791,8 @@ export default function App(){
                   {block.exercises.map(be=>{
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
+                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
                     return(
-                      {(()=>{
-                        const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
-                        return(
                           <div key={be.exId} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:6,padding:'7px 10px',marginBottom:5}}>
                             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                               <div style={{flex:1}}>
@@ -1823,8 +1821,6 @@ export default function App(){
                               </div>
                             )}
                           </div>
-                        );
-                      })()}
                     );
                   })}
                   {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&(
@@ -2314,7 +2310,12 @@ export default function App(){
     });
     const set=(k,v)=>setF(f=>({...f,[k]:v}));
     const ti=TESTS_FUERZA.find(t=>t.id===form.test_id);
-    const rm1c=calcular1RM(parseFloat(form.peso_levantado),parseInt(form.reps_realizadas));
+    // Dominadas sin lastre: el 1RM se calcula sobre el peso corporal
+    const esDominadas=form.test_id==='pull_ups';
+    const pesoLevantado=parseFloat(form.peso_levantado)||0;
+    const pesoCorp=parseFloat(form.peso_corporal)||0;
+    const pesoParaCalculo=esDominadas&&pesoLevantado===0?pesoCorp:pesoLevantado+(esDominadas?pesoCorp:0);
+    const rm1c=pesoParaCalculo>0?calcular1RM(pesoParaCalculo,parseInt(form.reps_realizadas)):null;
     const niv=ti&&rm1c&&form.peso_corporal?nivelFuerza(ti,rm1c,parseFloat(form.peso_corporal)):null;
     return(
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
@@ -2332,6 +2333,9 @@ export default function App(){
             </div>
             {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
               <strong>📋 Protocolo:</strong> {ti.protocolo}
+            </div>}
+            {form.test_id==='pull_ups'&&<div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:6,padding:'7px 10px',fontSize:10,color:'#1D4ED8'}}>
+              💡 <strong>Sin lastre:</strong> ingresá 0 en "peso levantado" y las repeticiones completadas. El 1RM se estima sobre tu peso corporal. <strong>Con lastre:</strong> ingresá solo el lastre adicional en kg.
             </div>}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
               <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>

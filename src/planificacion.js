@@ -24,7 +24,7 @@ export const TESTS_FUERZA = [
   },
   {
     id: 'bench',
-    nombre: 'Press de banca plano',
+    nombre: 'Press pecho en banco plano',
     patron: 'Empuje horizontal',
     protocolo: 'Calentamiento: 50%, 70%, 85% × 3. Luego máximos con 3-5 min descanso. Escápulas retraídas y deprimidas. Evaluador como spotter obligatorio.',
     referencia: { masculino: 1.0, femenino: 0.7 },
@@ -51,12 +51,13 @@ export const TESTS_FUERZA = [
   },
   {
     id: 'pull_ups',
-    nombre: 'Dominadas lastradas',
+    nombre: 'Dominadas sin peso / lastradas',
     patron: 'Tirón vertical',
-    protocolo: 'Máximo de repeticiones con peso corporal primero. Luego agregar lastre para estimar 1RM. Rango completo obligatorio.',
+    protocolo: 'BASE sin peso: registrar máx. repeticiones con peso corporal (agarre prono, rango completo). Si el cliente completa >8 reps con buena técnica, agregar lastre progresivo para estimar 1RM. Si no llega a 1 rep, registrar asistencia negativa (excéntrico) como referencia.',
     referencia: { masculino: 0.3, femenino: 0.1 },
-    unidad: '× peso corporal (lastre)',
-    nivel: { debil: 0, promedio: 0.1, bueno: 0.3, elite: 0.6 },
+    unidad: 'lastre adicional × peso corporal',
+    nivel: { debil: 0, promedio: 0.05, bueno: 0.25, elite: 0.5 },
+    nota_sin_peso: true,
   },
 ];
 
@@ -343,7 +344,7 @@ export const colorDuracion = (minutos) => {
 const EXERCISE_TEST_MAP = [
   { testId: 'squat',    keywords: ['sentadilla','squat','goblet','búlgara','bulgara','pistol','front squat'] },
   { testId: 'deadlift', keywords: ['peso muerto','deadlift','romanian','rdl','rumano','stiff','sumo','trap bar','hex bar'] },
-  { testId: 'bench',    keywords: ['press banca','bench press','banca','pecho','press inclinado','press declinado','aperturas'] },
+  { testId: 'bench',    keywords: ['press pecho','press banca','bench press','banca','pecho','press inclinado','press declinado','aperturas'] },
   { testId: 'press_mil',keywords: ['press militar','press hombro','overhead','push press','push jerk','arnold','deltoid','press vertical'] },
   { testId: 'hip_thrust',keywords: ['hip thrust','puente de glúteo','glute bridge','empuje de cadera','hip extension'] },
   { testId: 'pull_ups', keywords: ['dominada','pull-up','chin-up','jalón','jalon','pulldown','remo vertical'] },
