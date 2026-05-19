@@ -34,7 +34,7 @@ export function useGymClients() {
   useEffect(() => {
     fetchClients()
     if (!isSupabaseReady) return
-    const ch = supabase.channel('gym_clients_rt')
+    const ch = supabase.channel('gym_clients_rt_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gym_clients' },
         payload => {
           if (payload.eventType === 'INSERT')
@@ -120,10 +120,10 @@ export function useFisioPacientes() {
   useEffect(() => {
     fetchPacientes()
     if (!isSupabaseReady) return
-    const ch1 = supabase.channel('fisio_pac_rt')
+    const ch1 = supabase.channel('fisio_pac_rt_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fisio_pacientes' },
         () => fetchPacientes()).subscribe()
-    const ch2 = supabase.channel('fisio_eval_rt')
+    const ch2 = supabase.channel('fisio_eval_rt_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fisio_evaluaciones' },
         () => fetchPacientes()).subscribe()
     return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2) }
@@ -305,7 +305,7 @@ export function useEjercicios(initialExercises=[]) {
   useEffect(() => {
     fetchEjercicios()
     if (!isSupabaseReady) return
-    const ch = supabase.channel('ejercicios_rt')
+    const ch = supabase.channel('ejercicios_rt_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ejercicios' },
         payload => {
           if (payload.eventType === 'INSERT')
@@ -381,7 +381,7 @@ export function useFuerzaTests(clientId) {
   useEffect(()=>{
     fetch()
     if(!isSupabaseReady||!clientId)return
-    const ch=supabase.channel('ft_'+clientId)
+    const ch=supabase.channel('ft_'+clientId+'_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes',{event:'*',schema:'public',table:'fuerza_tests',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
       .subscribe()
     return()=>supabase.removeChannel(ch)
@@ -420,7 +420,7 @@ export function usePlanesCliente(clientId) {
   useEffect(()=>{
     fetch()
     if(!isSupabaseReady||!clientId)return
-    const ch=supabase.channel('planes_'+clientId)
+    const ch=supabase.channel('planes_'+clientId+'_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes',{event:'*',schema:'public',table:'planes_periodizacion',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
       .subscribe()
     return()=>supabase.removeChannel(ch)
