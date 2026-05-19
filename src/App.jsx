@@ -1588,6 +1588,46 @@ export default function App(){
             <div style={{fontSize:11,color:'#92400E'}}>⏳ {clients.filter(c=>!c.screeningCompleto).length} cliente/s con evaluación pendiente — no disponibles para sesión hasta completar el screening.</div>
           </div>
         )}
+        {/* PERIODIZACIÓN ACTIVA DEL CLIENTE — condiciona la elección */}
+        {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+          const per=PERIODIZACIONES[activeClient.periodizacion];
+          const fase=per.fases[0];
+          return(
+            <div style={{background:'#1a0a2e',borderRadius:10,padding:'14px 16px',marginBottom:14,border:'1px solid #4C1D95',borderLeft:'4px solid #7C3AED'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:800,color:'#C4B5FD'}}>📅 Periodización activa del cliente</div>
+                  <div style={{fontSize:11,color:'#9F7AEA',marginTop:1}}>{per.nombre} · {per.autor}</div>
+                </div>
+                <span style={{background:'#4C1D95',color:'#E9D5FF',fontSize:10,fontWeight:700,padding:'3px 10px',borderRadius:99}}>{per.duracion}</span>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(per.fases.length,4)},1fr)`,gap:6,marginBottom:10}}>
+                {per.fases.map((f,i)=>(
+                  <div key={i} style={{background:i===0?'#4C1D95':'#2d1b69',borderRadius:6,padding:'7px 8px',border:i===0?'1px solid #7C3AED':'1px solid #3b1f7a'}}>
+                    <div style={{fontSize:9,fontWeight:700,color:i===0?'#E9D5FF':'#9F7AEA',marginBottom:3}}>{i===0?'▶ ':''}{f.nombre}</div>
+                    <div style={{fontSize:11,color:i===0?WH:'#C4B5FD',fontWeight:i===0?700:400}}>{f.reps} reps</div>
+                    <div style={{fontSize:9,color:'#9F7AEA'}}>{f.intensidad}</div>
+                    <div style={{fontSize:9,color:'#9F7AEA'}}>RIR {f.rir}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'#2d1b69',borderRadius:7,padding:'8px 10px',fontSize:11}}>
+                <div style={{color:'#E9D5FF',fontWeight:700,marginBottom:2}}>🎯 Fase activa: {fase.nombre}</div>
+                <div style={{display:'flex',gap:14,flexWrap:'wrap',color:'#C4B5FD',fontSize:10}}>
+                  <span>Series sugeridas: <strong style={{color:WH}}>3–5</strong></span>
+                  <span>Reps sugeridas: <strong style={{color:WH}}>{fase.reps}</strong></span>
+                  <span>Intensidad: <strong style={{color:WH}}>{fase.intensidad}</strong></span>
+                  <span>RIR: <strong style={{color:WH}}>{fase.rir}</strong></span>
+                  <span>Volumen: <strong style={{color:WH}}>{fase.volumen}</strong></span>
+                </div>
+                <div style={{color:'#9F7AEA',fontSize:10,marginTop:4,fontStyle:'italic'}}>{fase.objetivo}</div>
+              </div>
+              <div style={{marginTop:8,fontSize:10,color:'#7C3AED',fontStyle:'italic'}}>
+                💡 La estructura de sesión sugerida abajo está preseleccionada según el nivel del cliente. Los parámetros de series, reps, RPE y tempo deben ajustarse manualmente al indicado arriba.
+              </div>
+            </div>
+          );
+        })()}
         <div style={{background:BK,borderRadius:10,padding:'18px 16px',marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:4}}>Seleccionar nivel del método</div>
           <div style={{fontSize:12,color:G3}}>La sugerencia de bloques se adapta al continuum Activa Integra.</div>
@@ -1699,6 +1739,19 @@ export default function App(){
               </div>
               {isExp&&(
                 <div style={{padding:'10px 12px',background:'#fafafa',borderTop:`1px solid ${G2}`}}>
+                  {/* Sugerencia de periodización activa */}
+                  {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+                    const per=PERIODIZACIONES[activeClient.periodizacion];
+                    const fase=per.fases[0];
+                    return(
+                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'6px 10px',marginBottom:8,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                        <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>📅 {per.nombre} · {fase.nombre}</span>
+                        {[['Reps',fase.reps],['Intensidad',fase.intensidad],['RIR',fase.rir],['Volumen',fase.volumen]].map(([k,v])=>(
+                          <span key={k} style={{fontSize:9,color:'#4C1D95'}}>{k}: <strong>{v}</strong></span>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:10}}>
                     {[['series','Series'],['reps','Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Descanso']].map(([k,lbl])=>(
                       <div key={k}><span style={s.lbl}>{lbl}</span><input value={block.params[k]} onChange={e=>updateParams(block.id,k,e.target.value)} style={s.inp}/></div>
@@ -2192,7 +2245,145 @@ export default function App(){
     );
   };
 
-  // ── TAB: TESTS DE FUERZA MÁXIMA ────────────────────────────────────────
+  // ── FUERZAFORM — componente externo (tiene useState, debe ser <JSX/>) ───────
+  const FuerzaFormComp=({pac, editingTest, saveTest, onClose})=>{
+    const [form,setF]=useState(()=>editingTest||{
+      id:genId('ft'), test_id:'squat',
+      fecha:new Date().toISOString().split('T')[0],
+      peso_corporal:pac?.screening?.peso||'',
+      peso_levantado:'', reps_realizadas:1, rm1_real:'', notas:'', evaluador:'',
+    });
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const ti=TESTS_FUERZA.find(t=>t.id===form.test_id);
+    const rm1c=calcular1RM(parseFloat(form.peso_levantado),parseInt(form.reps_realizadas));
+    const niv=ti&&rm1c&&form.peso_corporal?nivelFuerza(ti,rm1c,parseFloat(form.peso_corporal)):null;
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>💪 Test de Fuerza Máxima</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div>
+              <span style={s.lbl}>Ejercicio</span>
+              <select value={form.test_id} onChange={e=>set('test_id',e.target.value)} style={{...s.sel,width:'100%'}}>
+                {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </select>
+            </div>
+            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
+              <strong>📋 Protocolo:</strong> {ti.protocolo}
+            </div>}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
+              <div><span style={s.lbl}>Peso levantado (kg)</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder="kg"/></div>
+              <div><span style={s.lbl}>Repeticiones realizadas</span>
+                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
+                  {[1,2,3,4,5,6,7,8,10,12].map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Preview 1RM */}
+            {rm1c&&(
+              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:G4,marginBottom:2}}>1RM estimado (Brzycki + Epley promedio)</div>
+                  <div style={{fontSize:32,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
+                  {form.peso_corporal&&<div style={{fontSize:11,color:G4,marginTop:2}}>{(rm1c/parseFloat(form.peso_corporal)).toFixed(2)}× peso corporal</div>}
+                </div>
+                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
+                  <div style={{fontSize:20,fontWeight:800,color:niv.color}}>{niv.label}</div>
+                  <div style={{fontSize:9,color:G3,marginTop:2}}>Ref H: {ti.referencia.masculino}× PC</div>
+                  <div style={{fontSize:9,color:G3}}>Ref M: {ti.referencia.femenino}× PC</div>
+                </div>}
+              </div>
+            )}
+            <div>
+              <span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
+              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Notas / Observaciones</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} style={s.inp} placeholder="Observaciones..."/></div>
+            </div>
+          </div>
+          <button onClick={()=>{
+            const toSave={...form,test_nombre:ti?.nombre||'',rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null};
+            saveTest(toSave)
+              .then(()=>{ onClose(); })
+              .catch(e=>{ alert('Error al guardar el test: '+e.message); console.error(e); });
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 Guardar test
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── PLANFORM — componente externo ────────────────────────────────────────────
+  const PlanFormComp=({selClientId, savePlan, saveClientFn, onClose})=>{
+    const [form,setF]=useState({
+      id:genId('pl'), sistema_id:'lineal', sistema_nombre:'',
+      fecha_inicio:new Date().toISOString().split('T')[0],
+      objetivo:'', notas:'', activo:true,
+    });
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const p=PERIODIZACIONES[form.sistema_id];
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div>
+              <span style={s.lbl}>Sistema de periodización</span>
+              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
+                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
+              </select>
+            </div>
+            {p&&(
+              <div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
+                <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
+                <div style={{color:G4,marginBottom:6,lineHeight:1.5}}>{p.descripcion}</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
+                  <div style={{fontSize:10,color:GN}}><strong>✓</strong> {p.indicado_para}</div>
+                  <div style={{fontSize:10,color:RJ}}><strong>✗</strong> {p.no_indicado}</div>
+                </div>
+                <div style={{borderTop:`1px solid ${G2}`,paddingTop:6}}>
+                  <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:4}}>FASES:</div>
+                  {p.fases.map((f,i)=>(
+                    <div key={i} style={{display:'flex',gap:8,fontSize:10,color:G4,marginBottom:2}}>
+                      <span style={{fontWeight:700,color:'#7C3AED',flexShrink:0}}>{f.nombre}:</span>
+                      <span>Reps {f.reps} · {f.intensidad} · RIR {f.rir} · {f.semanas}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha de inicio</span><input type="date" value={form.fecha_inicio} onChange={e=>set('fecha_inicio',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
+            </div>
+            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
+          </div>
+          <button onClick={()=>{
+            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
+            savePlan(planFinal).catch(e=>console.error('Error guardando plan:',e));
+            const cli=clients.find(x=>x.id===selClientId);
+            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(e=>console.error(e));
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 Asignar plan
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TAB: TESTS DE FUERZA MÁXIMA ────────────────────────────────────────────
   const FuerzaTab=()=>{
     const [selClientId,setSelClientId]=useState('');
     const pac=clients.find(x=>x.id===selClientId);
@@ -2202,132 +2393,10 @@ export default function App(){
     const [showPlan,setShowPlan]=useState(false);
     const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
 
-    const FuerzaForm=({onClose})=>{
-      const[form,setF]=useState(editingTest||{id:genId('ft'),test_id:'squat',fecha:new Date().toISOString().split('T')[0],peso_corporal:pac?.screening?.peso||'',peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''});
-      const set=(k,v)=>setF(f=>({...f,[k]:v}));
-      const ti=TESTS_FUERZA.find(t=>t.id===form.test_id);
-      const rm1c=calcular1RM(parseFloat(form.peso_levantado),parseInt(form.reps_realizadas));
-      const niv=ti&&rm1c&&form.peso_corporal?nivelFuerza(ti,rm1c,parseFloat(form.peso_corporal)):null;
-      return(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-          <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-              <div style={{fontWeight:800,fontSize:14}}>Test de Fuerza Máxima</div>
-              <button onClick={onClose} style={s.btnG}>✕</button>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              <div>
-                <span style={s.lbl}>Ejercicio</span>
-                <select value={form.test_id} onChange={e=>set('test_id',e.target.value)} style={{...s.sel,width:'100%'}}>
-                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </select>
-              </div>
-              {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6}}>
-                <strong>Protocolo:</strong> {ti.protocolo}
-              </div>}
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>
-                <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp}/></div>
-                <div><span style={s.lbl}>Peso levantado (kg)</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp}/></div>
-                <div><span style={s.lbl}>Repeticiones</span>
-                  <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
-                    {[1,2,3,4,5,6,7,8,10,12].map(n=><option key={n} value={n}>{n}</option>)}
-                  </select>
-                </div>
-              </div>
-              {rm1c&&(
-                <div style={{background:niv?`${niv.color}18`:'#F0FDF4',border:`2px solid ${niv?.color||'#86EFAC'}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <div>
-                    <div style={{fontSize:10,color:G4}}>1RM estimado (Brzycki + Epley)</div>
-                    <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12}}> kg</span></div>
-                    {form.peso_corporal&&<div style={{fontSize:11,color:G4}}>{(rm1c/parseFloat(form.peso_corporal)).toFixed(2)}× peso corporal</div>}
-                  </div>
-                  {niv&&<div style={{textAlign:'center',padding:'8px 12px',background:WH,borderRadius:7}}>
-                    <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
-                    <div style={{fontSize:9,color:G3}}>Referencia H: {ti.referencia.masculino}× PC</div>
-                    <div style={{fontSize:9,color:G3}}>Referencia M: {ti.referencia.femenino}× PC</div>
-                  </div>}
-                </div>
-              )}
-              <div><span style={s.lbl}>1RM real (si fue intento máximo)</span><input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/></div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
-                <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
-              </div>
-            </div>
-            <button onClick={()=>{
-              const toSave={...form,test_nombre:ti?.nombre||'',rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null};
-              saveTest(toSave).catch(e=>console.error(e));
-              onClose();
-            }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-              Guardar test
-            </button>
-          </div>
-        </div>
-      );
-    };
-
-    const PlanForm=({onClose})=>{
-      const[form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
-      const set=(k,v)=>setF(f=>({...f,[k]:v}));
-      const p=PERIODIZACIONES[form.sistema_id];
-      return(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-          <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-              <div style={{fontWeight:800,fontSize:14}}>Asignar Plan de Periodización</div>
-              <button onClick={onClose} style={s.btnG}>✕</button>
-            </div>
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              <div>
-                <span style={s.lbl}>Sistema de periodización</span>
-                <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
-                  {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre}</option>)}
-                </select>
-              </div>
-              {p&&(
-                <div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11}}>
-                  <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
-                  <div style={{color:G4,marginBottom:6,lineHeight:1.5}}>{p.descripcion}</div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:4}}>
-                    <div style={{fontSize:10,color:GN}}><strong>✓ Indicado:</strong> {p.indicado_para}</div>
-                    <div style={{fontSize:10,color:R}}><strong>✗ No indicado:</strong> {p.no_indicado}</div>
-                  </div>
-                  <div style={{borderTop:`1px solid ${G2}`,paddingTop:6,marginTop:4}}>
-                    <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:4}}>Fases:</div>
-                    {p.fases.map((f,i)=>(
-                      <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',fontSize:10,color:G4,marginBottom:2}}>
-                        <span style={{fontWeight:700,flexShrink:0,color:'#7C3AED'}}>{f.nombre}:</span>
-                        <span>Reps {f.reps} · {f.intensidad} · RIR {f.rir} · {f.semanas}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                <div><span style={s.lbl}>Fecha de inicio</span><input type="date" value={form.fecha_inicio} onChange={e=>set('fecha_inicio',e.target.value)} style={s.inp}/></div>
-                <div><span style={s.lbl}>Objetivo específico del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg squat en 12 sem" style={s.inp}/></div>
-              </div>
-              <div><span style={s.lbl}>Notas del plan</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones, restricciones..." style={s.inp}/></div>
-            </div>
-            <button onClick={()=>{
-              savePlan({...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id}).catch(e=>console.error(e));
-              // Also update client's periodizacion field
-              const cli=clients.find(x=>x.id===selClientId);
-              if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(e=>console.error(e));
-              onClose();
-            }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-              Asignar plan
-            </button>
-          </div>
-        </div>
-      );
-    };
-
     return(
       <div style={{padding:'12px 14px'}}>
-        {showForm&&<FuerzaForm onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
-        {showPlan&&<PlanForm onClose={()=>setShowPlan(false)}/>}
+        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
+        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)}/>}
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
           <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
@@ -2342,7 +2411,7 @@ export default function App(){
         </div>
         {pac&&(
           <>
-            {/* Próximo test */}
+            {/* Header del paciente */}
             <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
                 <div>
@@ -2351,14 +2420,14 @@ export default function App(){
                     {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
                     {tests.length>0&&(()=>{
                       const last=new Date(tests[0].fecha);
-                      const next=new Date(last); next.setMonth(next.getMonth()+4);
-                      const dias=Math.ceil((next-new Date())/(86400000));
-                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?R:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido'}</span>;
+                      const next=new Date(last);next.setMonth(next.getMonth()+4);
+                      const dias=Math.ceil((next-new Date())/86400000);
+                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
                     })()}
                   </div>
                 </div>
                 <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Test</button>
+                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
                   <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
                 </div>
               </div>
@@ -2373,44 +2442,43 @@ export default function App(){
                   {ps&&(
                     <>
                       <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
-                      <div style={{display:'grid',gridTemplateColumns:`repeat(${ps.fases.length},1fr)`,gap:5}}>
+                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
                         {ps.fases.map((f,i)=>(
-                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:`1px solid #C4B5FD`}}>
+                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
                             <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
                             <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
-                            <div style={{fontSize:9,color:G4}}>{f.intensidad}</div>
                             <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
-                            <div style={{fontSize:8,color:G3,marginTop:2}}>{f.semanas}</div>
+                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
                           </div>
                         ))}
                       </div>
-                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>Objetivo: <strong>{plan.objetivo}</strong></div>}
+                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
                     </>
                   )}
-                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:R,borderColor:R}}>Quitar plan</button>
+                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
                 </div>
               );
             })()}
-            {/* Grid de 1RM por ejercicio */}
+            {/* Grid resumen 1RM */}
             <div style={{...s.card,marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>1RM registrado por ejercicio</div>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
               <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
-                {TESTS_FUERZA.map(tf=>{
+                {TESTS_FUERZA.map((tf,tfIdx)=>{
                   const data=tests.filter(t=>t.test_id===tf.id);
                   const last=data[0];
                   const rm1=last?.rm1_real||last?.rm1_calculado;
                   const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
-                  const prev=data[1];
-                  const prevRm=prev?.rm1_real||prev?.rm1_calculado;
+                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
                   const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
+                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
                   return(
                     <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
-                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{['🏋️','⬆️','🫷','🤚','🍑','🧗'][TESTS_FUERZA.indexOf(tf)]||'💪'} {tf.nombre}</div>
+                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
                       <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
                       {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
                       {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
-                      {diff&&<div style={{fontSize:9,color:diff>0?GN:R,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
-                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test</div>}
+                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
+                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
                     </div>
                   );
                 })}
@@ -2418,8 +2486,8 @@ export default function App(){
             </div>
             {/* Historial */}
             <div style={s.card}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial ({tests.length} tests)</div>
-              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados aún.</div>}
+              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
+              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
               {tests.map(t=>{
                 const tf=TESTS_FUERZA.find(x=>x.id===t.test_id);
                 const rm1=t.rm1_real||t.rm1_calculado;
@@ -2428,17 +2496,17 @@ export default function App(){
                   <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
                     <div>
                       <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
-                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
                         {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
                         {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
-                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} (estimado)</span>}
+                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
                         {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
                       </div>
-                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic'}}>{t.notas}</div>}
+                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
                     </div>
-                    <div style={{display:'flex',gap:5,alignItems:'center'}}>
+                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
                       {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
-                      <button onClick={()=>deleteTest(t.id)} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:R,borderColor:R}}>✕</button>
+                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
                     </div>
                   </div>
                 );
@@ -2446,7 +2514,7 @@ export default function App(){
             </div>
           </>
         )}
-        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
+        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
       </div>
     );
   };
@@ -2475,7 +2543,7 @@ export default function App(){
         </div>
       )}
       <div style={{...s.hdr,background:brand.colorBg,borderBottomColor:brand.colorPrimary}}>
-        HeaderLogo()
+        {HeaderLogo()}
         <div style={{display:'flex',gap:14,alignItems:'center'}}>
           <div style={{textAlign:'right'}}>
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
