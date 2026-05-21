@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, genId } from "./db.js";
+import Nutricion from "./Nutricion.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
@@ -2705,7 +2706,7 @@ export default function App(){
         </div>
       </div>
       <div style={{...s.tabBar,background:'#141414',borderBottomColor:brand.colorPrimary}}>
-        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
+        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
           <button key={k} onClick={()=>setTab(k)} style={s.tb(tab===k,brand.colorPrimary)}>{lbl}</button>
         ))}
       </div>
@@ -2713,6 +2714,7 @@ export default function App(){
         {tab==='clientes'&&ClientesTab()}
         {tab==='session'&&SessionTab()}
         {tab==='fuerza'&&<FuerzaTab/>}
+        {tab==='nutricion'&&<Nutricion clients={clients} brand={brand}/>}
         {tab==='rehab'&&<RehabTab/>}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
