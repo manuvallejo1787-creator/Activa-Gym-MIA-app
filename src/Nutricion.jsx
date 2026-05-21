@@ -147,7 +147,7 @@ export default function Nutricion({ clients, brand }) {
       setPlanes(ps => ps.map(pl => pl.id === p.id ? newPlan : pl));
       return newPlan;
     });
-    setShowPicker(false);
+    onClose();
   }, [planActivo, diaActivo, comidaActiva]);
 
   // ── Eliminar alimento ─────────────────────────────────────────────────────
@@ -257,7 +257,7 @@ export default function Nutricion({ clients, brand }) {
   };
 
   // ─── NUEVO ALIMENTO FORM ──────────────────────────────────────────────────
-  const NuevoAlimentoForm = () => {
+  const NuevoAlimentoFormComp = ({onClose, onSave}) => {
     const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg' });
     const set = (k,v) => setF(f=>({...f,[k]:v}));
     const calAuto = Math.round(form.proteinas*4 + form.carbos*4 + form.grasas*9);
@@ -266,7 +266,7 @@ export default function Nutricion({ clients, brand }) {
         <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
             <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo alimento</div>
-            <button onClick={()=>setShowNuevoAlimento(false)} style={ns.btnG}>✕</button>
+            <button onClick={onClose} style={ns.btnG}>✕</button>
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:7}}>
             <div><span style={ns.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={ns.inp}/></div>
@@ -309,8 +309,8 @@ export default function Nutricion({ clients, brand }) {
           </div>
           <button onClick={()=>{
             if(!form.nombre.trim())return;
-            setCustomAlimentos(p=>[...p,{...form,id:'ca_'+genNutId(),micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true}]);
-            setShowNuevoAlimento(false);
+            onSave({...form,id:'ca_'+genNutId(),micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
+            onClose();
           }} disabled={!form.nombre.trim()} style={{...ns.btnR,width:'100%',padding:'9px',marginTop:10}}>Guardar alimento</button>
         </div>
       </div>
@@ -318,16 +318,37 @@ export default function Nutricion({ clients, brand }) {
   };
 
   // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
-  const PickerAlimentos = () => {
+  const PickerAlimentosComp = ({onClose, onAdd, comidaActiva, todosAlimentos, onNuevoAlimento}) => {
     const [localSearch, setLocalSearch] = useState(pickerSearch);
     const [localCat, setLocalCat] = useState(pickerCat);
-    const [gramos, setGramos] = useState('');
+    const [inputVal, setInputVal] = useState('');   // cantidad ingresada
+    const [modoUnidad, setModoUnidad] = useState(false); // false=gramos, true=unidades
     const [selAl, setSelAl] = useState(null);
     const filtered = useMemo(() => todosAlimentos.filter(a =>
       (localCat === 'all' || a.categoria === localCat) &&
       (!localSearch || a.nombre.toLowerCase().includes(localSearch.toLowerCase()))
     ), [localSearch, localCat]);
-    const preview = selAl && gramos ? calcularMacros(selAl, parseFloat(gramos)||100) : null;
+    // Calcular gramos reales según modo
+    const gramosReales = useMemo(() => {
+      if (!selAl || !inputVal) return 0;
+      if (modoUnidad && selAl.tiene_unidad) {
+        return Math.round((parseFloat(inputVal)||1) * selAl.gramos_por_unidad);
+      }
+      return parseFloat(inputVal)||0;
+    }, [selAl, inputVal, modoUnidad]);
+    const preview = selAl && gramosReales > 0 ? calcularMacros(selAl, gramosReales) : null;
+    // When selecting a food, auto-switch mode and set default qty
+    const handleSelAl = (al) => {
+      if (selAl?.id === al.id) { setSelAl(null); return; }
+      setSelAl(al);
+      if (al.tiene_unidad) {
+        setModoUnidad(true);
+        setInputVal('1');
+      } else {
+        setModoUnidad(false);
+        setInputVal(String(al.porcion_ref||100));
+      }
+    };
     return (
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
         <div style={{background:WH,borderRadius:10,width:'100%',maxWidth:520,marginBottom:20}}>
@@ -347,7 +368,7 @@ export default function Nutricion({ clients, brand }) {
               {filtered.map(al => {
                 const cat = CATEGORIAS_ALIMENTOS[al.categoria];
                 return (
-                  <div key={al.id} onClick={()=>setSelAl(al===selAl?null:al)}
+                  <div key={al.id} onClick={()=>handleSelAl(al)}
                     style={{padding:'7px 10px',borderBottom:`1px solid ${G2}`,cursor:'pointer',background:selAl?.id===al.id?'#EFF6FF':WH,borderLeft:selAl?.id===al.id?`3px solid ${TL}`:'3px solid transparent'}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                       <div>
@@ -364,26 +385,47 @@ export default function Nutricion({ clients, brand }) {
             {selAl&&(
               <div style={{background:G1,borderRadius:7,padding:'10px',marginBottom:10,border:`1px solid ${TL}`}}>
                 <div style={{fontSize:11,fontWeight:700,marginBottom:6}}>{selAl.nombre}</div>
-                <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:4}}>
-                  <span style={ns.lbl}>Cantidad (gramos):</span>
-                  <input type="number" value={gramos} onChange={e=>setGramos(e.target.value)}
-                    placeholder={`Ref: ${selAl.porcion_ref}g`} min="1" max="1000"
-                    style={{...ns.inp,width:100}}/>
-                  <button onClick={()=>setGramos(String(selAl.porcion_ref))} style={{...ns.btnG,fontSize:10,whiteSpace:'nowrap'}}>Porción ref.</button>
+                {/* Toggle gramos / unidades */}
+                {selAl.tiene_unidad&&(
+                  <div style={{display:'flex',gap:4,marginBottom:8}}>
+                    <button onClick={()=>{setModoUnidad(false);setInputVal(String(selAl.porcion_ref||100));}}
+                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${!modoUnidad?TL:G2}`,background:!modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:!modoUnidad?700:400,color:!modoUnidad?NV:G4}}>
+                      ⚖️ Por gramos
+                    </button>
+                    <button onClick={()=>{setModoUnidad(true);setInputVal('1');}}
+                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${modoUnidad?TL:G2}`,background:modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:modoUnidad?700:400,color:modoUnidad?NV:G4}}>
+                      🔢 Por unidad ({selAl.nombre_unidad})
+                    </button>
+                  </div>
+                )}
+                <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
+                  <span style={{...ns.lbl,whiteSpace:'nowrap'}}>
+                    {modoUnidad&&selAl.tiene_unidad?`Cantidad (${selAl.nombre_unidad}):`:'Cantidad (gramos):'}
+                  </span>
+                  <input type="number" value={inputVal} onChange={e=>setInputVal(e.target.value)}
+                    placeholder={modoUnidad&&selAl.tiene_unidad?'1':`${selAl.porcion_ref}g`}
+                    min="0.5" step={modoUnidad&&selAl.tiene_unidad?'0.5':'10'}
+                    style={{...ns.inp,width:90,textAlign:'center'}}/>
+                  {modoUnidad&&selAl.tiene_unidad&&gramosReales>0&&(
+                    <span style={{fontSize:10,color:G3,whiteSpace:'nowrap'}}>= {gramosReales}g</span>
+                  )}
+                  {!modoUnidad&&(
+                    <button onClick={()=>setInputVal(String(selAl.porcion_ref))} style={{...ns.btnG,fontSize:9,whiteSpace:'nowrap'}}>Porción ref. ({selAl.porcion_ref}g)</button>
+                  )}
                 </div>
-                {preview&&<div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,color:G4}}>
+                {preview&&<div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,color:G4,background:G1,padding:'5px 8px',borderRadius:5,marginBottom:3}}>
                   <span>P: <strong>{preview.proteinas}g</strong></span>
                   <span>C: <strong>{preview.carbos}g</strong></span>
                   <span>G: <strong>{preview.grasas}g</strong></span>
                   <span>F: <strong>{preview.fibra}g</strong></span>
                   <span style={{fontWeight:700,color:NV}}>🔥 {preview.calorias} kcal</span>
                 </div>}
-                {selAl.micro1?.nombre&&<div style={{fontSize:9,color:G3,marginTop:3}}>{selAl.micro1.nombre}: {preview?Math.round(selAl.micro1.valor*(parseFloat(gramos)||100)/100*10)/10:selAl.micro1.valor}{selAl.micro1.unidad} · {selAl.micro2?.nombre}: {preview?Math.round(selAl.micro2.valor*(parseFloat(gramos)||100)/100*10)/10:selAl.micro2.valor}{selAl.micro2?.unidad}</div>}
+                {selAl.micro1?.nombre&&gramosReales>0&&<div style={{fontSize:9,color:G3}}>{selAl.micro1.nombre}: {Math.round(selAl.micro1.valor*gramosReales/100*10)/10}{selAl.micro1.unidad}{selAl.micro2?.nombre?` · ${selAl.micro2.nombre}: ${Math.round(selAl.micro2.valor*gramosReales/100*10)/10}${selAl.micro2.unidad}`:''}</div>}
               </div>
             )}
             <div style={{display:'flex',gap:6}}>
-              <button onClick={()=>setShowNuevoAlimento(true)} style={{...ns.btnG,flex:1,fontSize:10}}>➕ Nuevo alimento</button>
-              <button onClick={()=>{if(selAl)agregarAlimento(selAl.id,parseFloat(gramos)||selAl.porcion_ref);}} disabled={!selAl} style={{...ns.btnTl,flex:2,opacity:!selAl?.5:1}}>Agregar al menú</button>
+              <button onClick={onNuevoAlimento} style={{...ns.btnG,flex:1,fontSize:10}}>➕ Nuevo alimento</button>
+              <button onClick={()=>{if(selAl&&gramosReales>0)onAdd(selAl.id,gramosReales);}} disabled={!selAl||gramosReales<=0} style={{...ns.btnTl,flex:2,opacity:(!selAl||gramosReales<=0)?.5:1}}>Agregar al menú</button>
             </div>
           </div>
         </div>
@@ -392,7 +434,7 @@ export default function Nutricion({ clients, brand }) {
   };
 
   // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
-  const NuevoPlanForm = () => {
+  const NuevoPlanFormComp = ({cliente, onCrear}) => {
     const [nombre, setNombre] = useState(cliente?`Plan ${cliente.nombre} ${new Date().toLocaleDateString('es-ES')}`:'');
     const [perfil, setPerfil] = useState({
       peso:'', talla:'', edad:'', sexo:'M',
@@ -488,7 +530,7 @@ export default function Nutricion({ clients, brand }) {
               ))}
             </div>
           )}
-          <NuevoPlanForm/>
+          <NuevoPlanFormComp cliente={cliente} onCrear={crearPlan}/>
         </>
       )}
     </div>
@@ -579,8 +621,11 @@ export default function Nutricion({ clients, brand }) {
                     </div>
                     <div style={{display:'flex',gap:4,alignItems:'center'}}>
                       <input type="number" value={item.gramos} onChange={e=>actualizarGramos(item.id,e.target.value)}
-                        style={{...ns.inp,width:55,textAlign:'center'}} min="1" max="1000"/>
-                      <span style={{fontSize:9,color:G3}}>g</span>
+                        style={{...ns.inp,width:55,textAlign:'center'}} min="1" max="2000"/>
+                      <div>
+                        <div style={{fontSize:9,color:G3}}>g</div>
+                        {al.tiene_unidad&&<div style={{fontSize:8,color:TL,whiteSpace:'nowrap'}}>≈{(item.gramos/al.gramos_por_unidad).toFixed(1)} {al.nombre_unidad}</div>}
+                      </div>
                       <button onClick={()=>eliminarAlimento(item.id)} style={{...ns.btnG,color:RJ,borderColor:RJ,padding:'3px 6px',fontSize:12}}>×</button>
                     </div>
                   </div>
@@ -611,7 +656,7 @@ export default function Nutricion({ clients, brand }) {
   };
 
   // ─── VISTA: BASE DE ALIMENTOS ─────────────────────────────────────────────
-  const VistaAlimentos = () => {
+  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento}) => {
     const [search, setSearch] = useState('');
     const [cat, setCat] = useState('all');
     const filtered = todosAlimentos.filter(a =>
@@ -630,7 +675,7 @@ export default function Nutricion({ clients, brand }) {
             <option value="all">Todas las categorías ({todosAlimentos.length})</option>
             {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label} ({todosAlimentos.filter(a=>a.categoria===k).length})</option>)}
           </select>
-          <button onClick={()=>setShowNuevoAlimento(true)} style={ns.btnTl}>➕ Nuevo</button>
+          <button onClick={onNuevoAlimento} style={ns.btnTl}>➕ Nuevo</button>
         </div>
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
@@ -669,8 +714,8 @@ export default function Nutricion({ clients, brand }) {
   // ─── RENDER PRINCIPAL ─────────────────────────────────────────────────────
   return(
     <div style={{minHeight:'100vh',background:G1}}>
-      {showPicker && <PickerAlimentos/>}
-      {showNuevoAlimento && <NuevoAlimentoForm/>}
+      {showPicker && <PickerAlimentosComp onClose={()=>setShowPicker(false)} onAdd={agregarAlimento} comidaActiva={comidaActiva} todosAlimentos={todosAlimentos} onNuevoAlimento={()=>{setShowPicker(false);setShowNuevoAlimento(true);}}/>}
+      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{setCustomAlimentos(p=>[...p,al]);setShowNuevoAlimento(false);}}/>}
       {/* Sub-tabs */}
       <div style={{display:'flex',borderBottom:`2px solid ${G2}`,background:WH,overflowX:'auto'}}>
         {[['planes','📋 Planes'],['plan','🏗️ Constructor'],['alimentos','📚 Alimentos']].map(([v,lbl])=>(
@@ -681,7 +726,7 @@ export default function Nutricion({ clients, brand }) {
       </div>
       {view==='planes'    && VistaPlanes()}
       {view==='plan'      && VistaConstructor()}
-      {view==='alimentos' && VistaAlimentos()}
+      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)}/>}
     </div>
   );
 }
