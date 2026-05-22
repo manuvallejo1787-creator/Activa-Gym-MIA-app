@@ -4,6 +4,21 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
 
+// ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
+const PROT_SESION = {
+  cervical:{ aguda:['Isométrico cervical anterior','Isométrico cervical posterior','Retracción cervical en supino','Movilización escapular activa','Respiración diafragmática'], subaguda:['Chin tuck dinámico sentado','Rotación cervical activa-asistida','Flexión-extensión cervical activa','Inclinación lateral activa','Estiramiento trapecio superior','Deep neck flexor (DNF) progresivo'], cronica:['Chin tuck con banda de resistencia','Fortalecimiento extensores cervicales','Propiocepción cervical con laser pointer','Fortalecimiento postural global','Estabilización cervical en cuadrupedia'] },
+  hombro:  { aguda:['Péndulo de Codman','Isométrico de hombro en posición neutra','Rotación externa isométrica 0° abd','Control escapular en reposo','Crioterapia post-actividad'], subaguda:['Polea de hombro (flexión asistida)','Rotación externa con banda (neutro)','Scaption en plano escapular','Estiramiento cápsula posterior','Retracción escapular con banda','Y/T/W en banco inclinado'], cronica:['Press de hombro con mancuerna','Remo vertical en polea','Push-up plus (protracción)','Rotación externa a 90° abducción','Entrenamiento excéntrico manguito'] },
+  codo:    { aguda:['Inmovilización relativa + elevación','Isométrico de flexores de codo','Movilización activa de muñeca','Crioterapia + compresión'], subaguda:['Flexo-extensión de codo activa','Pronosupinación activa','Excéntrico extensores de muñeca','Excéntrico flexores de muñeca','Estiramiento extensores antebrazo','Fortalecimiento agarre progresivo'], cronica:['Curl de bíceps con mancuerna','Extensión de tríceps en polea','Fortalecimiento global antebrazo','Ejercicios funcionales de empuje/tracción'] },
+  muneca:  { aguda:['Reposo relativo + ortesis funcional','Movilización activa dedos','Isométrico muñeca en neutro','Crioterapia + elevación'], subaguda:['Flexo-extensión muñeca activa','Desviación radial-cubital activa','Pronosupinación progresiva','Fortalecimiento agarre con pelota'], cronica:['Fortalecimiento muñeca con banda','Ejercicios propioceptivos de muñeca','Fortalecimiento funcional de pinza'] },
+  esc:     { aguda:['Isométrico escapular suave','Retracción escapular pasiva','Respiración diafragmática','Control postural cervical'], subaguda:['Retracción escapular con banda','Remo con foco escapular','Serrato anterior (serratus push-up)','Y/T/W bajo peso'], cronica:['Press hombro con mancuerna','Remo en polea alta','Fortalecimiento postural integrado','Planificación funcional sobre la cabeza'] },
+  columna: { aguda:['Respiración diafragmática','Movilización suave en descarga','Isométrico lumbar en neutro','Educación postural'], subaguda:['Cat-camel en cuadrupedia','Bird-dog progresivo','Puente de glúteo básico','Estiramiento cadena posterior'], cronica:['Peso muerto con barra','Sentadilla goblet','Plancha anterior y lateral','Fortalecimiento funcional integrado'] },
+  lumbar:  { aguda:['Respiración diafragmática','Decúbito con almohada bajo rodillas','Movilización suave en descarga','Retracción abdominal suave'], subaguda:['Cat-camel en cuadrupedia','Bird-dog progresivo','Puente de glúteo bilateral','Estiramiento piriforme y psoas'], cronica:['Peso muerto rumano progresivo','Sentadilla goblet','Dead bug avanzado','Fortalecimiento funcional lumbar'] },
+  cadera:  { aguda:['Isométrico de glúteo','Movilización activa en descarga','Retracción abdominal suave','Crioterapia si hay inflamación'], subaguda:['Clamshell con banda','Puente de glúteo unilateral','Estiramiento psoas y TFL','Sentadilla parcial con banda'], cronica:['Hip thrust con barra','Sentadilla búlgara','Peso muerto unilateral','Trabajo funcional de cadera'] },
+  rodilla: { aguda:['Isométrico cuádriceps','Elevación pierna extendida','Movilización rotuliana suave','Crioterapia + compresión + elevación'], subaguda:['Sentadilla parcial','TKE (extensión terminal de rodilla)','Curl de isquiotibiales','Propiocepción básica bipodal'], cronica:['Sentadilla completa progresiva','Peso muerto rumano','Saltos reactivos progresivos','Fortalecimiento funcional de rodilla'] },
+  tobillo: { aguda:['RICE: reposo relativo + hielo + compresión + elevación','Movilización activa del tobillo','Alfabeto con el pie','Peroneales isométricos'], subaguda:['Ejercicios de fuerza peroneales con banda','Elevaciones de talón en escalón','Propiocepción bipodal en superficie estable','Estiramiento del gemelo y sóleo'], cronica:['Propiocepción unipodal en inestable','Salto y aterrizaje progresivo','Fortalecimiento funcional tobillo','Deporte-específico'] },
+};
+
+
 // Alias local para compatibilidad con el código existente
 const FASES_BASE=FASES_METODO;
 
@@ -283,6 +298,7 @@ function SesionClienteComp({ paciente }) {
   const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
   const [showForm, setShowForm] = useState(false);
   const [form, setF] = useState(null);
+  const [exEditando, setExEditando] = useState(''); // para input nuevo ejercicio
 
   const NV2='#0A3D62', TL2='#1BAA86', WH2='#FFFFFF';
   const G1c='#F4F4F4', G2c='#E0E0E0', G3c='#999999', G4c='#555555';
@@ -291,17 +307,43 @@ function SesionClienteComp({ paciente }) {
   const faseColors = { restaura:'#374151', activa:'#1D4ED8', potencia:'#7C3AED', rinde:'#CC0000' };
   const faseLabels = { restaura:'🔴 RESTAURA', activa:'🟡 ACTIVA', potencia:'🟣 POTENCIA', rinde:'🔥 RINDE' };
 
+  // Obtener fase y región del paciente desde su última evaluación
+  const ultimaEval = paciente?.evaluaciones?.slice(-1)[0];
+  const faseActual  = ultimaEval?.fase || 'restaura';
+  const regionActual = (paciente?.region || ultimaEval?.region || 'lumbar').toLowerCase();
+
+  // ── Auto-cargar ejercicios del protocolo según región y fase ─────────────
+  const protocoloEjercicios = useMemo(() => {
+    const regionKey = regionActual.replace(/\s+/g,'_');
+    const prot = PROT_SESION[regionKey] || PROT_SESION[regionActual] || {};
+    const ejercs = prot[faseActual] || [];
+    return ejercs.map((nombre, i) => ({ id: 'prot_' + i, nombre, activo: true, editado: false }));
+  }, [regionActual, faseActual]);
+
+  // ── Auto-cargar criterios de avance según fase ───────────────────────────
+  const criteriosProtocolo = useMemo(() => {
+    const fase = FASES_METODO[faseActual];
+    if (!fase) return [];
+    return fase.criterios_avance || [];
+  }, [faseActual]);
+
+  const evaColor = (v) => v<=3?GN2:v<=6?AM2:RJ2;
+  const evaLabel = (v) => v===0?'Sin dolor':v<=3?'Leve':v<=6?'Moderado':'Severo';
+
   const newForm = () => ({
     id: 'sc_' + Date.now().toString(36),
     fecha: new Date().toISOString().split('T')[0],
     numero_sesion: sesiones.length + 1,
-    fase: paciente?.evaluaciones?.slice(-1)[0]?.fase || 'restaura',
+    fase: faseActual,
+    region: regionActual,
     eva_inicio: 0,
     eva_fin: 0,
-    objetivo_sesion: '',
-    ejercicios_realizados: [],
+    objetivo_sesion: ultimaEval?.objetivos_tratamiento || '',
+    // Auto-carga ejercicios del protocolo como array editable
+    ejercicios_lista: [...protocoloEjercicios],
     respuesta: '',
-    criterios_avance: [],
+    // Auto-carga criterios como strings editables
+    criterios_lista: criteriosProtocolo.map((c, i) => ({ id: 'cr_'+i, texto: c, cumplido: false })),
     avance_fase: false,
     notas: '',
     proxima_sesion: '',
@@ -317,95 +359,157 @@ function SesionClienteComp({ paciente }) {
     btnTl: {background:TL2,color:WH2,border:'none',borderRadius:5,padding:'6px 12px',fontSize:11,fontWeight:700,cursor:'pointer'},
   };
 
-  const evaColor = (v) => v<=3?GN2:v<=6?AM2:RJ2;
-  const evaLabel = (v) => v===0?'Sin dolor':v<=3?'Leve':v<=6?'Moderado':'Severo';
+  const setEx = (id, key, val) => setF(f => ({
+    ...f, ejercicios_lista: f.ejercicios_lista.map(e => e.id===id ? {...e,[key]:val,editado:true} : e)
+  }));
+  const removeEx = (id) => setF(f => ({...f, ejercicios_lista: f.ejercicios_lista.filter(e=>e.id!==id)}));
+  const addEx = (nombre) => {
+    if (!nombre.trim()) return;
+    setF(f => ({...f, ejercicios_lista:[...f.ejercicios_lista,{id:'add_'+Date.now(),nombre:nombre.trim(),activo:true,editado:true}]}));
+    setExEditando('');
+  };
+  const setCrit = (id, key, val) => setF(f => ({
+    ...f, criterios_lista: f.criterios_lista.map(cr => cr.id===id ? {...cr,[key]:val} : cr)
+  }));
+  const removeCrit = (id) => setF(f => ({...f, criterios_lista: f.criterios_lista.filter(cr=>cr.id!==id)}));
+  const addCrit = (texto) => {
+    if (!texto.trim()) return;
+    setF(f => ({...f, criterios_lista:[...f.criterios_lista,{id:'cr_add_'+Date.now(),texto:texto.trim(),cumplido:false}]}));
+  };
+
+  const cumplidos = form?.criterios_lista?.filter(cr=>cr.cumplido).length || 0;
+  const totalCrit = form?.criterios_lista?.length || 0;
+  const pctCumplido = totalCrit>0 ? Math.round(cumplidos/totalCrit*100) : 0;
 
   if (showForm && form) {
     const set = (k, v) => setF(f => ({...f, [k]: v}));
-    const faseInfo = paciente?.evaluaciones?.slice(-1)[0];
     return (
       <div>
-        <div style={{...s2.card, borderLeft:`3px solid ${TL2}`, marginBottom:8}}>
+        <div style={{...s2.card, borderLeft:`3px solid ${TL2}`}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-            <div style={{fontWeight:800,fontSize:13}}>📝 Registro de sesión #{form.numero_sesion}</div>
+            <div style={{fontWeight:800,fontSize:13}}>📝 Sesión #{form.numero_sesion} — {faseLabels[form.fase]} · {form.region}</div>
             <button onClick={()=>setShowForm(false)} style={s2.btnG}>← Volver</button>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+
+          {/* Fecha, fase, objetivo */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:8,marginBottom:10}}>
             <div><span style={s2.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s2.inp}/></div>
             <div><span style={s2.lbl}>N° de sesión</span><input type="number" value={form.numero_sesion} onChange={e=>set('numero_sesion',parseInt(e.target.value)||1)} style={s2.inp}/></div>
-            <div><span style={s2.lbl}>Fase actual</span>
-              <select value={form.fase} onChange={e=>set('fase',e.target.value)} style={{...s2.sel,width:'100%'}}>
-                {Object.entries(faseLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-              </select>
-            </div>
             <div><span style={s2.lbl}>Objetivo de la sesión</span><input value={form.objetivo_sesion} onChange={e=>set('objetivo_sesion',e.target.value)} placeholder="Ej: reducir EVA, mejorar ROM..." style={s2.inp}/></div>
           </div>
 
           {/* EVA */}
           <div style={{background:G1c,borderRadius:7,padding:'10px 12px',marginBottom:8}}>
-            <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>📊 Escala EVA (0–10)</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div>
-                <span style={s2.lbl}>EVA inicio de sesión</span>
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <input type="range" min="0" max="10" value={form.eva_inicio} onChange={e=>set('eva_inicio',parseInt(e.target.value))}
-                    style={{flex:1,accentColor:evaColor(form.eva_inicio)}}/>
-                  <span style={{fontSize:18,fontWeight:800,color:evaColor(form.eva_inicio),minWidth:22}}>{form.eva_inicio}</span>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>📊 EVA — Escala de dolor (0–10)</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['eva_inicio','Entrada'],['eva_fin','Salida']].map(([k,lbl])=>(
+                <div key={k}>
+                  <span style={s2.lbl}>{lbl}</span>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <input type="range" min="0" max="10" value={form[k]} onChange={e=>set(k,parseInt(e.target.value))}
+                      style={{flex:1,accentColor:evaColor(form[k])}}/>
+                    <span style={{fontSize:20,fontWeight:800,color:evaColor(form[k]),minWidth:22}}>{form[k]}</span>
+                  </div>
+                  <div style={{fontSize:9,color:evaColor(form[k]),fontWeight:700}}>{evaLabel(form[k])}</div>
                 </div>
-                <div style={{fontSize:9,color:evaColor(form.eva_inicio),fontWeight:700}}>{evaLabel(form.eva_inicio)}</div>
-              </div>
-              <div>
-                <span style={s2.lbl}>EVA fin de sesión</span>
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <input type="range" min="0" max="10" value={form.eva_fin} onChange={e=>set('eva_fin',parseInt(e.target.value))}
-                    style={{flex:1,accentColor:evaColor(form.eva_fin)}}/>
-                  <span style={{fontSize:18,fontWeight:800,color:evaColor(form.eva_fin),minWidth:22}}>{form.eva_fin}</span>
-                </div>
-                <div style={{fontSize:9,color:form.eva_fin<form.eva_inicio?GN2:form.eva_fin===form.eva_inicio?AM2:RJ2,fontWeight:700}}>
-                  {form.eva_fin<form.eva_inicio?`↓ Mejoró ${form.eva_inicio-form.eva_fin} punto/s`:form.eva_fin===form.eva_inicio?'= Sin cambio':'↑ Empeoró'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Ejercicios realizados */}
-          <div style={{marginBottom:8}}>
-            <span style={s2.lbl}>Ejercicios realizados</span>
-            <textarea value={form.ejercicios_realizados} onChange={e=>set('ejercicios_realizados',e.target.value)}
-              rows={2} style={{...s2.inp,resize:'vertical'}} placeholder="Ej: Isométrico cervical ×3, Chin tuck ×12, Movilización escapular..."/>
-          </div>
-
-          {/* Respuesta del paciente */}
-          <div style={{marginBottom:8}}>
-            <span style={s2.lbl}>Respuesta del paciente a la sesión</span>
-            <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:5}}>
-              {['Muy buena','Buena','Regular','Mala','Contraindicada'].map(resp=>(
-                <span key={resp} onClick={()=>set('respuesta',resp)} style={{cursor:'pointer',padding:'3px 8px',borderRadius:99,fontSize:10,fontWeight:700,border:`1px solid ${form.respuesta===resp?TL2:G2c}`,background:form.respuesta===resp?TL2:WH2,color:form.respuesta===resp?WH2:G4c}}>{resp}</span>
               ))}
             </div>
+            {form.eva_fin!==form.eva_inicio&&(
+              <div style={{marginTop:6,fontSize:10,fontWeight:700,color:form.eva_fin<form.eva_inicio?GN2:RJ2}}>
+                {form.eva_fin<form.eva_inicio?`↓ Mejoró ${form.eva_inicio-form.eva_fin} pto/s en sesión`:`↑ Empeoró ${form.eva_fin-form.eva_inicio} pto/s`}
+              </div>
+            )}
           </div>
 
-          {/* Criterios de avance */}
-          <div style={{background:'#EFF6FF',borderRadius:7,padding:'8px 10px',marginBottom:8,border:'1px solid #93C5FD'}}>
-            <div style={{fontSize:11,fontWeight:700,color:NV2,marginBottom:6}}>📋 Criterios de progreso evaluados</div>
-            <textarea value={form.criterios_avance} onChange={e=>set('criterios_avance',e.target.value)}
-              rows={2} style={{...s2.inp,resize:'vertical'}} placeholder="Ej: ROM cervical mejoró 10°, EVA <3, tolera carga axial, control motor en cat-cow..."/>
+          {/* EJERCICIOS DEL PROTOCOLO — auto-cargados, editables */}
+          <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:7,padding:'10px 12px',marginBottom:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <div style={{fontSize:11,fontWeight:700,color:GN2}}>
+                🏥 Ejercicios del protocolo — {form.region} · {faseLabels[form.fase]}
+                <span style={{fontSize:9,color:G3c,fontWeight:400,marginLeft:6}}>({form.ejercicios_lista.length} ejercicios)</span>
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:6}}>
+              {form.ejercicios_lista.map(ej=>(
+                <div key={ej.id} style={{display:'flex',gap:6,alignItems:'center',background:ej.activo?WH2:'#F9FAFB',borderRadius:5,padding:'4px 8px',border:`1px solid ${ej.activo?'#86EFAC':G2c}`,opacity:ej.activo?1:0.55}}>
+                  <input type="checkbox" checked={ej.activo} onChange={e=>setEx(ej.id,'activo',e.target.checked)} style={{accentColor:TL2,flexShrink:0}}/>
+                  <input value={ej.nombre} onChange={e=>setEx(ej.id,'nombre',e.target.value)}
+                    style={{flex:1,border:'none',background:'transparent',fontSize:11,outline:'none',color:ej.activo?G4c:G3c}}/>
+                  <button onClick={()=>removeEx(ej.id)} style={{background:'none',border:'none',color:G3c,cursor:'pointer',fontSize:14,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:5}}>
+              <input value={exEditando} onChange={e=>setExEditando(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&addEx(exEditando)}
+                placeholder="+ Agregar ejercicio personalizado..." style={{...s2.inp,fontSize:10,flex:1}}/>
+              <button onClick={()=>addEx(exEditando)} style={{...s2.btnTl,fontSize:10,padding:'4px 8px',whiteSpace:'nowrap'}}>Agregar</button>
+            </div>
+          </div>
+
+          {/* CRITERIOS DE AVANCE — auto-cargados del protocolo */}
+          <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'10px 12px',marginBottom:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:NV2}}>📋 Criterios de avance de fase — {faseLabels[form.fase]}</div>
+              <div style={{fontSize:11,fontWeight:700,color:pctCumplido>=80?GN2:pctCumplido>=50?AM2:G4c}}>
+                {cumplidos}/{totalCrit} cumplidos ({pctCumplido}%)
+              </div>
+            </div>
+            {/* Barra progreso */}
+            <div style={{background:G2c,borderRadius:99,height:6,marginBottom:8,overflow:'hidden'}}>
+              <div style={{width:`${pctCumplido}%`,background:pctCumplido>=80?GN2:pctCumplido>=50?AM2:RJ2,height:'100%',borderRadius:99,transition:'width .4s'}}/>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:6}}>
+              {form.criterios_lista.map(cr=>(
+                <div key={cr.id} style={{display:'flex',gap:6,alignItems:'center',background:cr.cumplido?'#DCFCE7':WH2,borderRadius:5,padding:'4px 8px',border:`1px solid ${cr.cumplido?'#86EFAC':G2c}`}}>
+                  <input type="checkbox" checked={cr.cumplido} onChange={e=>setCrit(cr.id,'cumplido',e.target.checked)} style={{accentColor:GN2,flexShrink:0}}/>
+                  <input value={cr.texto} onChange={e=>setCrit(cr.id,'texto',e.target.value)}
+                    style={{flex:1,border:'none',background:'transparent',fontSize:11,outline:'none',color:cr.cumplido?GN2:G4c,textDecoration:cr.cumplido?'line-through':''}}/>
+                  <button onClick={()=>removeCrit(cr.id)} style={{background:'none',border:'none',color:G3c,cursor:'pointer',fontSize:14,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:5}}>
+              <input placeholder="+ Agregar criterio personalizado..." style={{...s2.inp,fontSize:10,flex:1}}
+                onKeyDown={e=>{if(e.key==='Enter'){addCrit(e.target.value);e.target.value='';}}}/>
+              <button onMouseDown={e=>{const input=e.currentTarget.previousSibling;addCrit(input.value);input.value='';}} style={{...s2.btnG,fontSize:10,padding:'4px 8px',whiteSpace:'nowrap'}}>Agregar</button>
+            </div>
+            {pctCumplido===100&&(
+              <div style={{marginTop:6,background:'#DCFCE7',border:'1px solid #86EFAC',borderRadius:5,padding:'6px 10px',fontSize:11,fontWeight:700,color:GN2}}>
+                ✅ Todos los criterios cumplidos — el paciente está listo para avanzar de fase
+              </div>
+            )}
             <div style={{marginTop:6,display:'flex',alignItems:'center',gap:8}}>
-              <input type="checkbox" checked={form.avance_fase||false} onChange={e=>set('avance_fase',e.target.checked)} id="avance_fase_check"/>
-              <label htmlFor="avance_fase_check" style={{fontSize:11,fontWeight:700,cursor:'pointer',color:form.avance_fase?GN2:G4c}}>
-                {form.avance_fase?'✅ Listo para avanzar de fase':'⬜ Sin avance de fase aún'}
+              <input type="checkbox" checked={form.avance_fase||false} onChange={e=>set('avance_fase',e.target.checked)} id="avance_fase_check2"/>
+              <label htmlFor="avance_fase_check2" style={{fontSize:11,fontWeight:700,cursor:'pointer',color:form.avance_fase?GN2:G4c}}>
+                {form.avance_fase?'✅ Avance de fase confirmado':'⬜ Sin avance de fase'}
               </label>
             </div>
           </div>
 
-          {/* Próxima sesión y notas */}
+          {/* Respuesta + notas + próxima sesión */}
+          <div style={{marginBottom:8}}>
+            <span style={s2.lbl}>Respuesta del paciente</span>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+              {['Muy buena','Buena','Regular','Mala'].map(resp=>(
+                <span key={resp} onClick={()=>set('respuesta',resp)} style={{cursor:'pointer',padding:'3px 8px',borderRadius:99,fontSize:10,fontWeight:700,border:`1px solid ${form.respuesta===resp?TL2:G2c}`,background:form.respuesta===resp?TL2:WH2,color:form.respuesta===resp?WH2:G4c}}>{resp}</span>
+              ))}
+            </div>
+          </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
-            <div><span style={s2.lbl}>Próxima sesión / Objetivos</span><input value={form.proxima_sesion} onChange={e=>set('proxima_sesion',e.target.value)} placeholder="Ej: progresión a carga excéntrica..." style={s2.inp}/></div>
-            <div><span style={s2.lbl}>Notas libres</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones clínicas..." style={s2.inp}/></div>
+            <div><span style={s2.lbl}>Próxima sesión / Progresión</span><input value={form.proxima_sesion} onChange={e=>set('proxima_sesion',e.target.value)} placeholder="Ej: progresar a excéntrico..." style={s2.inp}/></div>
+            <div><span style={s2.lbl}>Notas clínicas libres</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s2.inp}/></div>
           </div>
 
           <button onClick={()=>{
-            saveSesion(form).catch(e=>alert('Error: '+e.message));
+            // Serialize lists to strings for storage
+            const toSave={...form,
+              ejercicios_realizados: form.ejercicios_lista.filter(e=>e.activo).map(e=>e.nombre).join(' · '),
+              criterios_avance: form.criterios_lista.map(cr=>`${cr.cumplido?'✓':'○'} ${cr.texto}`).join(' | '),
+              ejercicios_lista: JSON.stringify(form.ejercicios_lista),
+              criterios_lista: JSON.stringify(form.criterios_lista),
+            };
+            saveSesion(toSave).catch(e=>alert('Error al guardar: '+e.message));
             setShowForm(false);setF(null);
           }} style={{...s2.btnTl,width:'100%',padding:'9px'}}>💾 Guardar registro de sesión</button>
         </div>
@@ -416,26 +520,53 @@ function SesionClienteComp({ paciente }) {
   return (
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontSize:13,fontWeight:700}}>{paciente.nombre} {paciente.apellido} · {sesiones.length} sesiones registradas</div>
+        <div>
+          <div style={{fontSize:13,fontWeight:700}}>{paciente.nombre} {paciente.apellido}</div>
+          <div style={{fontSize:11,color:G3c}}>
+            {faseLabels[faseActual]} · {regionActual}
+            {protocoloEjercicios.length>0&&<span style={{marginLeft:8,color:TL2}}>· {protocoloEjercicios.length} ejercicios en protocolo</span>}
+          </div>
+        </div>
         <button onClick={()=>{setF(newForm());setShowForm(true);}} style={s2.btnTl}>+ Nueva sesión</button>
       </div>
-      {sesiones.length===0&&<div style={{...s2.card,textAlign:'center',padding:20,borderStyle:'dashed',color:G3c}}>Sin sesiones registradas. Iniciá el registro con "+ Nueva sesión".</div>}
-      {sesiones.map((ses,i)=>{
+      {/* Banner protocolo activo */}
+      {protocoloEjercicios.length>0&&(
+        <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:7,padding:'8px 12px',marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:GN2,marginBottom:4}}>🏥 Protocolo activo: {regionActual} — {faseLabels[faseActual]}</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+            {protocoloEjercicios.slice(0,5).map((ej,i)=>(
+              <span key={i} style={{fontSize:9,background:WH2,border:`1px solid #86EFAC`,borderRadius:5,padding:'2px 6px',color:G4c}}>{ej.nombre}</span>
+            ))}
+            {protocoloEjercicios.length>5&&<span style={{fontSize:9,color:G3c}}>+{protocoloEjercicios.length-5} más</span>}
+          </div>
+        </div>
+      )}
+      {sesiones.length===0&&<div style={{...s2.card,textAlign:'center',padding:20,borderStyle:'dashed',color:G3c}}>Sin sesiones registradas. Iniciá con "+ Nueva sesión".</div>}
+      {sesiones.map(ses=>{
+        let ejercsData, critsData;
+        try{ ejercsData=JSON.parse(ses.ejercicios_lista||'[]'); }catch{ ejercsData=[]; }
+        try{ critsData=JSON.parse(ses.criterios_lista||'[]'); }catch{ critsData=[]; }
+        const cumplidos2=critsData.filter(c=>c.cumplido).length;
         const evaMejoro=ses.eva_fin<ses.eva_inicio;
         return(
           <div key={ses.id} style={{...s2.card,borderLeft:`4px solid ${evaMejoro?GN2:ses.eva_fin===ses.eva_inicio?AM2:RJ2}`,marginBottom:6}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-              <div>
+              <div style={{flex:1}}>
                 <div style={{fontSize:12,fontWeight:700}}>Sesión #{ses.numero_sesion} · {ses.fecha}</div>
                 <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,marginTop:3}}>
                   <span style={{fontWeight:700,color:faseColors[ses.fase]||G4c}}>{faseLabels[ses.fase]||ses.fase}</span>
-                  {ses.eva_inicio!==undefined&&<span style={{color:evaColor(ses.eva_inicio)}}>EVA entrada: <strong>{ses.eva_inicio}/10</strong></span>}
-                  {ses.eva_fin!==undefined&&<span style={{color:evaColor(ses.eva_fin)}}>EVA salida: <strong>{ses.eva_fin}/10</strong></span>}
-                  {ses.respuesta&&<span style={{color:TL2}}>Respuesta: {ses.respuesta}</span>}
+                  {ses.eva_inicio!==undefined&&<span>EVA: <strong style={{color:evaColor(ses.eva_inicio)}}>{ses.eva_inicio}</strong>→<strong style={{color:evaColor(ses.eva_fin)}}>{ses.eva_fin}</strong></span>}
+                  {ses.respuesta&&<span style={{color:TL2}}>{ses.respuesta}</span>}
                   {ses.avance_fase&&<span style={{color:GN2,fontWeight:700}}>✅ Avance de fase</span>}
                 </div>
                 {ses.objetivo_sesion&&<div style={{fontSize:10,color:G4c,marginTop:2}}>🎯 {ses.objetivo_sesion}</div>}
-                {ses.criterios_avance&&<div style={{fontSize:10,color:'#1D4ED8',marginTop:2}}>📋 {ses.criterios_avance}</div>}
+                {critsData.length>0&&(
+                  <div style={{fontSize:10,color:G4c,marginTop:2}}>
+                    📋 Criterios: <strong style={{color:cumplidos2===critsData.length?GN2:AM2}}>{cumplidos2}/{critsData.length} cumplidos</strong>
+                    {critsData.filter(c=>c.cumplido).slice(0,2).map((cr,i)=><span key={i} style={{marginLeft:4,color:GN2}}>· ✓ {cr.texto.slice(0,25)}</span>)}
+                  </div>
+                )}
+                {ejercsData.filter(e=>e.activo).length>0&&<div style={{fontSize:9,color:G3c,marginTop:2}}>Ejercicios: {ejercsData.filter(e=>e.activo).map(e=>e.nombre).join(' · ')}</div>}
                 {ses.proxima_sesion&&<div style={{fontSize:10,color:TL2,marginTop:2}}>→ {ses.proxima_sesion}</div>}
                 {ses.notas&&<div style={{fontSize:9,color:G3c,fontStyle:'italic',marginTop:2}}>{ses.notas}</div>}
               </div>
