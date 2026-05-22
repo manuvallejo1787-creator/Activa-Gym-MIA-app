@@ -2,7 +2,7 @@
 // Integrado con ACTIVA Fitness Club App
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useFisioPacientes, genId } from "./db.js";
+import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
 
 // Alias local para compatibilidad con el código existente
 const FASES_BASE=FASES_METODO;
@@ -277,6 +277,177 @@ const fs={
 // gymClients = lista de clientes de la app de gym (para vincular)
 // onUpdateGymClient = callback para actualizar semáforo/nivel en la app de gym
 // ══════════════════════════════════════════════════════════════════════════
+
+// ── SesionClienteComp — external component (hooks: useState + useSesionesClinicas) ──
+function SesionClienteComp({ paciente }) {
+  const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setF] = useState(null);
+
+  const NV2='#0A3D62', TL2='#1BAA86', WH2='#FFFFFF';
+  const G1c='#F4F4F4', G2c='#E0E0E0', G3c='#999999', G4c='#555555';
+  const GN2='#16A34A', AM2='#D97706', RJ2='#DC2626';
+
+  const faseColors = { restaura:'#374151', activa:'#1D4ED8', potencia:'#7C3AED', rinde:'#CC0000' };
+  const faseLabels = { restaura:'🔴 RESTAURA', activa:'🟡 ACTIVA', potencia:'🟣 POTENCIA', rinde:'🔥 RINDE' };
+
+  const newForm = () => ({
+    id: 'sc_' + Date.now().toString(36),
+    fecha: new Date().toISOString().split('T')[0],
+    numero_sesion: sesiones.length + 1,
+    fase: paciente?.evaluaciones?.slice(-1)[0]?.fase || 'restaura',
+    eva_inicio: 0,
+    eva_fin: 0,
+    objetivo_sesion: '',
+    ejercicios_realizados: [],
+    respuesta: '',
+    criterios_avance: [],
+    avance_fase: false,
+    notas: '',
+    proxima_sesion: '',
+  });
+
+  const s2 = {
+    inp: {width:'100%',border:`1px solid ${G2c}`,borderRadius:5,padding:'5px 8px',fontSize:11,background:WH2,outline:'none'},
+    lbl: {display:'block',fontSize:9,color:G3c,textTransform:'uppercase',letterSpacing:'.04em',marginBottom:3,fontWeight:700},
+    sel: {border:`1px solid ${G2c}`,borderRadius:5,padding:'5px 8px',fontSize:11,background:WH2,outline:'none'},
+    card: {background:WH2,borderRadius:8,padding:12,marginBottom:8,border:`1px solid ${G2c}`},
+    btnR: {background:RJ2,color:WH2,border:'none',borderRadius:5,padding:'6px 12px',fontSize:11,fontWeight:700,cursor:'pointer'},
+    btnG: {background:WH2,color:G4c,border:`1px solid ${G2c}`,borderRadius:5,padding:'5px 10px',fontSize:11,cursor:'pointer'},
+    btnTl: {background:TL2,color:WH2,border:'none',borderRadius:5,padding:'6px 12px',fontSize:11,fontWeight:700,cursor:'pointer'},
+  };
+
+  const evaColor = (v) => v<=3?GN2:v<=6?AM2:RJ2;
+  const evaLabel = (v) => v===0?'Sin dolor':v<=3?'Leve':v<=6?'Moderado':'Severo';
+
+  if (showForm && form) {
+    const set = (k, v) => setF(f => ({...f, [k]: v}));
+    const faseInfo = paciente?.evaluaciones?.slice(-1)[0];
+    return (
+      <div>
+        <div style={{...s2.card, borderLeft:`3px solid ${TL2}`, marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <div style={{fontWeight:800,fontSize:13}}>📝 Registro de sesión #{form.numero_sesion}</div>
+            <button onClick={()=>setShowForm(false)} style={s2.btnG}>← Volver</button>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+            <div><span style={s2.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s2.inp}/></div>
+            <div><span style={s2.lbl}>N° de sesión</span><input type="number" value={form.numero_sesion} onChange={e=>set('numero_sesion',parseInt(e.target.value)||1)} style={s2.inp}/></div>
+            <div><span style={s2.lbl}>Fase actual</span>
+              <select value={form.fase} onChange={e=>set('fase',e.target.value)} style={{...s2.sel,width:'100%'}}>
+                {Object.entries(faseLabels).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            <div><span style={s2.lbl}>Objetivo de la sesión</span><input value={form.objetivo_sesion} onChange={e=>set('objetivo_sesion',e.target.value)} placeholder="Ej: reducir EVA, mejorar ROM..." style={s2.inp}/></div>
+          </div>
+
+          {/* EVA */}
+          <div style={{background:G1c,borderRadius:7,padding:'10px 12px',marginBottom:8}}>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>📊 Escala EVA (0–10)</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div>
+                <span style={s2.lbl}>EVA inicio de sesión</span>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <input type="range" min="0" max="10" value={form.eva_inicio} onChange={e=>set('eva_inicio',parseInt(e.target.value))}
+                    style={{flex:1,accentColor:evaColor(form.eva_inicio)}}/>
+                  <span style={{fontSize:18,fontWeight:800,color:evaColor(form.eva_inicio),minWidth:22}}>{form.eva_inicio}</span>
+                </div>
+                <div style={{fontSize:9,color:evaColor(form.eva_inicio),fontWeight:700}}>{evaLabel(form.eva_inicio)}</div>
+              </div>
+              <div>
+                <span style={s2.lbl}>EVA fin de sesión</span>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <input type="range" min="0" max="10" value={form.eva_fin} onChange={e=>set('eva_fin',parseInt(e.target.value))}
+                    style={{flex:1,accentColor:evaColor(form.eva_fin)}}/>
+                  <span style={{fontSize:18,fontWeight:800,color:evaColor(form.eva_fin),minWidth:22}}>{form.eva_fin}</span>
+                </div>
+                <div style={{fontSize:9,color:form.eva_fin<form.eva_inicio?GN2:form.eva_fin===form.eva_inicio?AM2:RJ2,fontWeight:700}}>
+                  {form.eva_fin<form.eva_inicio?`↓ Mejoró ${form.eva_inicio-form.eva_fin} punto/s`:form.eva_fin===form.eva_inicio?'= Sin cambio':'↑ Empeoró'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Ejercicios realizados */}
+          <div style={{marginBottom:8}}>
+            <span style={s2.lbl}>Ejercicios realizados</span>
+            <textarea value={form.ejercicios_realizados} onChange={e=>set('ejercicios_realizados',e.target.value)}
+              rows={2} style={{...s2.inp,resize:'vertical'}} placeholder="Ej: Isométrico cervical ×3, Chin tuck ×12, Movilización escapular..."/>
+          </div>
+
+          {/* Respuesta del paciente */}
+          <div style={{marginBottom:8}}>
+            <span style={s2.lbl}>Respuesta del paciente a la sesión</span>
+            <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:5}}>
+              {['Muy buena','Buena','Regular','Mala','Contraindicada'].map(resp=>(
+                <span key={resp} onClick={()=>set('respuesta',resp)} style={{cursor:'pointer',padding:'3px 8px',borderRadius:99,fontSize:10,fontWeight:700,border:`1px solid ${form.respuesta===resp?TL2:G2c}`,background:form.respuesta===resp?TL2:WH2,color:form.respuesta===resp?WH2:G4c}}>{resp}</span>
+              ))}
+            </div>
+          </div>
+
+          {/* Criterios de avance */}
+          <div style={{background:'#EFF6FF',borderRadius:7,padding:'8px 10px',marginBottom:8,border:'1px solid #93C5FD'}}>
+            <div style={{fontSize:11,fontWeight:700,color:NV2,marginBottom:6}}>📋 Criterios de progreso evaluados</div>
+            <textarea value={form.criterios_avance} onChange={e=>set('criterios_avance',e.target.value)}
+              rows={2} style={{...s2.inp,resize:'vertical'}} placeholder="Ej: ROM cervical mejoró 10°, EVA <3, tolera carga axial, control motor en cat-cow..."/>
+            <div style={{marginTop:6,display:'flex',alignItems:'center',gap:8}}>
+              <input type="checkbox" checked={form.avance_fase||false} onChange={e=>set('avance_fase',e.target.checked)} id="avance_fase_check"/>
+              <label htmlFor="avance_fase_check" style={{fontSize:11,fontWeight:700,cursor:'pointer',color:form.avance_fase?GN2:G4c}}>
+                {form.avance_fase?'✅ Listo para avanzar de fase':'⬜ Sin avance de fase aún'}
+              </label>
+            </div>
+          </div>
+
+          {/* Próxima sesión y notas */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
+            <div><span style={s2.lbl}>Próxima sesión / Objetivos</span><input value={form.proxima_sesion} onChange={e=>set('proxima_sesion',e.target.value)} placeholder="Ej: progresión a carga excéntrica..." style={s2.inp}/></div>
+            <div><span style={s2.lbl}>Notas libres</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones clínicas..." style={s2.inp}/></div>
+          </div>
+
+          <button onClick={()=>{
+            saveSesion(form).catch(e=>alert('Error: '+e.message));
+            setShowForm(false);setF(null);
+          }} style={{...s2.btnTl,width:'100%',padding:'9px'}}>💾 Guardar registro de sesión</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:13,fontWeight:700}}>{paciente.nombre} {paciente.apellido} · {sesiones.length} sesiones registradas</div>
+        <button onClick={()=>{setF(newForm());setShowForm(true);}} style={s2.btnTl}>+ Nueva sesión</button>
+      </div>
+      {sesiones.length===0&&<div style={{...s2.card,textAlign:'center',padding:20,borderStyle:'dashed',color:G3c}}>Sin sesiones registradas. Iniciá el registro con "+ Nueva sesión".</div>}
+      {sesiones.map((ses,i)=>{
+        const evaMejoro=ses.eva_fin<ses.eva_inicio;
+        return(
+          <div key={ses.id} style={{...s2.card,borderLeft:`4px solid ${evaMejoro?GN2:ses.eva_fin===ses.eva_inicio?AM2:RJ2}`,marginBottom:6}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700}}>Sesión #{ses.numero_sesion} · {ses.fecha}</div>
+                <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,marginTop:3}}>
+                  <span style={{fontWeight:700,color:faseColors[ses.fase]||G4c}}>{faseLabels[ses.fase]||ses.fase}</span>
+                  {ses.eva_inicio!==undefined&&<span style={{color:evaColor(ses.eva_inicio)}}>EVA entrada: <strong>{ses.eva_inicio}/10</strong></span>}
+                  {ses.eva_fin!==undefined&&<span style={{color:evaColor(ses.eva_fin)}}>EVA salida: <strong>{ses.eva_fin}/10</strong></span>}
+                  {ses.respuesta&&<span style={{color:TL2}}>Respuesta: {ses.respuesta}</span>}
+                  {ses.avance_fase&&<span style={{color:GN2,fontWeight:700}}>✅ Avance de fase</span>}
+                </div>
+                {ses.objetivo_sesion&&<div style={{fontSize:10,color:G4c,marginTop:2}}>🎯 {ses.objetivo_sesion}</div>}
+                {ses.criterios_avance&&<div style={{fontSize:10,color:'#1D4ED8',marginTop:2}}>📋 {ses.criterios_avance}</div>}
+                {ses.proxima_sesion&&<div style={{fontSize:10,color:TL2,marginTop:2}}>→ {ses.proxima_sesion}</div>}
+                {ses.notas&&<div style={{fontSize:9,color:G3c,fontStyle:'italic',marginTop:2}}>{ses.notas}</div>}
+              </div>
+              <button onClick={()=>deleteSesion(ses.id).catch(console.error)} style={{...s2.btnG,fontSize:9,padding:'2px 6px',color:RJ2,borderColor:RJ2,flexShrink:0}}>✕</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient }){
   const [view,setView]=useState('dashboard');
   // Estado levantado de sub-componentes (evita pérdida de foco en inputs)
@@ -295,6 +466,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
   const [editingPac,setEditingPac]=useState(null);
   const [showPacForm,setShowPacForm]=useState(false);
   const [viewingEval,setViewingEval]=useState(null);
+  const [sesionPacId,setSesionPacId]=useState('');
   const [filterRegion,setFilterRegion]=useState('');
   const [searchPac,setSearchPac]=useState('');
   const BPrimary=brand?.colorPrimary||NV;
@@ -373,6 +545,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
             {icon:'📋',label:'Protocolos',sub:'Fases y criterios',action:()=>setView('protocolos'),color:'#0284C7'},
             {icon:'🏥',label:'Altas Clínicas',sub:'Validar criterios',action:()=>setView('altas'),color:GN},
             {icon:'🔄',label:'Re-evaluaciones',sub:`${sinEval} pendientes`,action:()=>setView('reevals'),color:AM},
+            {icon:'📝',label:'Registro de Sesiones',sub:'EVA y criterios de avance',action:()=>setView('sesiones'),color:'#0F766E'},
           ].map((c,i)=>(
             <div key={i} onClick={c.action} style={{...fs.card,cursor:'pointer',borderTop:`3px solid ${c.color}`,padding:'14px',textAlign:'center',marginBottom:0}}>
               <div style={{fontSize:26,marginBottom:6}}>{c.icon}</div>
@@ -1539,9 +1712,33 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
   };
 
   // ── RENDER PRINCIPAL ──────────────────────────────────────────────────
+
+  // ── REGISTRO DE SESIONES CLÍNICAS ────────────────────────────────────────
+  const RegistroSesiones=()=>{
+    // This component has no own hooks — rendered as function call
+    const pacSel=pacientes.find(p=>p.id===sesionPacId);
+    return(
+      <div style={{padding:'12px 14px'}}>
+        <div style={{background:NV,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:'3px solid #1BAA86'}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>📝 Registro de Sesiones Clínicas</div>
+          <div style={{fontSize:11,color:'#93C5FD'}}>EVA de entrada y salida · Criterios de avance · Historial por paciente</div>
+        </div>
+        <div style={{...fs.card,marginBottom:12}}>
+          <span style={fs.lbl}>Seleccionar paciente</span>
+          <select value={sesionPacId} onChange={e=>setSesionPacId(e.target.value)} style={{...fs.sel,width:'100%'}}>
+            <option value=''>— Seleccionar paciente —</option>
+            {pacientes.map(p=><option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.region?`· ${p.region}`:''}</option>)}
+          </select>
+        </div>
+        {pacSel&&<SesionClienteComp paciente={pacSel}/>}
+        {!sesionPacId&&<div style={{...fs.card,textAlign:'center',padding:28,borderStyle:'dashed',color:GM}}>Seleccioná un paciente para ver y registrar sesiones.</div>}
+      </div>
+    );
+  };
+
   const VIEWS={
     dashboard:Dashboard(),pacientes:PacientesView(),'ver-paciente':VerPaciente(),'nueva-eval':NuevaEval(),'ver-eval':VerEval(),
-    kpis:KPIs(),protocolos:Protocolos(),altas:AltasCli(),
+    kpis:KPIs(),protocolos:Protocolos(),altas:AltasCli(),sesiones:RegistroSesiones(),
     reevals:<div style={{padding:'14px'}}><div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Re-evaluaciones</div>{pacientes.filter(p=>p.evaluaciones.length>0).map(p=>{const l=p.evaluaciones[p.evaluaciones.length-1];return(<div key={p.id} style={{...fs.card,borderLeft:`4px solid ${AM}`,marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><div style={{fontSize:12,fontWeight:700}}>{p.nombre} {p.apellido}</div><div style={{fontSize:10,color:GM}}>Última eval.: {l?.fecha} · {FASES_BASE[l?.fase]?.badge}</div>{l?.objetivo&&<div style={{fontSize:10,color:TL}}>🎯 "{l.objetivo}"</div>}</div><button onClick={()=>{setCurrentPac(p);setCurrentEval({...emptyEval(),tipo:'reeval',region:p.region,objetivo:l?.objetivo||''});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'4px 10px'}}>Re-evaluar</button></div></div>);})}
     {pacientes.filter(p=>p.evaluaciones.length>0).length===0&&<div style={{...fs.card,textAlign:'center',padding:24,color:GM}}>Sin pacientes para re-evaluar.</div>}</div>,
   };

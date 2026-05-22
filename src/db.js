@@ -435,3 +435,69 @@ export function usePlanesCliente(clientId) {
   },[])
   return{planes,loading,savePlan,deletePlan,refetch:fetch}
 }
+
+// ─── HOOK: Sesiones Clínicas ──────────────────────────────────────────────
+export function useSesionesClinicas(pacienteId) {
+  const [sesiones,setSesiones]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!pacienteId){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('sesiones_clinicas').select('*').eq('paciente_id',pacienteId).order('fecha',{ascending:false})
+      if(error)throw error
+      setSesiones(data||[])
+    }catch(e){console.error('sesiones_clinicas:',e.message);setSesiones([])}
+    finally{setLoading(false)}
+  },[pacienteId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!pacienteId)return
+    const ch=supabase.channel('sc_'+pacienteId+'_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'sesiones_clinicas',filter:`paciente_id=eq.${pacienteId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,pacienteId])
+  const saveSesion=useCallback(async(s)=>{
+    if(!pacienteId)throw new Error('Sin paciente')
+    const toSave={...s,paciente_id:pacienteId}
+    if(isSupabaseReady){const{error}=await supabase.from('sesiones_clinicas').upsert(toSave,{onConflict:'id'});if(error)throw error;await fetch()}
+    else setSesiones(p=>p.find(x=>x.id===s.id)?p.map(x=>x.id===s.id?toSave:x):[toSave,...p])
+  },[pacienteId,fetch])
+  const deleteSesion=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('sesiones_clinicas').delete().eq('id',id)
+    else setSesiones(p=>p.filter(x=>x.id!==id))
+  },[])
+  return{sesiones,loading,saveSesion,deleteSesion}
+}
+
+// ─── HOOK: Protocolos Rehab Custom ────────────────────────────────────────
+export function useRehabProtocolos() {
+  const [protocolos,setProtocolos]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('rehab_ejercicios_custom').select('*').order('created_at',{ascending:false})
+      if(error)throw error
+      setProtocolos(data||[])
+    }catch(e){console.error('rehab_custom:',e.message);setProtocolos([])}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('rehab_c_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'rehab_ejercicios_custom'},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch])
+  const saveEjercicio=useCallback(async(ej)=>{
+    if(isSupabaseReady){const{error}=await supabase.from('rehab_ejercicios_custom').upsert(ej,{onConflict:'id'});if(error)throw error;await fetch()}
+    else setProtocolos(p=>p.find(x=>x.id===ej.id)?p.map(x=>x.id===ej.id?ej:x):[ej,...p])
+  },[fetch])
+  const deleteEjercicio=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('rehab_ejercicios_custom').delete().eq('id',id)
+    else setProtocolos(p=>p.filter(x=>x.id!==id))
+  },[])
+  return{protocolos,loading,saveEjercicio,deleteEjercicio}
+}
