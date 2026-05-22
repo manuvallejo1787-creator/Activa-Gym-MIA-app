@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
