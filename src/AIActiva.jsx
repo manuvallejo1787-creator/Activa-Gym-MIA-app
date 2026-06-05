@@ -13,23 +13,28 @@ Tu rol: generar contenido clínico y de entrenamiento basado en evidencia cient�
 
 IMPORTANTE: Siempre respondés ÚNICAMENTE con JSON válido, sin texto adicional, sin marcadores markdown, sin explicaciones fuera del JSON.`;
 
-// ─── LLAMADA A LA API ─────────────────────────────────────────────────────────
+// ─── LLAMADA A LA API (vía función serverless segura de Vercel) ──────────────
 async function callClaude(userPrompt, maxTokens = 2000) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+      prompt: userPrompt,
+      max_tokens: maxTokens,
     }),
   });
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
   const data = await response.json();
-  const text = data.content?.map(b => b.text || "").join("") || "";
+  if (!response.ok) {
+    throw new Error(data.error || `Error ${response.status}`);
+  }
+  const text = data.text || "";
   const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch {
+    throw new Error("La IA no devolvió un formato válido. Probá regenerar.");
+  }
 }
 
 // ─── COLORES / ESTILOS ────────────────────────────────────────────────────────
