@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
+import { AIGeneradorProtocolo } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
 const PROT_SESION = {
@@ -368,6 +369,21 @@ function SesionClienteComp({ paciente }) {
     setF(f => ({...f, ejercicios_lista:[...f.ejercicios_lista,{id:'add_'+Date.now(),nombre:nombre.trim(),activo:true,editado:true}]}));
     setExEditando('');
   };
+  const applyAIProtocolo = (aiResult) => {
+    // Reemplaza ejercicios y criterios con los generados por IA
+    const nuevosEj = (aiResult.ejercicios||[]).map((e,i)=>({
+      id:'ai_'+i, nombre:e.nombre+(e.param?` — ${e.param}`:''), activo:true, editado:true,
+      desc:e.desc||'', precaucion:e.precaucion||''
+    }));
+    const nuevosCrit = (aiResult.criterios_alta_fase||[]).map((cr,i)=>({id:'aic_'+i,texto:cr,cumplido:false}));
+    setF(f=>({
+      ...f,
+      ejercicios_lista:[...f.ejercicios_lista, ...nuevosEj],
+      criterios_lista: nuevosCrit.length>0 ? [...f.criterios_lista, ...nuevosCrit] : f.criterios_lista,
+      objetivo_sesion: f.objetivo_sesion || aiResult.objetivo || '',
+      notas: aiResult.razonamiento || f.notas
+    }));
+  };
   const setCrit = (id, key, val) => setF(f => ({
     ...f, criterios_lista: f.criterios_lista.map(cr => cr.id===id ? {...cr,[key]:val} : cr)
   }));
@@ -420,6 +436,9 @@ function SesionClienteComp({ paciente }) {
               </div>
             )}
           </div>
+
+          {/* GENERADOR IA DE PROTOCOLO */}
+          <AIGeneradorProtocolo paciente={paciente} region={regionActual} fase={faseActual} evaluacion={ultimaEval} onApply={applyAIProtocolo}/>
 
           {/* EJERCICIOS DEL PROTOCOLO — auto-cargados, editables */}
           <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:7,padding:'10px 12px',marginBottom:8}}>

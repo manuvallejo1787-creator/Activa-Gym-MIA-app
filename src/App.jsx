@@ -3,6 +3,7 @@ import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
+import { AIGeneradorSesion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
@@ -855,6 +856,21 @@ export default function App(){
   },[activeClient]);
 
   // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
+  const applyAISession=(aiResult)=>{
+    // Convierte el resultado de la IA en bloques de sesión
+    const blocks=(aiResult.blocks||[]).map((b,i)=>({
+      id:Date.now()+i,
+      type:BLOCKS[b.type]?b.type:'fuerza',
+      position:i+1,
+      exercises:(b.exercises||[]).filter(e=>exs.find(x=>x.id===e.exId)).map(e=>({
+        exId:e.exId,override:false,note:'',
+        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
+        pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
+      })),
+      params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
+    }));
+    setSession(p=>({...p,obj:p.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||p.name,notas:aiResult.objetivo_sesion||p.notas}));
+  };
   const suggestBlocks=(obj)=>{
     const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
     setSession(p=>({...p,obj,blocks:bs,name:`Sesión ${OBJS[obj].label}`}));
@@ -1726,6 +1742,7 @@ export default function App(){
             <div><span style={s.lbl}>Fecha</span><input type="date" value={session.fecha} onChange={e=>setSession(p=>({...p,fecha:e.target.value}))} style={s.inp}/></div>
           </div>
           <div><span style={s.lbl}>Notas del entrenador</span><input value={session.notas} onChange={e=>setSession(p=>({...p,notas:e.target.value}))} placeholder="Observaciones, indicaciones..." style={s.inp}/></div>
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[session.obj].nivelKey].color)}>{OBJS[session.obj].label}</span>

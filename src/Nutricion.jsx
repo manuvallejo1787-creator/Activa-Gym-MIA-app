@@ -6,6 +6,7 @@ import {
   DB_ALIMENTOS, CATEGORIAS_ALIMENTOS, DIAS_SEMANA, COMIDAS,
   calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
 } from "./alimentos.js";
+import { AIGeneradorNutricion } from "./AIActiva.jsx";
 
 // ─── PALETA ──────────────────────────────────────────────────────────────────
 const BK='#1a1a1a', WH='#FFFFFF', R='#CC0000';
@@ -171,6 +172,26 @@ export default function Nutricion({ clients, brand }) {
   }, [planActivo, diaActivo, comidaActiva]);
 
   // ─── PDF EXPORT ────────────────────────────────────────────────────────────
+  const applyAIPlan = (aiResult) => {
+    if (!planActivo) return;
+    const nuevaSemana = { ...planActivo.semana };
+    (aiResult.dias || []).forEach(diaData => {
+      const diaNombre = diaData.dia;
+      if (!nuevaSemana[diaNombre]) return;
+      const comidas = {};
+      COMIDAS.forEach(c => {
+        const items = (diaData.comidas?.[c.id] || [])
+          .filter(it => todosAlimentos.find(a => a.id === it.alimentoId))
+          .map(it => ({ id: genNutId('it'), alimentoId: it.alimentoId, gramos: parseFloat(it.gramos) || 100 }));
+        comidas[c.id] = items;
+      });
+      nuevaSemana[diaNombre] = comidas;
+    });
+    const nuevoPlan = { ...planActivo, semana: nuevaSemana, notas: (aiResult.consejos || []).join(' · ') || planActivo.notas };
+    setPlanActivo(nuevoPlan);
+    setPlanes(ps => ps.map(pl => pl.id === nuevoPlan.id ? nuevoPlan : pl));
+  };
+
   const exportarPDF = () => {
     if (!planActivo) return;
     const brandColor = brand?.colorPrimary || '#CC0000';
@@ -564,6 +585,9 @@ export default function Nutricion({ clients, brand }) {
             </div>
           )}
         </div>
+
+        {/* GENERADOR IA */}
+        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} onApply={applyAIPlan}/>
 
         <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:10}}>
           {/* Navegación días */}
