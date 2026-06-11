@@ -441,3 +441,138 @@ Generá menús para ${diasTarget} días. Respondé ÚNICAMENTE con este JSON:
     </div>
   );
 }
+
+// ─── MÓDULO 4: ANÁLISIS DE EVALUACIÓN → SUGERENCIA DE FASE/MÉTODO/EJERCICIOS ──
+// Lee los datos de una evaluación (gym o fisio) y sugiere ubicación metodológica.
+export function AIAnalisisEvaluacion({ tipo, datos, onApply }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult]   = useState(null);
+  const [error, setError]     = useState(null);
+  const [show, setShow]       = useState(false);
+
+  const generar = async () => {
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const contexto = tipo === "fisio"
+        ? `EVALUACIÓN FISIOTERAPÉUTICA
+Paciente: ${datos.nombre || ""} ${datos.apellido || ""}
+Región afectada: ${datos.region || "no registrada"}
+Diagnóstico PT: ${datos.diagnostico || "no registrado"}
+EVA actual: ${datos.eva ?? "no registrado"}/10
+ROM / movilidad: ${datos.rom || "no registrado"}
+Fuerza (MRC): ${datos.fuerza || "no registrado"}
+Hallazgos screening: ${datos.screening || "no registrado"}
+Antropometría: ${datos.antropometria || "no registrada"}
+Objetivos: ${datos.objetivos || "no especificados"}
+Tiempo de evolución: ${datos.evolucion || "no registrado"}`
+        : `EVALUACIÓN DE GIMNASIO
+Cliente: ${datos.nombre || ""} ${datos.apellido || ""}
+Objetivo declarado: ${datos.objetivo || "no registrado"}
+Nivel actual asignado: ${datos.nivel || "no asignado"}
+Semáforo: ${datos.semaforo || "pendiente"}
+Restricciones: ${datos.restricciones || "ninguna"}
+Antropometría: ${datos.antropometria || "no registrada"}
+Tests de fuerza: ${datos.tests || "sin tests"}
+Screening de salud: ${datos.screening || "no registrado"}
+Experiencia previa: ${datos.experiencia || "no registrada"}`;
+
+      const fases = tipo === "fisio"
+        ? "RESTAURA (rehabilitación aguda), ACTIVA (reintegración), POTENCIA (desarrollo de capacidad), RINDE (mantenimiento/rendimiento)"
+        : "RESTAURA (rehab/dolor presente), ACTIVA (reacondicionamiento base), POTENCIA (desarrollo de fuerza/hipertrofia), RINDE (rendimiento/mantenimiento)";
+
+      const metodologias = "Lineal Clásica (Bompa), DUP Ondulante Diaria, Bloques (Verkhoshansky), ATR (Issurin), Conjugado (Westside), HST (Hypertrophy Specific Training), Trifásico (Cal Dietz), Fitness General ACTIVA, Pérdida de Grasa";
+
+      const prompt = `Analizá esta evaluación y sugerí dónde ubicar a la persona dentro del Método Activa Integra.
+
+${contexto}
+
+Fases disponibles: ${fases}
+Metodologías de planificación: ${metodologias}
+
+Respondé ÚNICAMENTE con este JSON:
+{
+  "interpretacion": "interpretación clínica/funcional de la evaluación en 3-4 líneas, integrando los datos",
+  "fase_sugerida": "restaura|activa|potencia|rinde",
+  "fase_justificacion": "por qué esta fase (2 líneas)",
+  "metodologia_sugerida": "nombre exacto de una de las metodologías listadas",
+  "metodologia_justificacion": "por qué este sistema para este caso (2 líneas)",
+  "ejercicios_base": [
+    {"nombre": "ejercicio", "razon": "por qué para este caso"}
+  ],
+  "precauciones": "consideraciones de seguridad para esta persona",
+  "objetivos_sugeridos": ["objetivo 1", "objetivo 2", "objetivo 3"]
+}
+
+Incluí 4-6 ejercicios base apropiados. Basate en evidencia y en el estado real de la persona.`;
+
+      const data = await callClaude(prompt, 2200);
+      setResult(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!show) return (
+    <button onClick={()=>{setShow(true);generar();}} style={{...as.btn(),width:'100%',justifyContent:'center',marginTop:8}}>
+      🤖 Analizar evaluación con IA — sugerir fase, método y ejercicios
+    </button>
+  );
+
+  return (
+    <div style={{...as.card,marginTop:10}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div style={{fontSize:13,fontWeight:800,color:AI}}>🤖 Análisis IA de la evaluación</div>
+        <button onClick={()=>{setShow(false);setResult(null);setError(null);}} style={as.btnOutline}>✕</button>
+      </div>
+      {loading&&<Spinner msg="Analizando evaluación y sugiriendo ubicación metodológica..."/>}
+      {error&&<div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,color:'#DC2626'}}><strong>Error:</strong> {error}<br/><button onClick={generar} style={{...as.btn(R),marginTop:5,fontSize:10}}>Reintentar</button></div>}
+      {result&&(
+        <div>
+          <div style={{background:WH,border:`1px solid ${AI_BORDER}`,borderRadius:7,padding:'12px 14px',marginBottom:8}}>
+            <div style={{fontSize:10,fontWeight:700,color:G3,textTransform:'uppercase',marginBottom:4}}>Interpretación</div>
+            <div style={{fontSize:11,color:G4,lineHeight:1.5,marginBottom:10}}>{result.interpretacion}</div>
+
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+              <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:`1px solid ${AI_BORDER}`}}>
+                <div style={{fontSize:9,color:G3,textTransform:'uppercase',fontWeight:700}}>Fase sugerida</div>
+                <div style={{fontSize:16,fontWeight:800,color:AI,textTransform:'uppercase'}}>{result.fase_sugerida}</div>
+                <div style={{fontSize:9,color:G4,marginTop:2}}>{result.fase_justificacion}</div>
+              </div>
+              <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:`1px solid ${AI_BORDER}`}}>
+                <div style={{fontSize:9,color:G3,textTransform:'uppercase',fontWeight:700}}>Metodología</div>
+                <div style={{fontSize:13,fontWeight:800,color:AI}}>{result.metodologia_sugerida}</div>
+                <div style={{fontSize:9,color:G4,marginTop:2}}>{result.metodologia_justificacion}</div>
+              </div>
+            </div>
+
+            {result.ejercicios_base?.length>0&&(
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,fontWeight:700,color:G3,textTransform:'uppercase',marginBottom:4}}>Ejercicios base sugeridos</div>
+                {result.ejercicios_base.map((e,i)=>(
+                  <div key={i} style={{display:'flex',gap:6,padding:'4px 8px',background:i%2===0?G1:WH,borderRadius:5,marginBottom:2}}>
+                    <span style={{fontWeight:700,color:AI,fontSize:10}}>→</span>
+                    <div><span style={{fontSize:11,fontWeight:700}}>{e.nombre}</span><span style={{fontSize:9,color:G4,marginLeft:6}}>{e.razon}</span></div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {result.objetivos_sugeridos?.length>0&&(
+              <div style={{background:'#EFF6FF',borderRadius:5,padding:'6px 8px',marginBottom:6,fontSize:10}}>
+                <strong style={{color:'#1D4ED8'}}>🎯 Objetivos sugeridos:</strong>
+                {result.objetivos_sugeridos.map((o,i)=><div key={i} style={{color:'#1D4ED8',marginTop:1}}>→ {o}</div>)}
+              </div>
+            )}
+            {result.precauciones&&<div style={{background:'#FFF9EC',border:'1px solid #FCD34D',borderRadius:5,padding:'6px 8px',fontSize:10,color:'#78350F'}}>⚠ {result.precauciones}</div>}
+          </div>
+          <div style={{display:'flex',gap:6}}>
+            <button onClick={()=>{onApply(result);}} style={{...as.btn(GN),flex:2}}>✅ Aplicar sugerencias</button>
+            <button onClick={generar} style={{...as.btnOutline,flex:1}}>🔄 Regenerar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -3,7 +3,7 @@ import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
-import { AIGeneradorSesion } from "./AIActiva.jsx";
+import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
@@ -786,6 +786,8 @@ const emptyCliente=()=>({
   criterios_personalizados:[],
   fisio_pacienteId:null,
   periodizacion:'',
+  referidoPor:'',
+  referidoTipo:'',
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -842,6 +844,7 @@ export default function App(){
     try { localStorage.setItem('activa_brand', JSON.stringify(brand)); } catch {}
   },[brand]);
   const [clientWizard,setClientWizard]=useState(null);
+  const [informeCliente,setInformeCliente]=useState(null);
 
   const logoInputRef=useRef();
   const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
@@ -1017,7 +1020,96 @@ export default function App(){
     {title:'Síntesis y plan',           icon:'📋',fase:2},
   ];
 
-  const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening})=>{
+  // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
+  const InformeClienteModal=({cliente,onClose,saveClient,tests,exs,s,brand})=>{
+    if(!cliente)return null;
+    const sc=cliente.screening||{};
+    const nv=FASES_METODO[cliente.nivel]||{label:cliente.nivel,badge:'',color:'#374151'};
+    const clientTests=tests||[];
+
+    const aplicarSugerencia=(ai)=>{
+      const upd={...cliente};
+      if(ai.fase_sugerida)upd.nivel=ai.fase_sugerida;
+      if(ai.objetivos_sugeridos?.length)upd.objetivo=ai.objetivos_sugeridos[0];
+      // mapear metodología sugerida a key de periodización
+      const metaMap={'Lineal Clásica':'lineal','DUP Ondulante':'dup','Bloques':'bloques','ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'trifasico','Fitness General':'fitness','Pérdida de Grasa':'perdida_grasa'};
+      const found=Object.entries(metaMap).find(([k])=>ai.metodologia_sugerida?.includes(k));
+      if(found)upd.periodizacion=found[1];
+      saveClient(upd);
+      alert('✅ Sugerencias aplicadas: fase '+(ai.fase_sugerida||'').toUpperCase()+(found?' · '+ai.metodologia_sugerida:''));
+      onClose();
+    };
+
+    const exportInformePDF=()=>{
+      const bc=brand.colorPrimary;
+      const row=(lbl,val)=>val?`<tr><td style="padding:4px 10px;font-size:11px;color:#666;width:170px">${lbl}</td><td style="padding:4px 10px;font-size:11px;font-weight:600">${val}</td></tr>`:'';
+      const testsRows=clientTests.map(t=>`<tr style="border-bottom:1px solid #eee"><td style="padding:4px 8px;font-size:10px">${t.test_nombre||t.test_id}</td><td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700">${t.rm1_real||t.rm1_calculado||'—'} kg</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.nivel_resultado||'—'}</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.fecha||''}</td></tr>`).join('');
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:28px;color:#111}table{width:100%;border-collapse:collapse}@media print{body{padding:14px}@page{size:A4;margin:14mm}}</style></head><body>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${bc};padding-bottom:12px;margin-bottom:16px">
+          <div><div style="font-size:22px;font-weight:900;color:${bc};letter-spacing:2px">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
+          <div style="text-align:right"><div style="font-size:16px;font-weight:800">Informe de Evaluación</div><div style="font-size:11px;color:#555;margin-top:2px">${cliente.nombre} ${cliente.apellido}</div><div style="font-size:10px;color:#999">${cliente.documento?'CI '+cliente.documento+' · ':''}${new Date().toLocaleDateString('es-ES')}</div></div>
+        </div>
+        <div style="background:#f4f4f4;border-radius:7px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+          <div><div style="font-size:9px;color:#999;text-transform:uppercase">Fase del Método Activa Integra</div><div style="font-size:18px;font-weight:800;color:${bc}">${nv.badge||''} ${nv.label}</div></div>
+          ${cliente.objetivo?`<div style="text-align:right;max-width:50%"><div style="font-size:9px;color:#999;text-transform:uppercase">Objetivo</div><div style="font-size:12px;font-style:italic">"${cliente.objetivo}"</div></div>`:''}
+        </div>
+        <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Datos generales</h3>
+        <table style="margin-bottom:14px">${row('Celular',cliente.celular)}${row('Fecha de ingreso',cliente.fechaIngreso)}${row('Fecha de evaluación',sc.fechaEvaluacion||cliente.fechaEval)}${row('Evaluador',sc.evaluador)}${row('Ocupación',sc.ocupacion)}${row('Nivel de actividad',sc.nivelActividad)}${row('Experiencia de entrenamiento',sc.expEntrenamiento)}${cliente.referidoPor?row('Referido por',cliente.referidoPor+(cliente.referidoTipo?' ('+cliente.referidoTipo+')':'')):''}</table>
+        <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Antropometría</h3>
+        <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc)}${row('% Grasa',sc.pctGrasa?sc.pctGrasa+'%':'')}${row('Perímetro cintura',sc.perCintura?sc.perCintura+' cm':'')}${row('Perímetro cadera',sc.perCadera?sc.perCadera+' cm':'')}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
+        <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Salud y antecedentes</h3>
+        <table style="margin-bottom:14px">${row('Condición médica',sc.condicionMedica==='si'?sc.condicionDetalle||'Sí':'No refiere')}${row('Medicación',sc.medicacion==='si'?sc.medicacionDetalle||'Sí':'No')}${row('Lesiones activas',sc.lesionesActivas==='si'?sc.lesionesDetalle||'Sí':'No')}${row('Cirugías',sc.cirugias==='si'?sc.cirugiasDetalle||'Sí':'No')}${row('Dolor actual',sc.dolorActual==='si'?sc.dolorDetalle||'Sí':'No')}${cliente.restricciones?row('Restricciones',cliente.restricciones):''}</table>
+        ${(sc.postura_hallazgos||sc.movilidad_hallazgos||sc.capacidades_hallazgos)?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Hallazgos funcionales</h3><table style="margin-bottom:14px">${row('Postura',sc.postura_hallazgos)}${row('Movilidad',sc.movilidad_hallazgos)}${row('Capacidades',sc.capacidades_hallazgos)}</table>`:''}
+        ${testsRows?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Tests de fuerza</h3><table style="margin-bottom:14px"><thead><tr style="background:#1a1a1a;color:#fff"><th style="padding:5px 8px;font-size:9px;text-align:left">Ejercicio</th><th style="padding:5px 8px;font-size:9px">1RM</th><th style="padding:5px 8px;font-size:9px">Nivel</th><th style="padding:5px 8px;font-size:9px">Fecha</th></tr></thead><tbody>${testsRows}</tbody></table>`:''}
+        ${cliente._informeIA?`<h3 style="font-size:13px;color:#6D28D9;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Interpretación y plan sugerido (IA)</h3><div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:5px;padding:10px 14px;margin-bottom:10px;font-size:11px;line-height:1.6">${cliente._informeIA}</div>`:''}
+        <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · ${brand.gymSub} · Método Activa Integra · Informe generado ${new Date().toLocaleDateString('es-ES')}</div>
+        <script>window.onload=()=>window.print()<\/script></body></html>`;
+      const w=window.open('','_blank');w.document.write(html);w.document.close();
+    };
+
+    const datosIA={
+      nombre:cliente.nombre,apellido:cliente.apellido,objetivo:cliente.objetivo,
+      nivel:nv.label,semaforo:cliente.semaforo,restricciones:cliente.restricciones,
+      antropometria:`Peso ${sc.peso||'?'}kg, Talla ${sc.talla||'?'}cm, IMC ${sc.imc||'?'}, Grasa ${sc.pctGrasa||'?'}%`,
+      tests:clientTests.map(t=>`${t.test_nombre}: ${t.rm1_real||t.rm1_calculado}kg (${t.nivel_resultado||'?'})`).join(', ')||'sin tests',
+      screening:`Actividad: ${sc.nivelActividad}. Experiencia: ${sc.expEntrenamiento}. Dolor: ${sc.dolorActual==='si'?sc.dolorDetalle:'no'}. Lesiones: ${sc.lesionesActivas==='si'?sc.lesionesDetalle:'no'}`,
+      experiencia:sc.expEntrenamiento,
+    };
+
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:620,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:15}}>📊 Informe de evaluación — {cliente.nombre} {cliente.apellido}</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          {/* Resumen */}
+          <div style={{background:G1,borderRadius:8,padding:'12px 14px',marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{background:nv.color,color:WH,fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:99}}>{nv.badge} {nv.label}</span>
+              <button onClick={exportInformePDF} style={{...s.btnR,fontSize:11,background:brand.colorPrimary}}>📄 Exportar PDF</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:8}}>
+              {[['Peso',sc.peso?sc.peso+'kg':'—'],['Talla',sc.talla?sc.talla+'cm':'—'],['IMC',sc.imc||'—'],['% Grasa',sc.pctGrasa?sc.pctGrasa+'%':'—']].map(([l,v])=>(
+                <div key={l} style={{background:WH,borderRadius:5,padding:'6px',textAlign:'center'}}>
+                  <div style={{fontSize:8,color:G3,textTransform:'uppercase'}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:700}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {cliente.objetivo&&<div style={{fontSize:11,color:G4,fontStyle:'italic'}}>🎯 "{cliente.objetivo}"</div>}
+            {cliente.restricciones&&<div style={{fontSize:10,color:R,marginTop:3}}>⚠ Restricciones: {cliente.restricciones}</div>}
+            {clientTests.length>0&&<div style={{fontSize:10,color:G4,marginTop:4}}>💪 {clientTests.length} test{clientTests.length>1?'s':''} de fuerza registrado{clientTests.length>1?'s':''}</div>}
+            {cliente.referidoPor&&<div style={{fontSize:10,color:'#92400E',marginTop:3}}>🎁 Referido por: {cliente.referidoPor}</div>}
+          </div>
+          {/* Análisis IA */}
+          <AIAnalisisEvaluacion tipo="gym" datos={datosIA} onApply={aplicarSugerencia}/>
+        </div>
+      </div>
+    );
+  };
+
+  const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
     if(!clientWizard)return null;
     const [step,setStep]=useState(clientWizard.step||0);
     const [form,setForm]=useState(()=>({...clientWizard.cli}));
@@ -1094,6 +1186,30 @@ export default function App(){
               <div><span style={s.lbl}>Género</span>{sel2('genero',[['','Seleccionar'],['masculino','Masculino'],['femenino','Femenino']])}</div>
               <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Ocupación</span><input value={sc.ocupacion} onChange={e=>setSCK('ocupacion',e.target.value)} style={s.inp} placeholder="Trabajo / actividad principal"/></div>
               <div><span style={s.lbl}>Fecha de ingreso</span><input type="date" value={form.fechaIngreso} onChange={e=>set('fechaIngreso',e.target.value)} style={s.inp}/></div>
+              {/* ── POLÍTICA DE REFERIDOS ── */}
+              <div style={{gridColumn:'1/-1',background:'#FFF9EC',border:'1px solid #FCD34D',borderRadius:7,padding:'10px 12px',marginTop:4}}>
+                <div style={{fontSize:11,fontWeight:700,color:'#92400E',marginBottom:6}}>🎁 Política de referidos</div>
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:8}}>
+                  <div>
+                    <span style={s.lbl}>¿Quién lo recomendó?</span>
+                    <input value={form.referidoPor||''} onChange={e=>set('referidoPor',e.target.value)} list="clientes-referido" style={s.inp} placeholder="Nombre del cliente que lo refirió"/>
+                    <datalist id="clientes-referido">
+                      {clients.map(cl=><option key={cl.id} value={`${cl.nombre} ${cl.apellido}`}/>)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <span style={s.lbl}>Canal</span>
+                    <select value={form.referidoTipo||''} onChange={e=>set('referidoTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
+                      <option value="">— Seleccionar —</option>
+                      <option value="cliente">Cliente actual</option>
+                      <option value="redes">Redes sociales</option>
+                      <option value="paciente_fisio">Paciente de fisio</option>
+                      <option value="cartel">Cartel / vidriera</option>
+                      <option value="otro">Otro</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -1607,6 +1723,7 @@ export default function App(){
                     <button onClick={()=>{setSession(p=>({...p,clienteId:c.id,cliente:`${c.nombre} ${c.apellido}`}));setTab('session');}} style={{...s.btnBK,fontSize:10,padding:'4px 10px'}}>Usar en sesión →</button>
                   )}
                   {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
+                  {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
                   <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Editar</button>
                   <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
                 </div>
@@ -2407,6 +2524,19 @@ export default function App(){
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
               <div style={{fontWeight:700,fontSize:12,color:G4,textTransform:'uppercase',letterSpacing:'.04em'}}>Sesión ({rehabSession.length})</div>
               {rehabSession.length>0&&<button onClick={exportRehabPDF} style={{...s.btnR,fontSize:10,padding:'4px 8px',background:brand.colorPrimary}}>📄 PDF</button>}
+              {rehabSession.length>0&&<button onClick={()=>{
+                const protocolo={
+                  region:rehabRegion,fase:rehabFase,paciente:activeClientRehab,
+                  ejercicios:rehabSession.map(e=>({nombre:e.nombre,param:e.reps,series:e.series,notas:e.notas||''})),
+                  notas:rehabNotas,fecha:new Date().toISOString().split('T')[0]
+                };
+                try{
+                  const pend=JSON.parse(localStorage.getItem('protocolos_pendientes')||'[]');
+                  pend.unshift(protocolo);
+                  localStorage.setItem('protocolos_pendientes',JSON.stringify(pend.slice(0,10)));
+                  alert('✅ Protocolo enviado a sesión clínica.\nAbrilo desde FisioActiva → Registro de Sesiones → Nueva sesión → "Cargar protocolo".');
+                }catch(err){alert('Error: '+err.message);}
+              }} style={{...s.btnGreen,fontSize:10,padding:'4px 8px'}}>→ Pasar a sesión clínica</button>}
             </div>
             {rehabSession.length===0&&<div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3,fontSize:12}}>Agregá ejercicios desde el banco.</div>}
             <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:480,overflowY:'auto'}}>
@@ -2779,7 +2909,8 @@ export default function App(){
 
   return(
     <div style={s.page}>
-      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening}/>}
+      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
+      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} tests={[]} exs={exs} s={s} brand={brand}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...

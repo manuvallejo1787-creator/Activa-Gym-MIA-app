@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
-import { AIGeneradorProtocolo } from "./AIActiva.jsx";
+import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
 const PROT_SESION = {
@@ -546,7 +546,25 @@ function SesionClienteComp({ paciente }) {
             {protocoloEjercicios.length>0&&<span style={{marginLeft:8,color:TL2}}>· {protocoloEjercicios.length} ejercicios en protocolo</span>}
           </div>
         </div>
-        <button onClick={()=>{setF(newForm());setShowForm(true);}} style={s2.btnTl}>+ Nueva sesión</button>
+        <div style={{display:'flex',gap:6}}>
+          {(()=>{
+            let pend=[];try{pend=JSON.parse(localStorage.getItem('protocolos_pendientes')||'[]');}catch{}
+            if(pend.length===0)return null;
+            return <button onClick={()=>{
+              const p=pend[0];
+              const base=newForm();
+              base.ejercicios_lista=[
+                ...base.ejercicios_lista,
+                ...p.ejercicios.map((e,i)=>({id:'prot_imp_'+i,nombre:e.nombre+(e.param?` — ${e.param}`:''),activo:true,editado:true}))
+              ];
+              if(p.notas)base.notas=p.notas;
+              setF(base);setShowForm(true);
+              // limpiar el protocolo consumido
+              try{const rest=pend.slice(1);localStorage.setItem('protocolos_pendientes',JSON.stringify(rest));}catch{}
+            }} style={{...s2.btnG,background:'#DCFCE7',color:'#16A34A',borderColor:'#86EFAC',fontWeight:700}}>📥 Cargar protocolo ({pend.length})</button>;
+          })()}
+          <button onClick={()=>{setF(newForm());setShowForm(true);}} style={s2.btnTl}>+ Nueva sesión</button>
+        </div>
       </div>
       {/* Banner protocolo activo */}
       {protocoloEjercicios.length>0&&(
@@ -836,6 +854,31 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
             <button onClick={()=>{setCurrentEval(emptyEval());setEvalStep(0);setView('nueva-eval');}} style={fs.btnTL}>+ Nueva evaluación</button>
           </div>
         </div>
+        {/* Análisis IA de la evaluación */}
+        {last&&(()=>{
+          const datosIA={
+            nombre:currentPac.nombre,apellido:currentPac.apellido,
+            region:REGIONES_LIST.find(r=>r.k===currentPac.region)?.label||currentPac.region,
+            diagnostico:last.diagnostico||last.diagnosticoPT||'no registrado',
+            eva:last.eva_reposo||'no registrado',
+            rom:rp?`${rp}% del normal`:'no registrado',
+            fuerza:last.fuerza_mrc||last.fuerza||'no registrado',
+            screening:last.hallazgos_screening||last.tests_positivos||'no registrado',
+            antropometria:last.peso?`Peso ${last.peso}kg, Talla ${last.talla||'?'}cm`:'no registrada',
+            objetivos:last.objetivo||'no especificados',
+            evolucion:last.tiempo_evolucion||'no registrado',
+          };
+          const aplicarFisio=(ai)=>{
+            const upd={...currentPac};
+            const ultimaIdx=upd.evaluaciones.length-1;
+            if(ultimaIdx>=0&&ai.fase_sugerida){
+              upd.evaluaciones=upd.evaluaciones.map((e,i)=>i===ultimaIdx?{...e,fase:ai.fase_sugerida,_iaSugerencia:ai.interpretacion}:e);
+              savePaciente(upd);
+              alert('✅ Fase actualizada a '+(ai.fase_sugerida||'').toUpperCase()+' según análisis IA');
+            }
+          };
+          return <div style={{marginBottom:12}}><AIAnalisisEvaluacion tipo="fisio" datos={datosIA} onApply={aplicarFisio}/></div>;
+        })()}
         {/* KPIs */}
         {last&&(
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:12}}>
