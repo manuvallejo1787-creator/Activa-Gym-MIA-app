@@ -1021,11 +1021,11 @@ export default function App(){
   ];
 
   // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
-  const InformeClienteModal=({cliente,onClose,saveClient,tests,exs,s,brand})=>{
+  const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand})=>{
+    const {tests:clientTests}=useFuerzaTests(cliente?.id||null);
     if(!cliente)return null;
     const sc=cliente.screening||{};
     const nv=FASES_METODO[cliente.nivel]||{label:cliente.nivel,badge:'',color:'#374151'};
-    const clientTests=tests||[];
 
     const aplicarSugerencia=(ai)=>{
       const upd={...cliente};
@@ -1056,7 +1056,7 @@ export default function App(){
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Datos generales</h3>
         <table style="margin-bottom:14px">${row('Celular',cliente.celular)}${row('Fecha de ingreso',cliente.fechaIngreso)}${row('Fecha de evaluación',sc.fechaEvaluacion||cliente.fechaEval)}${row('Evaluador',sc.evaluador)}${row('Ocupación',sc.ocupacion)}${row('Nivel de actividad',sc.nivelActividad)}${row('Experiencia de entrenamiento',sc.expEntrenamiento)}${cliente.referidoPor?row('Referido por',cliente.referidoPor+(cliente.referidoTipo?' ('+cliente.referidoTipo+')':'')):''}</table>
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Antropometría</h3>
-        <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc)}${row('% Grasa',sc.pctGrasa?sc.pctGrasa+'%':'')}${row('Perímetro cintura',sc.perCintura?sc.perCintura+' cm':'')}${row('Perímetro cadera',sc.perCadera?sc.perCadera+' cm':'')}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
+        <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc)}${row('% Grasa',sc.pctGrasa?sc.pctGrasa+'%':'')}${row('Perímetro cintura',sc.per_cintura?sc.per_cintura+' cm':'')}${row('Perímetro cadera',sc.per_cadera?sc.per_cadera+' cm':'')}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Salud y antecedentes</h3>
         <table style="margin-bottom:14px">${row('Condición médica',sc.condicionMedica==='si'?sc.condicionDetalle||'Sí':'No refiere')}${row('Medicación',sc.medicacion==='si'?sc.medicacionDetalle||'Sí':'No')}${row('Lesiones activas',sc.lesionesActivas==='si'?sc.lesionesDetalle||'Sí':'No')}${row('Cirugías',sc.cirugias==='si'?sc.cirugiasDetalle||'Sí':'No')}${row('Dolor actual',sc.dolorActual==='si'?sc.dolorDetalle||'Sí':'No')}${cliente.restricciones?row('Restricciones',cliente.restricciones):''}</table>
         ${(sc.postura_hallazgos||sc.movilidad_hallazgos||sc.capacidades_hallazgos)?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Hallazgos funcionales</h3><table style="margin-bottom:14px">${row('Postura',sc.postura_hallazgos)}${row('Movilidad',sc.movilidad_hallazgos)}${row('Capacidades',sc.capacidades_hallazgos)}</table>`:''}
@@ -1067,13 +1067,41 @@ export default function App(){
       const w=window.open('','_blank');w.document.write(html);w.document.close();
     };
 
+    // Construir antropometría solo con campos presentes
+    const antroParts=[];
+    if(sc.peso)antroParts.push(`Peso ${sc.peso}kg`);
+    if(sc.talla)antroParts.push(`Talla ${sc.talla}cm`);
+    if(sc.imc)antroParts.push(`IMC ${sc.imc}`);
+    if(sc.pctGrasa)antroParts.push(`% grasa ${sc.pctGrasa}`);
+    if(sc.per_cintura)antroParts.push(`Cintura ${sc.per_cintura}cm`);
+    if(sc.per_cadera)antroParts.push(`Cadera ${sc.per_cadera}cm`);
+    if(sc.fcReposo)antroParts.push(`FC reposo ${sc.fcReposo}lpm`);
+    if(sc.ta)antroParts.push(`TA ${sc.ta}`);
+    // Dolor: el wizard usa 'leve'/'moderado'/'intenso', no 'si'
+    const dolorTxt=sc.dolorActual&&sc.dolorActual!=='no'
+      ? `${sc.dolorActual}${sc.dolorDetalle?' ('+sc.dolorDetalle+')':''}` : 'sin dolor referido';
+    const lesionTxt=sc.lesionesActivas&&sc.lesionesActivas!=='no'
+      ? `${sc.lesionesActivas}${sc.lesionesDetalle?' ('+sc.lesionesDetalle+')':''}` : 'sin lesiones activas';
+    // Hallazgos funcionales del evaluador
+    const hallazgos=[sc.postura_hallazgos&&`Postura: ${sc.postura_hallazgos}`,sc.movilidad_hallazgos&&`Movilidad: ${sc.movilidad_hallazgos}`,sc.capacidades_hallazgos&&`Capacidades: ${sc.capacidades_hallazgos}`].filter(Boolean).join('. ')||'sin hallazgos registrados';
+    // Tests de fuerza detallados
+    const testsTxt=clientTests.length>0
+      ? clientTests.map(t=>{
+          const rm=t.rm1_real||t.rm1_calculado;
+          const ratio=(rm&&sc.peso)?` = ${(rm/parseFloat(sc.peso)).toFixed(2)}× peso corporal`:'';
+          return `${t.test_nombre||t.test_id}: ${rm||'?'}kg (${t.reps_realizadas||'?'} reps, nivel ${t.nivel_resultado||'?'}${ratio})`;
+        }).join(' | ')
+      : 'NO HAY TESTS DE FUERZA REGISTRADOS para este cliente';
+
     const datosIA={
-      nombre:cliente.nombre,apellido:cliente.apellido,objetivo:cliente.objetivo,
-      nivel:nv.label,semaforo:cliente.semaforo,restricciones:cliente.restricciones,
-      antropometria:`Peso ${sc.peso||'?'}kg, Talla ${sc.talla||'?'}cm, IMC ${sc.imc||'?'}, Grasa ${sc.pctGrasa||'?'}%`,
-      tests:clientTests.map(t=>`${t.test_nombre}: ${t.rm1_real||t.rm1_calculado}kg (${t.nivel_resultado||'?'})`).join(', ')||'sin tests',
-      screening:`Actividad: ${sc.nivelActividad}. Experiencia: ${sc.expEntrenamiento}. Dolor: ${sc.dolorActual==='si'?sc.dolorDetalle:'no'}. Lesiones: ${sc.lesionesActivas==='si'?sc.lesionesDetalle:'no'}`,
-      experiencia:sc.expEntrenamiento,
+      nombre:cliente.nombre,apellido:cliente.apellido,
+      objetivo:cliente.objetivo||'no declarado',
+      nivel:nv.label,semaforo:cliente.semaforo,
+      restricciones:cliente.restricciones||'ninguna',
+      antropometria:antroParts.length>0?antroParts.join(', '):'NO REGISTRADA',
+      tests:testsTxt,
+      screening:`Nivel de actividad: ${sc.nivelActividad||'?'}. Experiencia de entrenamiento: ${sc.expEntrenamiento||'?'}. Entrena actualmente: ${sc.entrenamientoActual||'?'}. Dolor actual: ${dolorTxt}. Lesiones: ${lesionTxt}. Condición médica: ${sc.condicionMedica==='si'?(sc.condicionDetalle||'sí'):'no'}. Cirugías: ${sc.cirugias==='si'?(sc.cirugiasDetalle||'sí'):'no'}. Hallazgos funcionales: ${hallazgos}`,
+      experiencia:sc.expEntrenamiento||'no registrada',
     };
 
     return(
@@ -2910,7 +2938,7 @@ export default function App(){
   return(
     <div style={s.page}>
       {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
-      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} tests={[]} exs={exs} s={s} brand={brand}/>}
+      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...

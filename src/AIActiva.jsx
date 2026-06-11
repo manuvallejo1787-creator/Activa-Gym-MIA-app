@@ -503,7 +503,13 @@ Respondé ÚNICAMENTE con este JSON:
   "objetivos_sugeridos": ["objetivo 1", "objetivo 2", "objetivo 3"]
 }
 
-Incluí 4-6 ejercicios base apropiados. Basate en evidencia y en el estado real de la persona.`;
+Incluí 4-6 ejercicios base apropiados. Basate en evidencia y en el estado real de la persona.
+
+INSTRUCCIONES CRÍTICAS:
+- USÁ todos los datos provistos arriba. Si hay antropometría, tests de fuerza o hallazgos, INTEGRALOS explícitamente en tu interpretación.
+- Solo decí que un dato "no está disponible" si el texto dice literalmente "NO REGISTRADA", "NO HAY" o "no registrado". No asumas ausencia de datos que sí están.
+- Si hay tests de fuerza con niveles y ratios, usalos para fundamentar la fase y la metodología (ej: un cliente con fuerza nivel Intermedio/Avanzado no debería ir a RESTAURA salvo que haya dolor o lesión).
+- La interpretación debe referirse a los números concretos del cliente, no ser genérica.`;
 
       const data = await callClaude(prompt, 2200);
       setResult(data);
