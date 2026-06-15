@@ -4,7 +4,7 @@ import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, get
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -801,7 +801,14 @@ export default function App(){
   },[tab]);
   // Ejercicios en tiempo real (Supabase) — seeded from DB0 on first run
   const { exs, saveEjercicio: dbSaveEjercicio, deleteEjercicio: dbDeleteEjercicio, setExs } = useEjercicios(DB0);
-  const [session,setSession]=useState({obj:null,blocks:[],name:'',cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],notas:''});
+  // ── ESTADO DE PLAN SEMANAL ────────────────────────────────────────────────
+  // El plan agrupa de 1 a 5 sesiones (días) que comparten cliente/fecha/plan.
+  // Cada día = { id, obj, name, blocks, notas }. activeDia = día en edición.
+  const blankDia=(n=1)=>({id:genId('dia'),obj:null,name:`Día ${n}`,blocks:[],notas:''});
+  const [session,setSession]=useState({
+    cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
+    planNombre:'', dias:[blankDia(1)], activeDia:0,
+  });
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
   const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
   const [clients, setClientsLocal] = useState([]);
@@ -858,6 +865,42 @@ export default function App(){
     return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
   },[activeClient]);
 
+  // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
+  const numDias=session.dias?.length||1;
+  const activeDiaIdx=Math.min(session.activeDia||0,numDias-1);
+  const dia=session.dias?.[activeDiaIdx]||{obj:null,blocks:[],name:'',notas:''};
+  // Cronograma (plazos) del plan según la periodización del cliente y la fecha de inicio
+  const planMeta=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return planTimeline(PERIODIZACIONES[activeClient.periodizacion],session.fecha);
+  },[activeClient,session.fecha]);
+
+  // Modifica SOLO el día activo (fn recibe el día y devuelve el día nuevo)
+  const setDia=(fn)=>setSession(p=>{
+    const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
+    return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
+  });
+  const addDia=()=>setSession(p=>{
+    if((p.dias?.length||0)>=5)return p;
+    return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
+  });
+  const removeDia=(idx)=>setSession(p=>{
+    if((p.dias?.length||1)<=1)return p;
+    const dias=p.dias.filter((_,i)=>i!==idx).map((d,i)=>({...d,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Día ${i+1}`}));
+    return {...p,dias,activeDia:Math.max(0,Math.min(p.activeDia,dias.length-1))};
+  });
+  const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
+  const setNumDias=(target)=>setSession(p=>{
+    const cur=p.dias?.length||1;
+    if(target===cur||target<1||target>5)return p;
+    if(target>cur){
+      const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
+      return {...p,dias:[...p.dias,...extra]};
+    }
+    return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
+  });
+  const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
+
   // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
   const applyAISession=(aiResult)=>{
     // Orden canónico de bloques en una sesión
@@ -889,22 +932,22 @@ export default function App(){
         })),
         params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
       }));
-    setSession(p=>({...p,obj:p.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||p.name,notas:aiResult.objetivo_sesion||p.notas}));
+    setDia(d=>({...d,obj:d.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||d.name,notas:aiResult.objetivo_sesion||d.notas}));
     if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
   };
   const suggestBlocks=(obj)=>{
     const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
-    setSession(p=>({...p,obj,blocks:bs,name:`Sesión ${OBJS[obj].label}`}));
+    setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
   };
   const addBlock=()=>{
-    if(!addBType||!addBPos||session.blocks.length>=7)return;
+    if(!addBType||!addBPos||dia.blocks.length>=7)return;
     const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
-    setSession(p=>({...p,blocks:[...p.blocks,nb].sort((a,b)=>a.position-b.position)}));
+    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
     setAddBType('');setAddBPos('');
   };
-  const removeBlock=(id)=>setSession(p=>({...p,blocks:p.blocks.filter(b=>b.id!==id)}));
+  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
   const addExToBlock=(blockId,exId,override=false,note='')=>{
-    setSession(p=>({...p,blocks:p.blocks.map(b=>{
+    setDia(d=>({...d,blocks:d.blocks.map(b=>{
       if(b.id!==blockId||b.exercises.length>=5)return b;
       const exEntry={exId,override,note,
         params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
@@ -912,19 +955,19 @@ export default function App(){
       return{...b,exercises:[...b.exercises,exEntry]};
     })}));
   };
-  const updateExParam=(blockId,exId,key,val)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
+  const updateExParam=(blockId,exId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
     if(b.id!==blockId)return b;
     return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
   })}));
-  const updateExParams=(blockId,exId,params)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
+  const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
     if(b.id!==blockId)return b;
     return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,params:{...(be.params||{}), ...params}}:be)};
   })}));
-  const removeExFromBlock=(blockId,exId)=>setSession(p=>({...p,blocks:p.blocks.map(b=>{
+  const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
     if(b.id!==blockId)return b;
     return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
   })}));
-  const updateParams=(blockId,key,val)=>setSession(p=>({...p,blocks:p.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
+  const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
 
   const handlePickEx=(block,ex)=>{
     const rest=checkRestriction(ex,activeClient);
@@ -954,64 +997,141 @@ export default function App(){
     deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
   };
 
-  // ─── EXPORTAR PDF ────────────────────────────────────────────────────────
+  // ─── EXPORTAR PDF (PLAN COMPLETO: TODOS LOS DÍAS + PLAZOS + GRILLA 8 SEM) ──
   const exportPDF=()=>{
-    // One row per exercise (not per block)
-    const rows=session.blocks.flatMap(b=>{
-      const bd=BLOCKS[b.type];
-      const bgBlock=bd.color;
-      if(b.exercises.length===0){
-        return[`<tr>
-          <td style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;text-align:center;">${b.position}</td>
-          <td style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;">${bd.emoji||''} ${bd.label}</td>
-          <td colspan="7" style="padding:6px 10px;font-size:11px;color:#999;font-style:italic;">Sin ejercicios cargados</td>
-        </tr>`];
-      }
-      return b.exercises.map((be,idx)=>{
-        const ex=exs.find(e=>e.id===be.exId);
-        const exNombre=ex?ex.nombre:be.exId;
-        const p=be.params||b.params;
-        const pesoCell=be.pesoSug||be.pesoReal
-          ?`<span style="color:#7C3AED;font-weight:700;">${be.pesoSug?be.pesoSug+' kg (sug.)':''}</span>${be.pesoSug&&be.pesoReal?' / ':''}<span style="color:#166534;font-weight:700;">${be.pesoReal?be.pesoReal+' kg (real)':''}</span>`
-          :'—';
-        const bloqueCel=idx===0
-          ?`<td rowspan="${b.exercises.length}" style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;text-align:center;vertical-align:middle;">${b.position}</td>
-             <td rowspan="${b.exercises.length}" style="background:${bgBlock};color:#fff;font-weight:700;padding:6px 10px;font-size:11px;vertical-align:middle;">${bd.emoji||''} ${bd.label}</td>`
-          :'';
-        return`<tr style="border-bottom:1px solid #e0e0e0;">
-          ${bloqueCel}
-          <td style="padding:5px 10px;font-size:11px;font-weight:600;">${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:8px;padding:1px 5px;border-radius:99px;font-weight:700;">OVR</span>':''}</td>
-          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.series||'—'}</td>
-          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.reps||'—'}</td>
-          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.tempo||'—'}</td>
-          <td style="padding:5px 10px;font-size:11px;text-align:center;">${p.descanso||'—'}</td>
-          <td style="padding:5px 10px;font-size:11px;">${pesoCell}</td>
-          <td style="padding:5px 10px;font-size:11px;color:#666;font-style:italic;">${be.anotacion||''}</td>
-        </tr>`;
-      });
+    const diasConBloques=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasConBloques.length){alert('No hay días con bloques cargados para exportar.');return;}
+    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+
+    // Tabla de UN día (una fila por ejercicio + 8 celdas vacías para pesos semanales)
+    const tablaDia=(d)=>{
+      const rows=d.blocks.flatMap(b=>{
+        const bd=BLOCKS[b.type];const bg=bd.color;
+        if(b.exercises.length===0){
+          return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        }
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const exNombre=ex?ex.nombre:be.exId;
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
+          const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0
+            ?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`
+            :'';
+          return`<tr>
+            ${bloqueCel}
+            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
+            <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
+            ${celdasSem}
+          </tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr>
+          <th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}
+        </tr></thead><tbody>${rows}</tbody></table>
+        ${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+
+    // Secciones de cada día, separadas con salto de página
+    const seccionesDias=diasConBloques.map((d,i)=>{
+      const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}>
+        <div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${d.blocks.reduce((a,b)=>a+b.exercises.length,0)} ejercicios</div></div></div>
+        ${tablaDia(d)}
+      </section>`;
     }).join('');
-    const sfBanner=activeClient?`<div style="margin-bottom:14px;padding:10px 14px;border-radius:6px;background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};font-size:11px;"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
+
+    // ── PLAZOS DEL PLAN (punto 4) ──
+    let plazosHtml='';
+    if(planMeta){
+      const faseRows=planMeta.fases.map(f=>`<tr>
+        <td style="padding:5px 9px;font-weight:700;font-size:10px;">${f.nombre}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.semanasLabel||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.fIni&&f.fFin?`${f.fIni} → ${f.fFin}`:'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.reps||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.intensidad||'—'}</td>
+        <td style="padding:5px 9px;font-size:9px;color:#555;">${f.objetivo||''}</td>
+      </tr>`).join('');
+      const totalTxt=planMeta.secuencial&&planMeta.totalSemanas
+        ?`<strong>${planMeta.totalSemanas} semanas</strong>${planMeta.fechaFin?` · ${planMeta.fechaInicio} → ${planMeta.fechaFin}`:''}`
+        :`${planMeta.duracionTexto} <span style="color:#888;">(fases no secuenciales en el tiempo)</span>`;
+      const faseMetodo=activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:(activeClient?activeClient.nivel:'—');
+      plazosHtml=`<section class="plazos">
+        <div class="sec-title">📅 Plazos del plan — ${planMeta.nombre}</div>
+        <div style="font-size:10px;color:#555;margin:2px 0 8px;">Autor/base: ${planMeta.autor||'—'} · Duración total: ${totalTxt}</div>
+        <div style="font-size:10px;color:#555;margin-bottom:8px;">Fase del Método Activa Integra: <strong style="color:${brand.colorPrimary};">${(faseMetodo||'').toUpperCase()}</strong> · El cronograma de abajo corresponde a las fases del <strong>plan asignado</strong> (no del método).</div>
+        <table class="plan"><thead><tr><th>Fase del plan</th><th style="text-align:center;">Semanas</th><th style="text-align:center;">Fechas estimadas</th><th style="text-align:center;">Reps</th><th style="text-align:center;">Intensidad</th><th>Objetivo</th></tr></thead><tbody>${faseRows}</tbody></table>
+      </section>`;
+    }
+
+    const sfBanner=activeClient?`<div class="sf" style="background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
     const logoHtml=brand.logoImg
-      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:50px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:22px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-family:Arial,sans-serif;font-size:10px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
-      :`<div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${session.name}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:28px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:14px;margin-bottom:18px}table{width:100%;border-collapse:collapse;margin-top:12px}th{background:#1a1a1a;color:#fff;padding:8px 10px;font-size:10px;text-align:left;text-transform:uppercase;letter-spacing:.06em}td{border-bottom:1px solid #e0e0e0}tr:nth-child(even) td{background:#f9f9f9}.footer{margin-top:24px;font-size:10px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:10px}.notas{margin-top:14px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:10px 14px;font-size:11px;color:#555}@media print{body{padding:16px}}</style></head><body><div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">${session.name}</div><div style="font-size:10px;color:#666;margin-top:3px">Nivel: ${activeClient?NIVEL[activeClient.nivel].label:'—'} · Cliente: ${session.cliente||'—'} · Fecha: ${session.fecha}</div></div></div>${sfBanner}<table><thead><tr><th style="width:32px">#</th><th>Bloque</th><th>Ejercicio</th><th>Series</th><th>Reps</th><th>Tempo</th><th>Descanso</th><th>Peso</th><th>Anotaciones</th></tr></thead><tbody>${rows}</tbody></table>${session.notas?`<div class="notas"><strong>Notas:</strong> ${session.notas}</div>`:''}<div class="footer">${brand.gymName} · ${brand.gymSub} · ${new Date().toLocaleDateString('es-ES')}</div><script>window.onload=()=>{window.print()}<\/script></body></html>`;
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      .sf{margin-bottom:12px;padding:9px 13px;border-radius:6px;font-size:11px}
+      .sec-title{font-size:14px;font-weight:800;color:${brand.colorPrimary};margin-top:4px}
+      .plazos{margin-bottom:16px;padding-bottom:14px;border-bottom:2px dashed #ddd}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:2px}
+      .dia-num{background:${brand.colorPrimary};color:#fff;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+      .dia-title{font-size:15px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:6px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${planNom}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:800;color:#111">${planNom}</div>
+          <div style="font-size:10px;color:#666;margin-top:3px">Cliente: ${session.cliente||'—'}${activeClient?` · Nivel: ${NIVEL[activeClient.nivel].label}`:''} · Inicio: ${session.fecha} · ${diasConBloques.length} sesión/es por semana</div>
+        </div>
+      </div>
+      ${sfBanner}
+      ${plazosHtml}
+      ${seccionesDias}
+      <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
     const w=window.open('','_blank');w.document.write(html);w.document.close();
   };
 
   const exportCSV=()=>{
-    const headers=['Posición','Bloque','Ejercicio','Override','Nota Override','Series','Reps','RPE','Tempo','Descanso','Cliente','Nivel','Semáforo','Restricciones','Objetivo','Fecha'];
+    const headers=['Día','Posición','Bloque','Ejercicio','Override','Series','Reps','RPE','Tempo','Descanso','% 1RM','Peso sug. (kg)',...Array.from({length:8},(_,i)=>`Sem ${i+1}`),'Cliente','Nivel','Plan','Fecha inicio'];
     const rows=[];
     const nivelLabel=activeClient?NIVEL[activeClient.nivel].label:'';
-    const sfLabel=activeClient?SF[activeClient.semaforo].label:'';
-    const rest=activeClient?activeClient.restricciones:'';
-    session.blocks.forEach(b=>{
-      const bd=BLOCKS[b.type];
-      if(b.exercises.length===0)rows.push([b.position,bd.label,'(sin ejercicios)','','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,session.cliente,nivelLabel,sfLabel,rest,session.obj?OBJS[session.obj].label:'',session.fecha]);
-      else b.exercises.forEach(be=>{const ex=exs.find(e=>e.id===be.exId);rows.push([b.position,bd.label,ex?ex.nombre:be.exId,be.override?'SI':'NO',be.note||'',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,session.cliente,nivelLabel,sfLabel,rest,session.obj?OBJS[session.obj].label:'',session.fecha]);});
+    const planNom=session.planNombre||'';
+    (session.dias||[]).forEach((d,di)=>{
+      if(!d.obj)return;
+      const diaLbl=d.name||`Día ${di+1}`;
+      const objLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      d.blocks.forEach(b=>{
+        const bd=BLOCKS[b.type];
+        if(b.exercises.length===0){rows.push([diaLbl,b.position,bd.label,'(sin ejercicios)','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,'','','','','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);return;}
+        b.exercises.forEach(be=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          rows.push([diaLbl,b.position,bd.label,ex?ex.nombre:be.exId,be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
+        });
+      });
     });
     const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
-    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${session.name.replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(planNom||'plan').replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
   };
 
   const OverlayWrap=({children,wide})=>(
@@ -1056,15 +1176,21 @@ export default function App(){
       saveClient(upd);
       // Llevar al constructor de sesión con el cliente vinculado y la fase aplicada
       const faseObj=ai.fase_sugerida||upd.nivel||'activa';
-      setSession(p=>({
-        ...p,
-        clienteId:cliente.id,
-        cliente:`${cliente.nombre} ${cliente.apellido}`,
-        obj:faseObj,
-        name:`Sesión ${(FASES_METODO[faseObj]?.label)||faseObj}`,
-        notas:ai.objetivos_sugeridos?.length?ai.objetivos_sugeridos[0]:p.notas,
-        blocks:p.blocks&&p.blocks.length?p.blocks:(OBJS[faseObj]?.blocks||[]).map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}))
-      }));
+      setSession(p=>{
+        const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
+        return {
+          ...p,
+          clienteId:cliente.id,
+          cliente:`${cliente.nombre} ${cliente.apellido}`,
+          dias:(p.dias||[]).map((d,i)=>i!==idx?d:({
+            ...d,
+            obj:faseObj,
+            name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${(FASES_METODO[faseObj]?.label)||faseObj}`,
+            notas:ai.objetivos_sugeridos?.length?ai.objetivos_sugeridos[0]:d.notas,
+            blocks:d.blocks&&d.blocks.length?d.blocks:(OBJS[faseObj]?.blocks||[]).map((type,i2)=>({id:Date.now()+i2,type,position:i2+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}))
+          }))
+        };
+      });
       onClose();
       setTab('session');
       setTimeout(()=>alert('✅ Sugerencias aplicadas: fase '+faseObj.toUpperCase()+(found?' · '+ai.metodologia_sugerida:'')+'.\nTe llevé al Constructor con el cliente vinculado. Podés generar la sesión con IA o armarla a mano.'),150);
@@ -1808,10 +1934,43 @@ export default function App(){
     </div>
   );
 
+  // ── BARRA DE DÍAS DEL PLAN (sesiones por semana 1–5) ──────────────────────
+  const DiaTabs=()=>(
+    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`,padding:'10px 12px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
+        <div style={{fontSize:12,fontWeight:700,color:'#111'}}>🗓️ Sesiones por semana</div>
+        <div style={{display:'flex',gap:4,alignItems:'center'}}>
+          {[1,2,3,4,5].map(n=>(
+            <button key={n} onClick={()=>setNumDias(n)} style={{width:28,height:28,borderRadius:6,border:`1px solid ${numDias===n?brand.colorPrimary:G2}`,background:numDias===n?brand.colorPrimary:WH,color:numDias===n?WH:G4,fontWeight:800,fontSize:12,cursor:'pointer'}}>{n}</button>
+          ))}
+          <span style={{fontSize:10,color:G3,marginLeft:4}}>día/s</span>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {(session.dias||[]).map((d,i)=>{
+          const act=i===activeDiaIdx;
+          const nEj=d.blocks.reduce((a,b)=>a+b.exercises.length,0);
+          return(
+            <div key={d.id} onClick={()=>gotoDia(i)} style={{cursor:'pointer',display:'flex',alignItems:'center',gap:6,background:act?brand.colorPrimary:'#f1f1f1',color:act?WH:'#333',borderRadius:8,padding:'6px 10px',border:`1px solid ${act?brand.colorPrimary:G2}`}}>
+              <span style={{fontWeight:800,fontSize:12}}>{i+1}</span>
+              <div style={{lineHeight:1.1}}>
+                <div style={{fontSize:11,fontWeight:700}}>{d.name||`Día ${i+1}`}</div>
+                <div style={{fontSize:8,opacity:.85}}>{d.obj?`${OBJS[d.obj].label} · ${nEj} ej.`:'sin armar'}</div>
+              </div>
+              {numDias>1&&<span onClick={(e)=>{e.stopPropagation();removeDia(i);}} style={{marginLeft:2,fontSize:14,lineHeight:1,opacity:.7}}>×</span>}
+            </div>
+          );
+        })}
+        {numDias<5&&<button onClick={addDia} style={{...s.btnG,fontSize:11,padding:'6px 10px',borderStyle:'dashed'}}>+ Día</button>}
+      </div>
+    </div>
+  );
+
   // ── TAB: SESIÓN ────────────────────────────────────────────────────────────
   const SessionTab=()=>{
-    if(!session.obj)return(
+    if(!dia.obj)return(
       <div style={{padding:'16px 14px'}}>
+        {DiaTabs()}
         {clients.filter(c=>c.screeningCompleto).length>0&&(
           <div style={{...s.card,marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Vincular cliente a la sesión</div>
@@ -1867,8 +2026,38 @@ export default function App(){
             </div>
           );
         })()}
+        {/* PLAZOS DEL PLAN — duración total y fases con fechas (punto 4) */}
+        {planMeta&&(
+          <div style={{background:'#0A3D62',borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:'4px solid #1BAA86'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:800,color:'#7FE9CE'}}>📆 Plazos del plan asignado</div>
+                <div style={{fontSize:10,color:'#9FD9EC',marginTop:1}}>{planMeta.nombre}</div>
+              </div>
+              <span style={{background:'#1BAA86',color:'#04261C',fontSize:10,fontWeight:800,padding:'3px 10px',borderRadius:99}}>
+                {planMeta.secuencial&&planMeta.totalSemanas?`${planMeta.totalSemanas} semanas`:planMeta.duracionTexto}
+              </span>
+            </div>
+            {planMeta.secuencial&&planMeta.fechaFin&&(
+              <div style={{fontSize:10,color:'#9FD9EC',marginBottom:8}}>Inicio: <strong style={{color:WH}}>{planMeta.fechaInicio}</strong> · Fin estimado: <strong style={{color:WH}}>{planMeta.fechaFin}</strong> <span style={{opacity:.7}}>(según fecha del plan)</span></div>
+            )}
+            <div style={{display:'flex',flexDirection:'column',gap:5}}>
+              {planMeta.fases.map((f,i)=>(
+                <div key={i} style={{background:'#0d4f7d',borderRadius:6,padding:'7px 10px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                  <span style={{background:'#1BAA86',color:'#04261C',fontWeight:800,fontSize:10,width:20,height:20,borderRadius:5,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{i+1}</span>
+                  <div style={{flex:1,minWidth:140}}>
+                    <div style={{fontSize:11,fontWeight:700,color:WH}}>{f.nombre}</div>
+                    <div style={{fontSize:9,color:'#9FD9EC'}}>{f.semanasLabel}{f.fIni&&f.fFin?` · ${f.fIni} → ${f.fFin}`:''}</div>
+                  </div>
+                  <div style={{fontSize:9,color:'#7FE9CE',textAlign:'right'}}>{f.reps} reps · {f.intensidad}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:8,fontSize:9,color:'#9FD9EC',fontStyle:'italic'}}>Estas son las fases del <strong style={{color:'#7FE9CE'}}>plan</strong> (ej. periodización). La fase del <strong style={{color:'#7FE9CE'}}>Método</strong> ({activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:activeClient?.nivel}) es transversal y se mantiene en el encabezado.</div>
+          </div>
+        )}
         <div style={{background:BK,borderRadius:10,padding:'18px 16px',marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:4}}>Seleccionar nivel del método</div>
+          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:4}}>Nivel del método — Día {activeDiaIdx+1}</div>
           <div style={{fontSize:12,color:G3}}>La sugerencia de bloques se adapta al continuum Activa Integra.</div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
@@ -1898,12 +2087,17 @@ export default function App(){
         </div>
       </div>
     );
-    const statusColor=session.blocks.length>=5&&session.blocks.length<=7?'#16A34A':R;
+    const statusColor=dia.blocks.length>=5&&dia.blocks.length<=7?'#16A34A':R;
     return(
       <div style={{padding:'12px 14px'}}>
+        {DiaTabs()}
         <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:8}}>
-            <div><span style={s.lbl}>Nombre de sesión</span><input value={session.name} onChange={e=>setSession(p=>({...p,name:e.target.value}))} style={s.inp}/></div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+            <div><span style={s.lbl}>Nombre del plan</span><input value={session.planNombre} onChange={e=>setSession(p=>({...p,planNombre:e.target.value}))} placeholder="Ej: Plan pérdida de grasa 16 sem" style={s.inp}/></div>
+            <div><span style={s.lbl}>Fecha inicio del plan</span><input type="date" value={session.fecha} onChange={e=>setSession(p=>({...p,fecha:e.target.value}))} style={s.inp}/></div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+            <div><span style={s.lbl}>Nombre del día {activeDiaIdx+1}</span><input value={dia.name} onChange={e=>setDia(d=>({...d,name:e.target.value}))} style={s.inp}/></div>
             <div>
               <span style={s.lbl}>Cliente</span>
               {clients.filter(c=>c.screeningCompleto).length>0
@@ -1914,19 +2108,19 @@ export default function App(){
                 :<input value={session.cliente} onChange={e=>setSession(p=>({...p,cliente:e.target.value}))} placeholder="Nombre del cliente" style={s.inp}/>
               }
             </div>
-            <div><span style={s.lbl}>Fecha</span><input type="date" value={session.fecha} onChange={e=>setSession(p=>({...p,fecha:e.target.value}))} style={s.inp}/></div>
           </div>
-          <div><span style={s.lbl}>Notas del entrenador</span><input value={session.notas} onChange={e=>setSession(p=>({...p,notas:e.target.value}))} placeholder="Observaciones, indicaciones..." style={s.inp}/></div>
+          <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
           {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
-              <span style={s.tag(NIVEL[OBJS[session.obj].nivelKey].color)}>{OBJS[session.obj].label}</span>
-              <span style={{...s.tag(statusColor)}}>{session.blocks.length}/5-7 bloques</span>
+              <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
+              <span style={{...s.tag(statusColor)}}>{dia.blocks.length}/5-7 bloques</span>
               {activeClient&&<span style={{fontSize:12}}>{SF[activeClient.semaforo].emoji}</span>}
             </div>
             <div style={{display:'flex',gap:6}}>
-              <button onClick={()=>setTab('export')} style={{...s.btnBK,fontSize:11,padding:'5px 10px'}}>Exportar →</button>
-              <button onClick={()=>{setSession({obj:null,blocks:[],name:'',cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],notas:''});setExpandedBlock(null);setSelBlock(null);}} style={s.btnG}>← Nuevo</button>
+              <button onClick={()=>setTab('export')} style={{...s.btnBK,fontSize:11,padding:'5px 10px'}}>Exportar plan →</button>
+              <button onClick={()=>setDia(d=>({...d,obj:null,blocks:[]}))} style={s.btnG}>↺ Rearmar día</button>
+              <button onClick={resetPlan} style={s.btnG}>← Nuevo plan</button>
             </div>
           </div>
         </div>
@@ -1960,7 +2154,31 @@ export default function App(){
             </div>
           </OverlayWrap>
         )}
-        {session.blocks.map(block=>{
+        {/* CONTADOR DE DURACIÓN DE LA SESIÓN (por día, se recalcula y reinicia en cada sesión) */}
+        {(()=>{
+          const dur=calcularDuracionSesion(dia.blocks);
+          const col=colorDuracion(dur.totalMin);
+          const totEx=dia.blocks.reduce((a,b)=>a+b.exercises.length,0);
+          return(
+            <div style={{background:WH,border:`1px solid ${G2}`,borderLeft:`4px solid ${col.color}`,borderRadius:8,padding:'10px 14px',marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:800,color:'#111'}}>⏱ Duración estimada — {dia.name||`Día ${activeDiaIdx+1}`}</div>
+                  <div style={{fontSize:9,color:G3,marginTop:1}}>Calent. {dur.calentamiento}′ · Trabajo {dur.ejercicios}′ · Transic. {dur.transiciones}′ · Vuelta calma {dur.vueltaCalma}′ · {totEx} ejercicio/s</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <span style={{fontSize:28,fontWeight:800,color:col.color,lineHeight:1}}>{dur.totalMin}</span>
+                  <span style={{fontSize:12,color:col.color}}> min</span>
+                  <div style={{fontSize:10,color:col.color,fontWeight:700}}>{col.label}</div>
+                </div>
+              </div>
+              <div style={{background:G2,borderRadius:99,height:5,overflow:'hidden',marginTop:7}}>
+                <div style={{width:Math.min(dur.totalMin/90*100,100)+'%',background:col.color,height:'100%',borderRadius:99,transition:'width .4s'}}/>
+              </div>
+            </div>
+          );
+        })()}
+        {dia.blocks.map(block=>{
           const bd=BLOCKS[block.type];
           const isExp=expandedBlock===block.id;
           const isSel=selBlock===block.id;
@@ -2024,8 +2242,8 @@ export default function App(){
                   {block.exercises.map(be=>{
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
-                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
                     const exParams=be.params||block.params;
+                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,exParams.reps);
                     // Seed peso sugerido the first time
                     if(sug&&be.pesoSug===''&&sug.pesoSugerido){
                       setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
@@ -2043,15 +2261,34 @@ export default function App(){
                           <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
                         </div>
                         {/* Parámetros individuales por ejercicio */}
-                        <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4,marginBottom:5}}>
-                          {[['series','Series'],['reps','Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Desc.']].map(([k,lbl])=>(
-                            <div key={k}>
-                              <div style={{fontSize:8,color:G3,marginBottom:1,textTransform:'uppercase'}}>{lbl}</div>
-                              <input value={exParams[k]||''} onChange={e=>updateExParams(block.id,be.exId,{[k]:e.target.value})}
-                                style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
+                        {(()=>{
+                          const modoT=exParams.modo?exParams.modo==='tiempo':/seg|min|\d+:\d{2}/.test(String(exParams.reps||'').toLowerCase());
+                          return(
+                          <div style={{marginBottom:5}}>
+                            <div style={{display:'flex',gap:4,marginBottom:4}}>
+                              <span style={{fontSize:8,color:G3,textTransform:'uppercase',alignSelf:'center'}}>Medir por:</span>
+                              {[['reps','Repeticiones'],['tiempo','⏱ Tiempo']].map(([mv,ml])=>(
+                                <button key={mv} onClick={()=>updateExParams(block.id,be.exId,{modo:mv})}
+                                  style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,cursor:'pointer',border:`1px solid ${(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:G2}`,background:(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:WH,color:(modoT?mv==='tiempo':mv==='reps')?WH:G4}}>{ml}</button>
+                              ))}
+                              {modoT&&<span style={{fontSize:8,color:G3,alignSelf:'center'}}>isométricos · cardio (ej: 45s, 2min)</span>}
                             </div>
-                          ))}
-                        </div>
+                            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4}}>
+                              {[['series','Series'],['reps',modoT?'Tiempo/serie':'Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Desc.']].map(([k,lbl])=>{
+                                const dim=modoT&&k==='tempo';
+                                return(
+                                  <div key={k}>
+                                    <div style={{fontSize:8,color:dim?'#ccc':(modoT&&k==='reps'?brand.colorPrimary:G3),marginBottom:1,textTransform:'uppercase',fontWeight:modoT&&k==='reps'?700:400}}>{lbl}</div>
+                                    <input value={exParams[k]||''} onChange={e=>updateExParams(block.id,be.exId,{[k]:e.target.value})}
+                                      placeholder={modoT&&k==='reps'?'45s':dim?'n/a':''} disabled={dim}
+                                      style={{width:'100%',border:`1px solid ${modoT&&k==='reps'?brand.colorPrimary:G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:dim?'#f3f3f3':WH,color:dim?'#bbb':'#111',outline:'none'}}/>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          );
+                        })()}
                         {/* Peso sugerido + real + anotaciones */}
                         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:4}}>
                           <div>
@@ -2060,7 +2297,10 @@ export default function App(){
                               <input value={be.pesoSug||''} onChange={e=>updateExParam(block.id,be.exId,'pesoSug',e.target.value)}
                                 placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
                                 style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
-                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1}}>rango: {sug.pesoRango} · {sug.pct}% 1RM</div>}
+                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1,lineHeight:1.3}}>
+                                <strong style={{color:'#6D28D9'}}>{sug.reps} reps = {sug.pct}% del 1RM</strong> ({sug.rm1}kg)<br/>
+                                rango {sug.pesoRango} · {sug.formulaLabel}{sug.pctFueraRango?' · reps fuera de rango':''}
+                              </div>}
                             </div>
                           </div>
                           <div>
@@ -2089,7 +2329,7 @@ export default function App(){
                       <div style={s.lbl}>Ejercicios del bloque</div>
                       <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
                         {exs.filter(e=>e.bloque===block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
-                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan);
+                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,block.params.reps);
                           const added=block.exercises.some(be=>be.exId===ex.id);
                           const rest=checkRestriction(ex,activeClient);
                           const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':pickSug?'#FAF5FF':WH;
@@ -2135,7 +2375,7 @@ export default function App(){
             </div>
           );
         })}
-        {session.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
+        {dia.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
           <div style={s.card}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>Agregar bloque manual</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 90px 80px',gap:8}}>
@@ -2289,19 +2529,22 @@ export default function App(){
   };
   // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
   const ExportTab=()=>{
-    const hasSession=session.obj&&session.blocks.length>0;
-    const totalEx=session.blocks.reduce((a,b)=>a+b.exercises.length,0);
+    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    const hasSession=diasArmados.length>0;
+    const totalEx=diasArmados.reduce((a,d)=>a+d.blocks.reduce((x,b)=>x+b.exercises.length,0),0);
+    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
     return(
       <div style={{padding:'16px 14px'}}>
         <div style={{background:BK,borderRadius:10,padding:'16px 18px',marginBottom:16,borderLeft:`4px solid ${hasSession?'#16A34A':brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH,marginBottom:6}}>{hasSession?`Sesión lista: ${session.name}`:'Sin sesión activa'}</div>
+          <div style={{fontSize:14,fontWeight:800,color:WH,marginBottom:6}}>{hasSession?`Plan listo: ${planNom}`:'Sin sesiones armadas'}</div>
           {hasSession&&(
             <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
-              {[['Nivel',activeClient?NIVEL[activeClient.nivel].label:OBJS[session.obj].label],['Semáforo',activeClient?`${SF[activeClient.semaforo].emoji} ${SF[activeClient.semaforo].label}`:'—'],['Cliente',session.cliente||'Sin nombre'],['Bloques',session.blocks.length],['Ejercicios',totalEx]].map(([k,v])=>(
+              {[['Nivel método',activeClient?NIVEL[activeClient.nivel].label:'—'],['Sesiones/semana',diasArmados.length],['Cliente',session.cliente||'Sin nombre'],['Ejercicios totales',totalEx],['Registro',`8 semanas`]].map(([k,v])=>(
                 <div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{k}</div><div style={{fontSize:13,color:WH,fontWeight:700}}>{v}</div></div>
               ))}
             </div>
           )}
+          {hasSession&&<div style={{marginTop:8,fontSize:10,color:G3}}>El PDF incluye los {diasArmados.length} día/s en un solo documento, separados por página, con grilla de 8 semanas para registrar pesos{planMeta?' y los plazos del plan':''}.</div>}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
           <div style={{...s.card,borderTop:`4px solid ${brand.colorPrimary}`,padding:'20px 18px'}}>
@@ -3002,8 +3245,8 @@ export default function App(){
           <div style={{textAlign:'right'}}>
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
             <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · v
-          {session.blocks.length>0&&(()=>{
-            const dur=calcularDuracionSesion(session.blocks);
+          {dia.blocks.length>0&&(()=>{
+            const dur=calcularDuracionSesion(dia.blocks);
             const col=colorDuracion(dur.totalMin);
             return(
               <div style={{background:G1,borderRadius:7,padding:'8px 12px',marginTop:6,border:`1px solid ${G2}`}}>

@@ -67,11 +67,23 @@ export const TESTS_FUERZA = [
 //   principiantes y adultos mayores (cargas livianas, muchas repeticiones, sin
 //   llegar al fallo máximo → menor riesgo de lesión)
 export const FORMULAS_1RM = {
-  epley_brzycki: {
-    label: 'Epley + Brzycki',
-    sub: 'Estándar · cargas altas, hasta 12 reps',
+  brzycki: {
+    label: 'Brzycki',
+    sub: 'Más conservadora · ideal principiantes, hasta 10–12 reps',
     maxReps: 12,
-    recomendado: 'Atletas e intermedios/avanzados con cargas pesadas',
+    recomendado: 'Principiantes y reacondicionamiento: estima algo más bajo, margen de seguridad mayor',
+  },
+  epley: {
+    label: 'Epley',
+    sub: 'Algo más alta · intermedios/avanzados, hasta 12 reps',
+    maxReps: 12,
+    recomendado: 'Clientes con experiencia y buena técnica con cargas pesadas',
+  },
+  epley_brzycki: {
+    label: 'Epley + Brzycki (promedio)',
+    sub: 'Promedio de ambas · uso general, hasta 12 reps',
+    maxReps: 12,
+    recomendado: 'Opción intermedia equilibrada cuando no querés decidir entre una u otra',
   },
   lombardi: {
     label: 'Lombardi',
@@ -90,10 +102,13 @@ export const calcular1RM = (peso, reps, formula = 'epley_brzycki') => {
     return Math.round(peso * Math.pow(reps, 0.10));
   }
 
-  // epley_brzycki (default)
-  if (reps > 12) return null; // poco confiable con muchas reps para esta fórmula
+  if (reps > 12) return null; // poco confiable con muchas reps para estas fórmulas
   const brzycki = peso * (36 / (37 - reps));
   const epley   = peso * (1 + 0.0333 * reps);
+
+  if (formula === 'brzycki') return Math.round(brzycki);
+  if (formula === 'epley')   return Math.round(epley);
+  // epley_brzycki (promedio) — también respalda registros antiguos
   return Math.round((brzycki + epley) / 2);
 };
 
@@ -274,96 +289,131 @@ export const PERIODIZACIONES = {
 // Calcula el tiempo total estimado de una sesión basado en:
 // sets × reps × tempo + descansos + transiciones
 
+// ─── CALCULADORA DE DURACIÓN DE SESIÓN ──────────────────────────────────
+// Estima el tiempo real sumando, ejercicio por ejercicio:
+//   trabajo = series × (reps × cadencia)   [modo reps]
+//   trabajo = series × duración_seg         [modo tiempo: isométricos, cardio]
+//   + pausas entre series  + transiciones entre ejercicios y bloques
+//   + calentamiento y vuelta a la calma
+
 export const parseTempo = (tempoStr) => {
-  // "2-0-1" → eccentric 2s + pause 0s + concentric 1s = 3s/rep
-  // "3-1-2" → 6s/rep
-  if (!tempoStr) return 3; // default 3s/rep
-  const parts = tempoStr.split('-').map(Number);
-  if (parts.length >= 3) return parts[0] + parts[1] + parts[2];
-  if (parts.length === 2) return parts[0] + parts[1];
+  // "2-0-1" → excéntrica 2s + pausa 0s + concéntrica 1s = 3s/rep ; "3-1-2" → 6s/rep
+  if (!tempoStr) return 3; // por defecto 3s/rep
+  const parts = String(tempoStr).split('-').map(Number).filter(n => !isNaN(n));
+  if (parts.length >= 2) return parts.reduce((a, b) => a + b, 0);
   return 3;
 };
 
 export const parseReps = (repsStr) => {
-  // "10-12" → promedio 11
-  // "30 seg" → 30 seg ÷ 3 s/rep ≈ 10 reps
+  // "10-12" → promedio 11 ; "12" → 12
   if (!repsStr) return 10;
-  if (repsStr.includes('seg') || repsStr.includes('s')) {
-    const n = parseInt(repsStr);
-    return isNaN(n) ? 10 : n; // para bloques de tiempo, devuelve segundos directamente
+  const str = String(repsStr).replace(/–|—/g, '-');
+  if (str.includes('-')) {
+    const [a, b] = str.split('-').map(s => parseInt(s)).filter(n => !isNaN(n));
+    if (a != null && b != null) return Math.round((a + b) / 2);
   }
-  if (repsStr.includes('-')) {
-    const [a, b] = repsStr.split('-').map(Number);
-    return Math.round((a + b) / 2);
-  }
-  const n = parseInt(repsStr);
+  const n = parseInt(str);
   return isNaN(n) ? 10 : n;
 };
 
 export const parseDescanso = (descansoStr) => {
-  // "90s" → 90 seg
-  // "2 min" → 120 seg
+  // "90s" → 90 ; "2 min" → 120 ; "1:30" → 90
   if (!descansoStr) return 90;
-  const minMatch = descansoStr.match(/(\d+)\s*min/);
-  const secMatch = descansoStr.match(/(\d+)\s*s/);
+  const s = String(descansoStr).toLowerCase();
+  const mmss = s.match(/(\d+):(\d{1,2})/);
+  if (mmss) return parseInt(mmss[1]) * 60 + parseInt(mmss[2]);
+  const minMatch = s.match(/(\d+)\s*min/);
+  const secMatch = s.match(/(\d+)\s*s/);
   if (minMatch) return parseInt(minMatch[1]) * 60;
   if (secMatch) return parseInt(secMatch[1]);
-  return 90;
+  const n = parseInt(s);
+  return isNaN(n) ? 90 : n;
 };
 
-export const calcularDuracionBloque = (bloque) => {
-  const { params } = bloque;
-  const series    = parseInt(params.series) || 3;
-  const repsVal   = parseReps(params.reps);
-  const tempoSec  = parseTempo(params.tempo);
-  const descanso  = parseDescanso(params.descanso);
+// Convierte un valor de tiempo a SEGUNDOS: "45s", "30 seg", "2 min", "1:30", "90"
+export const parseTiempo = (str) => {
+  if (str == null) return 0;
+  const s = String(str).toLowerCase().trim();
+  if (!s) return 0;
+  const mmss = s.match(/^(\d+):(\d{1,2})$/);
+  if (mmss) return parseInt(mmss[1]) * 60 + parseInt(mmss[2]);
+  const min = s.match(/(\d+(?:[.,]\d+)?)\s*min/);
+  const seg = s.match(/(\d+)\s*(?:seg|s)\b/);
+  let total = 0, matched = false;
+  if (min) { total += Math.round(parseFloat(min[1].replace(',', '.')) * 60); matched = true; }
+  if (seg) { total += parseInt(seg[1]); matched = true; }
+  if (matched) return total;
+  const n = parseFloat(s.replace(',', '.'));
+  return isNaN(n) ? 0 : Math.round(n); // número solo → segundos
+};
 
-  const isTimeBlock = (params.reps || '').toString().toLowerCase().includes('seg') ||
-                      (params.reps || '').toString().toLowerCase().includes('min');
+// ¿El ejercicio se mide por tiempo? (flag explícito o el valor trae seg/min/mm:ss)
+export const esModoTiempo = (params) => {
+  if (!params) return false;
+  if (params.modo === 'tiempo') return true;
+  if (params.modo === 'reps') return false;
+  const v = (params.duracion ?? params.reps ?? '').toString().toLowerCase();
+  return /seg|min|\d+:\d{2}/.test(v);
+};
 
-  let tiempoTrabajo;
-  if (isTimeBlock) {
-    tiempoTrabajo = series * repsVal; // repsVal ya es en segundos
+// Duración (segundos) de UN ejercicio, incluyendo pausas entre series
+export const calcularDuracionEjercicio = (params) => {
+  if (!params) return 0;
+  const series   = parseInt(params.series) || 3;
+  const descanso = parseDescanso(params.descanso);
+  let trabajo;
+  if (esModoTiempo(params)) {
+    const durSeg = parseTiempo(params.duracion ?? params.reps); // segundos por serie
+    trabajo = series * durSeg;
   } else {
-    tiempoTrabajo = series * repsVal * tempoSec;
+    const reps  = parseReps(params.reps);
+    const tempo = parseTempo(params.tempo); // segundos por repetición
+    trabajo = series * reps * tempo;
   }
+  const pausas = Math.max(0, series - 1) * descanso;
+  return trabajo + pausas;
+};
 
-  const tiempoDescanso = (series - 1) * descanso;
-  return tiempoTrabajo + tiempoDescanso;
+const TRANSICION_EJERCICIO = 40;   // seg de armado/cambio entre ejercicios
+const TRANSICION_BLOQUE    = 60;   // seg entre bloques
+const CALENTAMIENTO_SEG    = 5 * 60;
+const VUELTA_CALMA_SEG     = 5 * 60;
+
+export const calcularDuracionBloque = (bloque) => {
+  const ejercicios = bloque.exercises || [];
+  if (!ejercicios.length) return 0; // bloque vacío no suma tiempo
+  let total = 0;
+  ejercicios.forEach((be, i) => {
+    total += calcularDuracionEjercicio(be.params || bloque.params);
+    if (i < ejercicios.length - 1) total += TRANSICION_EJERCICIO;
+  });
+  return total;
 };
 
 export const calcularDuracionSesion = (blocks) => {
-  if (!blocks || blocks.length === 0) return { total: 0, breakdown: [] };
-
-  const CALENTAMIENTO_BASE = 5 * 60;   // 5 min calentamiento
-  const ENTRADA_CALOR_EX   = 3 * 60;   // 3 min extra por bloque de movilidad/activación
-  const TRANSICION_BLOQUE  = 1.5 * 60; // 1.5 min transición entre bloques
-  const VUELTA_CALMA       = 5 * 60;   // 5 min vuelta a la calma
+  const vacio = { total: 0, totalMin: 0, calentamiento: 0, ejercicios: 0, transiciones: 0, vueltaCalma: 0, breakdown: [] };
+  if (!blocks || blocks.length === 0) return vacio;
 
   const breakdown = blocks.map(b => {
     const seg = calcularDuracionBloque(b);
-    return {
-      bloque: b.type,
-      label: b.type,
-      segundos: seg,
-      minutos: Math.round(seg / 60 * 10) / 10,
-    };
+    return { bloque: b.type, label: b.type, nEx: (b.exercises || []).length,
+             segundos: seg, minutos: Math.round(seg / 60 * 10) / 10 };
   });
 
   const tiempoEjercicios = breakdown.reduce((s, b) => s + b.segundos, 0);
-  const tiempoTransiciones = Math.max(0, blocks.length - 1) * TRANSICION_BLOQUE;
-  const tiempoCalentamiento = CALENTAMIENTO_BASE +
-    (blocks.some(b => ['movilidad','activacion'].includes(b.type)) ? 0 : ENTRADA_CALOR_EX);
+  if (tiempoEjercicios === 0) return vacio; // sin ejercicios cargados → 0 real
 
-  const total = tiempoCalentamiento + tiempoEjercicios + tiempoTransiciones + VUELTA_CALMA;
+  const bloquesConTrabajo = breakdown.filter(b => b.segundos > 0).length;
+  const tiempoTransiciones = Math.max(0, bloquesConTrabajo - 1) * TRANSICION_BLOQUE;
+  const total = CALENTAMIENTO_SEG + tiempoEjercicios + tiempoTransiciones + VUELTA_CALMA_SEG;
 
   return {
     total: Math.round(total),
     totalMin: Math.round(total / 60),
-    calentamiento: Math.round(tiempoCalentamiento / 60),
+    calentamiento: Math.round(CALENTAMIENTO_SEG / 60),
     ejercicios: Math.round(tiempoEjercicios / 60),
     transiciones: Math.round(tiempoTransiciones / 60),
-    vueltaCalma: Math.round(VUELTA_CALMA / 60),
+    vueltaCalma: Math.round(VUELTA_CALMA_SEG / 60),
     breakdown,
   };
 };
@@ -419,6 +469,38 @@ const getPctFor1RM = (reps) => {
   return null;
 };
 
+// ─── % SOBRE 1RM EN FUNCIÓN DE LAS REPS (INVERSA DE LA FÓRMULA DEL TEST) ──
+// Cada fórmula de estimación de 1RM tiene su propia relación reps↔%.
+// Para que el % sea COHERENTE con la fórmula usada en el test del cliente,
+// invertimos la misma fórmula con la que se calculó ese 1RM:
+//   Epley:    1RM = w·(1+0.0333·r)  → %1RM = 100 / (1 + 0.0333·r)
+//   Brzycki:  1RM = w·36/(37-r)     → %1RM = (37 - r) / 36 · 100
+//   Lombardi: 1RM = w·r^0.10        → %1RM = 100 · r^(-0.10)
+// 'epley_brzycki' = promedio de las dos primeras (igual que calcular1RM).
+export const pctFromReps = (reps, formula = 'epley_brzycki') => {
+  const n = parseInt(reps);
+  if (isNaN(n) || n < 1) return null;
+  if (n === 1) return 100;
+
+  if (formula === 'lombardi') {
+    if (n > 25) return null;            // fuera de rango confiable
+    return Math.round(100 * Math.pow(n, -0.10));
+  }
+  if (n > 15) return null;              // poco confiable con muchas reps
+  const epley   = 100 / (1 + 0.0333 * n);
+  const brzycki = ((37 - n) / 36) * 100;
+  if (formula === 'brzycki') return Math.round(brzycki);
+  if (formula === 'epley')   return Math.round(epley);
+  return Math.round((epley + brzycki) / 2); // epley_brzycki (promedio / legacy)
+};
+
+// Peso de trabajo para N reps a partir del 1RM y la fórmula del test
+export const pesoParaReps = (rm1, reps, formula = 'epley_brzycki') => {
+  const pct = pctFromReps(reps, formula);
+  if (!rm1 || pct == null) return null;
+  return Math.round(rm1 * pct / 100 / 2.5) * 2.5; // redondeo a 2.5 kg
+};
+
 // ─── PARSE REPS DE UNA FASE DE PERIODIZACIÓN ────────────────────────────
 // "8–12" → average 10; "1–3" → 2; "3–5" → 4
 const parseRepsFromPhase = (repsStr) => {
@@ -435,7 +517,12 @@ const parseRepsFromPhase = (repsStr) => {
 // ─── SUGERENCIA DE PESO PRINCIPAL ────────────────────────────────────────
 // Dado un ejercicio, los tests del cliente y la fase activa del plan,
 // devuelve un objeto con la sugerencia de peso y los cálculos
-export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null) => {
+// repsEntered: reps escritas en el ejercicio del constructor (tienen prioridad).
+// El % se calcula SIEMPRE invirtiendo la fórmula con la que se midió el 1RM
+// del cliente (Epley+Brzycki o Lombardi), guardada en cada test.
+export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null, repsEntered = null) => {
+  // Ejercicios por tiempo (isométricos, cardio) no se rigen por % de 1RM
+  if (repsEntered != null && /seg|min|\d+:\d{2}/.test(String(repsEntered).toLowerCase())) return null;
   const testId = getTestIdForExercise(nombreEjercicio);
   if (!testId || !testsCliente.length) return null;
 
@@ -450,54 +537,54 @@ export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null)
   const rm1 = parseFloat(last.rm1_real || last.rm1_calculado);
   if (!rm1 || isNaN(rm1)) return null;
 
-  // Si hay fase de plan, usar sus reps para calcular el %
-  let pct = null;
-  let repsTarget = null;
-  let rirTarget = null;
-  let intensidadLabel = null;
+  // Fórmula con la que se estimó ESTE 1RM
+  const formula = last.formula || 'epley_brzycki';
+  const formulaLabel = FORMULAS_1RM[formula]?.label || 'Epley + Brzycki';
 
-  if (fasePlan) {
-    repsTarget = parseRepsFromPhase(fasePlan.reps);
-    rirTarget = fasePlan.rir;
-    intensidadLabel = fasePlan.intensidad;
-    // Also derive % from intensity label if available
-    if (fasePlan.intensidad) {
-      const intensidad = fasePlan.intensidad.toLowerCase();
-      if (intensidad.includes('muy alta') || intensidad.includes('máxima')) pct = 90;
-      else if (intensidad.includes('alta')) pct = 82;
-      else if (intensidad.includes('moderada')) pct = 72;
-      else if (intensidad.includes('baja-moderada') || intensidad.includes('baja')) pct = 62;
-    }
-    // Reps-based % takes priority (more precise)
-    if (repsTarget) {
-      const repsPct = getPctFor1RM(repsTarget);
-      if (repsPct) pct = repsPct;
-    }
+  // 1) Reps objetivo: prioridad ABSOLUTA a las reps ingresadas en el ejercicio.
+  //    Si no hay, se toman las de la fase del plan. Si tampoco, 10 por defecto.
+  let repsTarget = null;
+  let fuenteReps = null;
+  const repsFromEntered = parseRepsFromPhase(repsEntered != null ? String(repsEntered) : '');
+  if (repsFromEntered) { repsTarget = repsFromEntered; fuenteReps = 'ingresadas'; }
+  else if (fasePlan?.reps) { repsTarget = parseRepsFromPhase(fasePlan.reps); fuenteReps = 'plan'; }
+  if (!repsTarget) { repsTarget = 10; fuenteReps = 'default'; }
+
+  // 2) % sobre 1RM derivado de las reps con la MISMA fórmula del test
+  let pct = pctFromReps(repsTarget, formula);
+  let pctFueraRango = false;
+  if (pct == null) {                       // reps fuera del rango confiable de la fórmula
+    pct = getPctFor1RM(repsTarget) || 70;  // respaldo: tabla genérica Prilepin
+    pctFueraRango = true;
   }
 
-  // Default: suggest 70% if no plan
-  if (!pct) pct = 70;
+  // 3) Peso para ese % + banda práctica (±1 rep)
+  const round25 = (x) => Math.round(x / 2.5) * 2.5;
+  const pesoSugerido = round25(rm1 * pct / 100);
+  const pctAlta = pctFromReps(Math.max(1, repsTarget - 1), formula) || (pct + 3); // 1 rep menos = más carga
+  const pctBaja = pctFromReps(repsTarget + 1, formula) || (pct - 3);              // 1 rep más = menos carga
+  const pesoMax = round25(rm1 * pctAlta / 100);
+  const pesoMin = round25(rm1 * pctBaja / 100);
 
-  // Adjust for RIR (each RIR point = ~5% reduction)
-  const rir = parseInt(rirTarget) || 2;
-  const pctConRIR = Math.max(pct - (rir * 3), 50);
-
-  const pesoSugerido = Math.round(rm1 * pctConRIR / 100 / 2.5) * 2.5; // round to nearest 2.5kg
-  const pesoMin = Math.round(rm1 * (pctConRIR - 5) / 100 / 2.5) * 2.5;
-  const pesoMax = Math.round(rm1 * (pctConRIR + 3) / 100 / 2.5) * 2.5;
+  const dias = Math.floor((new Date() - new Date(last.fecha)) / 86400000);
 
   return {
     testId,
     rm1,
     rm1Fecha: last.fecha,
-    pct: pctConRIR,
+    formula,
+    formulaLabel,
+    reps: repsTarget,
+    fuenteReps,                 // 'ingresadas' | 'plan' | 'default'
+    pct,                        // % del 1RM que representan esas reps
+    pctFueraRango,
     pesoSugerido,
     pesoRango: `${pesoMin}–${pesoMax} kg`,
-    repsTarget: repsTarget ? `${fasePlan.reps}` : null,
-    rir: rirTarget,
-    intensidad: intensidadLabel,
-    diasDesdeTest: Math.floor((new Date() - new Date(last.fecha)) / 86400000),
-    testVencido: Math.floor((new Date() - new Date(last.fecha)) / 86400000) > 120,
+    repsTarget: `${repsTarget}`,
+    rir: fasePlan?.rir || null,
+    intensidad: fasePlan?.intensidad || null,
+    diasDesdeTest: dias,
+    testVencido: dias > 120,
   };
 };
 
@@ -506,7 +593,64 @@ export const sugerirPesosBloque = (exercises, exsDB, testsCliente, fasePlan) => 
   return exercises.map(be => {
     const ex = exsDB.find(e => e.id === be.exId);
     if (!ex) return { exId: be.exId, sugerencia: null };
-    const sugerencia = sugerirPeso(ex.nombre, testsCliente, fasePlan);
+    const reps = be.params?.reps ?? null;   // reps reales del ejercicio en el constructor
+    const sugerencia = sugerirPeso(ex.nombre, testsCliente, fasePlan, reps);
     return { exId: be.exId, nombre: ex.nombre, sugerencia };
   }).filter(x => x.sugerencia !== null);
+};
+
+// ─── PLAZOS DEL PLAN (cronograma de fases con fechas) ────────────────────
+// Convierte la cadena de semanas de cada fase en una duración en semanas.
+//   "1–4" / "5–9" → rango absoluto → (fin - inicio + 1) semanas
+//   "4–6 sem" / "2 sem" → duración explícita → promedio / valor
+//   "Lunes" / "2×/semana" / "Semanas 1, 4, 7…" → no temporal (null)
+export const durSemanasFase = (semanasStr) => {
+  if (!semanasStr) return null;
+  const str = String(semanasStr).replace(/–|—/g, '-').trim();
+  const tieneSem = /sem/i.test(str);
+  const rango = str.match(/(\d+)\s*-\s*(\d+)/);
+  if (rango) {
+    const a = parseInt(rango[1]), b = parseInt(rango[2]);
+    return tieneSem ? Math.round((a + b) / 2) : (b - a + 1);
+  }
+  const uno = str.match(/(\d+)/);
+  if (uno && (tieneSem || /^\d+$/.test(str))) return parseInt(uno[1]);
+  return null;
+};
+
+// Devuelve el cronograma completo del plan: total de semanas, fechas por fase
+// y fecha de finalización estimada (si se pasa fecha de inicio ISO YYYY-MM-DD).
+export const planTimeline = (periodizacion, fechaInicioISO) => {
+  if (!periodizacion) return null;
+  const fechaInicio = fechaInicioISO ? new Date(fechaInicioISO + 'T00:00:00') : null;
+  const addDias = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const fmt = (d) => d.toLocaleDateString('es-UY', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  let cursor = 1;            // semana de inicio de la próxima fase
+  let secuencial = true;     // ¿todas las fases tienen duración temporal?
+  const fases = periodizacion.fases.map(f => {
+    const dur = durSemanasFase(f.semanas);
+    if (dur == null) {
+      secuencial = false;
+      return { nombre: f.nombre, semanasLabel: f.semanas, dur: null, objetivo: f.objetivo,
+               reps: f.reps, intensidad: f.intensidad, rir: f.rir, volumen: f.volumen };
+    }
+    const semIni = cursor;
+    const semFin = cursor + dur - 1;
+    const fIni = fechaInicio ? fmt(addDias(fechaInicio, (semIni - 1) * 7)) : null;
+    const fFin = fechaInicio ? fmt(addDias(fechaInicio, semFin * 7 - 1)) : null;
+    cursor = semFin + 1;
+    return { nombre: f.nombre, semanasLabel: f.semanas, dur, semIni, semFin, fIni, fFin,
+             objetivo: f.objetivo, reps: f.reps, intensidad: f.intensidad, rir: f.rir, volumen: f.volumen };
+  });
+  const totalSemanas = secuencial ? (cursor - 1) : null;
+  const fechaFin = (secuencial && fechaInicio) ? fmt(addDias(fechaInicio, totalSemanas * 7 - 1)) : null;
+  return {
+    nombre: periodizacion.nombre,
+    autor: periodizacion.autor,
+    duracionTexto: periodizacion.duracion,
+    fases, secuencial, totalSemanas,
+    fechaInicio: fechaInicio ? fmt(fechaInicio) : null,
+    fechaFin,
+  };
 };
