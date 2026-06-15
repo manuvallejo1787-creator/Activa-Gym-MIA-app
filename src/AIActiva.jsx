@@ -90,8 +90,26 @@ Fase actual: ${faseActiva ? `${faseActiva.nombre} — ${faseActiva.reps} reps, $
 Tests de fuerza 1RM: ${rm1s}
 Instrucciones adicionales: ${instrucciones || "ninguna"}
 
-Lista de ejercicios disponibles (usá SOLO estos IDs exactos):
-${exs.slice(0, 80).map(e => `${e.id}|${e.nombre}|${e.bloque}`).join("\n")}
+ESTRUCTURA OBLIGATORIA DE LA SESIÓN (orden fijo de bloques):
+1. movilidad → 2. activacion → 3. fuerza/potencia (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
+El orden NO se altera. Una sesión típica usa 4-6 bloques siguiendo ese flujo.
+
+EJERCICIOS DISPONIBLES — AGRUPADOS POR BLOQUE.
+Un ejercicio SOLO puede ir en un bloque de su mismo tipo. NUNCA pongas un ejercicio de fuerza en movilidad ni viceversa.
+${(() => {
+  const porBloque = {};
+  exs.forEach(e => { (porBloque[e.bloque] = porBloque[e.bloque] || []).push(e); });
+  return Object.entries(porBloque).map(([bloque, lista]) =>
+    `\n### BLOQUE "${bloque}" (solo estos IDs van en bloques type="${bloque}"):\n` +
+    lista.slice(0, 25).map(e => `${e.id} = ${e.nombre}`).join("\n")
+  ).join("\n");
+})()}
+
+REGLAS ESTRICTAS:
+- El "type" de cada bloque DEBE ser uno de: movilidad, activacion, zona_media, prev_rehab, potencia, fuerza, accesorios, cardio, flex_recovery, propiocepcion, funcional.
+- Cada "exId" dentro de un bloque DEBE pertenecer al grupo de ese bloque (mismo tipo). Si el ejercicio "sentadilla" está listado bajo BLOQUE "fuerza", solo puede ir en un bloque type="fuerza".
+- Usá ÚNICAMENTE los IDs exactos listados arriba. No inventes IDs.
+- Respetá el orden: movilidad y activación al inicio, fuerza/potencia en el medio, cardio/recovery al final.
 
 Respondé ÚNICAMENTE con este JSON (sin texto extra):
 {
@@ -99,17 +117,17 @@ Respondé ÚNICAMENTE con este JSON (sin texto extra):
   "objetivo_sesion": "descripción breve del objetivo",
   "blocks": [
     {
-      "type": "movilidad|activacion|zona_media|prev_rehab|potencia|fuerza|accesorios|cardio|flex_recovery|propiocepcion|funcional",
+      "type": "uno de los tipos válidos",
       "params": { "series": "3", "reps": "10-12", "rpe": "7", "tempo": "2-0-1", "descanso": "90s" },
       "exercises": [
-        { "exId": "id_exacto_del_ejercicio", "pesoSug": "kg si aplica", "anotacion": "indicación técnica breve" }
+        { "exId": "id_exacto_de_ese_bloque", "pesoSug": "kg si aplica", "anotacion": "indicación técnica breve" }
       ]
     }
   ],
-  "razonamiento": "explicación breve de por qué elegiste esta estructura (2-3 líneas)"
+  "razonamiento": "explicación breve (2-3 líneas)"
 }
 
-Incluí 4-6 bloques. Cada bloque máximo 4 ejercicios. Respetá la fase de periodización activa para los parámetros.`;
+Incluí 4-6 bloques en el orden correcto. Cada bloque máximo 4 ejercicios. Respetá la fase de periodización para los parámetros.`;
 
       const data = await callClaude(prompt, 2500);
       setResult(data);

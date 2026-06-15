@@ -61,14 +61,40 @@ export const TESTS_FUERZA = [
   },
 ];
 
-// Fórmula Brzycki: 1RM = peso × (36 / (37 - reps))
-// Fórmula Epley:   1RM = peso × (1 + 0.0333 × reps)
-export const calcular1RM = (peso, reps) => {
-  if (reps === 1) return peso;
-  if (reps > 12) return null; // poco confiable con muchas reps
+// ─── FÓRMULAS DE ESTIMACIÓN DE 1RM ──────────────────────────────────────────
+// epley_brzycki: promedio Epley+Brzycki — estándar para cargas altas, ≤12 reps
+// lombardi: 1RM = peso × reps^0.10 — confiable hasta ~25 reps, ideal para
+//   principiantes y adultos mayores (cargas livianas, muchas repeticiones, sin
+//   llegar al fallo máximo → menor riesgo de lesión)
+export const FORMULAS_1RM = {
+  epley_brzycki: {
+    label: 'Epley + Brzycki',
+    sub: 'Estándar · cargas altas, hasta 12 reps',
+    maxReps: 12,
+    recomendado: 'Atletas e intermedios/avanzados con cargas pesadas',
+  },
+  lombardi: {
+    label: 'Lombardi',
+    sub: 'Cargas livianas, hasta 25 reps · principiantes / adultos mayores',
+    maxReps: 25,
+    recomendado: 'Principiantes, adultos mayores, evaluación segura sin cargas máximas',
+  },
+};
+
+export const calcular1RM = (peso, reps, formula = 'epley_brzycki') => {
+  if (!peso || !reps || reps < 1) return null;
+  if (reps === 1) return Math.round(peso);
+
+  if (formula === 'lombardi') {
+    if (reps > 25) return null; // fuera de rango confiable
+    return Math.round(peso * Math.pow(reps, 0.10));
+  }
+
+  // epley_brzycki (default)
+  if (reps > 12) return null; // poco confiable con muchas reps para esta fórmula
   const brzycki = peso * (36 / (37 - reps));
   const epley   = peso * (1 + 0.0333 * reps);
-  return Math.round((brzycki + epley) / 2); // promedio de ambas
+  return Math.round((brzycki + epley) / 2);
 };
 
 export const nivelFuerza = (test, rm1, pesoCorporal) => {

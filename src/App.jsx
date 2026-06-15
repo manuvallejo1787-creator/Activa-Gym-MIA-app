@@ -4,7 +4,7 @@ import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, get
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -860,19 +860,37 @@ export default function App(){
 
   // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
   const applyAISession=(aiResult)=>{
-    // Convierte el resultado de la IA en bloques de sesión
-    const blocks=(aiResult.blocks||[]).map((b,i)=>({
-      id:Date.now()+i,
-      type:BLOCKS[b.type]?b.type:'fuerza',
-      position:i+1,
-      exercises:(b.exercises||[]).filter(e=>exs.find(x=>x.id===e.exId)).map(e=>({
-        exId:e.exId,override:false,note:'',
-        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
-        pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
-      })),
-      params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
-    }));
+    // Orden canónico de bloques en una sesión
+    const ORDEN_BLOQUES=['movilidad','activacion','propiocepcion','prev_rehab','potencia','fuerza','accesorios','zona_media','funcional','cardio','flex_recovery'];
+    let descartados=0;
+    const blocks=(aiResult.blocks||[])
+      .filter(b=>BLOCKS[b.type]) // solo tipos de bloque válidos
+      .map((b)=>{
+        // VALIDACIÓN CLAVE: cada ejercicio debe pertenecer al bloque correcto.
+        // El ejercicio en la DB tiene .bloque — debe coincidir con b.type.
+        const ejerciciosValidos=(b.exercises||[]).filter(e=>{
+          const ex=exs.find(x=>x.id===e.exId);
+          if(!ex){descartados++;return false;}
+          if(ex.bloque!==b.type){descartados++;return false;} // descarta ej. en bloque equivocado
+          return true;
+        });
+        return {type:b.type,params:b.params,exercises:ejerciciosValidos};
+      })
+      .filter(b=>b.exercises.length>0) // descarta bloques que quedaron vacíos
+      .sort((a,b)=>ORDEN_BLOQUES.indexOf(a.type)-ORDEN_BLOQUES.indexOf(b.type)) // ordena
+      .map((b,i)=>({
+        id:Date.now()+i,
+        type:b.type,
+        position:i+1,
+        exercises:b.exercises.map(e=>({
+          exId:e.exId,override:false,note:'',
+          params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
+          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
+        })),
+        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
+      }));
     setSession(p=>({...p,obj:p.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||p.name,notas:aiResult.objetivo_sesion||p.notas}));
+    if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
   };
   const suggestBlocks=(obj)=>{
     const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
@@ -1036,8 +1054,20 @@ export default function App(){
       const found=Object.entries(metaMap).find(([k])=>ai.metodologia_sugerida?.includes(k));
       if(found)upd.periodizacion=found[1];
       saveClient(upd);
-      alert('✅ Sugerencias aplicadas: fase '+(ai.fase_sugerida||'').toUpperCase()+(found?' · '+ai.metodologia_sugerida:''));
+      // Llevar al constructor de sesión con el cliente vinculado y la fase aplicada
+      const faseObj=ai.fase_sugerida||upd.nivel||'activa';
+      setSession(p=>({
+        ...p,
+        clienteId:cliente.id,
+        cliente:`${cliente.nombre} ${cliente.apellido}`,
+        obj:faseObj,
+        name:`Sesión ${(FASES_METODO[faseObj]?.label)||faseObj}`,
+        notas:ai.objetivos_sugeridos?.length?ai.objetivos_sugeridos[0]:p.notas,
+        blocks:p.blocks&&p.blocks.length?p.blocks:(OBJS[faseObj]?.blocks||[]).map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}))
+      }));
       onClose();
+      setTab('session');
+      setTimeout(()=>alert('✅ Sugerencias aplicadas: fase '+faseObj.toUpperCase()+(found?' · '+ai.metodologia_sugerida:'')+'.\nTe llevé al Constructor con el cliente vinculado. Podés generar la sesión con IA o armarla a mano.'),150);
     };
 
     const exportInformePDF=()=>{
@@ -2594,7 +2624,7 @@ export default function App(){
 
   // ── FuerzaFormComp — crear Y editar tests de fuerza ─────────────────────
   const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests})=>{
-    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',
+    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
       fecha:new Date().toISOString().split('T')[0],
       peso_corporal:pac?.screening?.peso||'',
       peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
@@ -2607,7 +2637,8 @@ export default function App(){
     const pesoLev=parseFloat(form.peso_levantado)||0;
     const pesoCorp=parseFloat(form.peso_corporal)||0;
     const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
-    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas)):null;
+    const formulaSel=form.formula||'epley_brzycki';
+    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
     const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
     return(
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
@@ -2635,13 +2666,29 @@ export default function App(){
               <strong>📋 Protocolo:</strong> {ti.protocolo}
               {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
             </div>}
+            {/* SELECTOR DE FÓRMULA */}
+            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
+              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
+              <select value={form.formula||'epley_brzycki'} onChange={e=>{
+                const nuevaF=e.target.value;
+                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
+                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
+              }} style={{...s.sel,width:'100%'}}>
+                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
+              </select>
+              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
+                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
+              </div>
+            </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
               <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>
               <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
               <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
-              <div><span style={s.lbl}>Repeticiones</span>
+              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
                 <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
-                  {[1,2,3,4,5,6,7,8,10,12].map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+                  {((form.formula||'epley_brzycki')==='lombardi'
+                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
+                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
                 </select>
               </div>
             </div>
@@ -2649,7 +2696,7 @@ export default function App(){
             {rm1c&&(
               <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <div>
-                  <div style={{fontSize:10,color:G4}}>1RM estimado (Brzycki + Epley)</div>
+                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
                   <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
                   {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
                 </div>
@@ -2669,7 +2716,7 @@ export default function App(){
           </div>
           <button onClick={()=>{
             const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
-            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null};
+            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
             saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
           }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
             💾 {editingTest?'Guardar cambios':'Guardar test'}
