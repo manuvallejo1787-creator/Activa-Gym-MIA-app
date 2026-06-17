@@ -436,6 +436,76 @@ export function usePlanesCliente(clientId) {
   return{planes,loading,savePlan,deletePlan,refetch:fetch}
 }
 
+// ─── HOOK: Registro de Planes del Constructor (gym_planes) ────────────────
+export function useGymPlanes(clientId) {
+  const [gymPlanes,setGymPlanes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clientId){setGymPlanes([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('gym_planes').select('*').eq('gym_client_id',clientId).order('created_at',{ascending:false})
+      if(error)throw error
+      setGymPlanes(data||[])
+    }catch(e){console.error('gym_planes:',e.message)}
+    finally{setLoading(false)}
+  },[clientId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!clientId)return
+    const ch=supabase.channel('gymplanes_'+clientId+'_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'gym_planes',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,clientId])
+  const savePlan=useCallback(async(p)=>{
+    if(!clientId)throw new Error('No hay cliente seleccionado')
+    const toSave={...p,gym_client_id:clientId,updated_at:new Date().toISOString()}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('gym_planes').upsert(toSave,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    } else setGymPlanes(a=>a.find(x=>x.id===p.id)?a.map(x=>x.id===p.id?toSave:x):[toSave,...a])
+    return toSave
+  },[clientId,fetch])
+  const deletePlan=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('gym_planes').delete().eq('id',id)
+    else setGymPlanes(a=>a.filter(x=>x.id!==id))
+  },[])
+  return{gymPlanes,loading,savePlan,deletePlan,refetch:fetch}
+}
+
+// ─── HOOK: Base de conocimiento de la IA (ia_conocimiento) ────────────────
+export function useIAConocimiento() {
+  const [reglas,setReglas]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('ia_conocimiento').select('*').order('created_at',{ascending:true})
+      if(error)throw error
+      setReglas(data||[])
+    }catch(e){console.error('ia_conocimiento:',e.message)}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('iaconoc_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'ia_conocimiento'},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch])
+  const saveRegla=useCallback(async(r)=>{
+    if(isSupabaseReady){const{error}=await supabase.from('ia_conocimiento').upsert(r,{onConflict:'id'});if(error)throw error;await fetch()}
+    else setReglas(a=>a.find(x=>x.id===r.id)?a.map(x=>x.id===r.id?r:x):[...a,r])
+  },[fetch])
+  const deleteRegla=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('ia_conocimiento').delete().eq('id',id)
+    else setReglas(a=>a.filter(x=>x.id!==id))
+  },[])
+  return{reglas,loading,saveRegla,deleteRegla,refetch:fetch}
+}
+
 // ─── HOOK: Sesiones Clínicas ──────────────────────────────────────────────
 export function useSesionesClinicas(pacienteId) {
   const [sesiones,setSesiones]=useState([])

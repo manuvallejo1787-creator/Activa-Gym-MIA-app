@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
@@ -791,6 +791,34 @@ const emptyCliente=()=>({
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// Formulario para agregar una regla a la base de conocimiento de la IA
+function NuevaReglaIA({ onSave, genId }){
+  const [texto,setTexto]=useState('');
+  const [ambito,setAmbito]=useState('entrenamiento');
+  const inp={width:'100%',border:'1px solid #ddd',borderRadius:6,padding:'8px 10px',fontSize:12,outline:'none',boxSizing:'border-box'};
+  const guardar=()=>{
+    const t=texto.trim();
+    if(!t)return;
+    onSave({id:genId('iar'),ambito,regla:t,activo:true});
+    setTexto('');
+  };
+  return(
+    <div style={{background:'#F8F8F8',border:'1px solid #e5e5e5',borderRadius:8,padding:12}}>
+      <textarea value={texto} onChange={e=>setTexto(e.target.value)} placeholder="Escribí una regla o principio… (ej: priorizar técnica sobre carga en las primeras 4 semanas)" rows={2} style={{...inp,resize:'vertical',marginBottom:8}}/>
+      <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <select value={ambito} onChange={e=>setAmbito(e.target.value)} style={{...inp,width:'auto'}}>
+          <option value="entrenamiento">Entrenamiento</option>
+          <option value="rehab">Rehabilitación</option>
+          <option value="nutricion">Nutrición</option>
+          <option value="evaluacion">Evaluaciones</option>
+          <option value="general">General</option>
+        </select>
+        <button onClick={guardar} style={{background:'#1A1A1A',color:'#fff',border:'none',borderRadius:6,padding:'8px 16px',fontSize:12,fontWeight:700,cursor:'pointer'}}>+ Agregar regla</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -859,6 +887,11 @@ export default function App(){
   const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
   // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
+  // Registro de planes del cliente activo + base de conocimiento de la IA
+  const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
+  const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
+  const [showHistorial,setShowHistorial]=useState(false);
+  const [showEntrenarIA,setShowEntrenarIA]=useState(false);
   // Fase activa del plan de periodización del cliente
   const activeFasePlan=useMemo(()=>{
     if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
@@ -900,6 +933,72 @@ export default function App(){
     return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
   });
   const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
+
+  // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
+  // Resumen textual compacto de un plan (para la lista y como contexto de IA)
+  const resumirPlan=(dias)=>{
+    return (dias||[]).filter(d=>d.obj&&d.blocks.length).map((d,i)=>{
+      const ejs=d.blocks.flatMap(b=>b.exercises.map(be=>{
+        const ex=exs.find(e=>e.id===be.exId);const p=be.params||b.params;
+        return ex?`${ex.nombre} ${p.series||'?'}×${p.reps||'?'}`:null;
+      }).filter(Boolean));
+      return `${d.name||`Día ${i+1}`} (${OBJS[d.obj]?.label||d.obj}): ${ejs.join('; ')}`;
+    }).join(' | ');
+  };
+  const guardarPlanActual=async()=>{
+    if(!activeClient){alert('Vinculá un cliente antes de guardar el plan.');return;}
+    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasArmados.length){alert('No hay días con ejercicios para guardar.');return;}
+    const id=session.planId||genId('plan');
+    const registro={
+      id,
+      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
+      fecha_inicio:session.fecha,
+      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
+      periodizacion:activeClient.periodizacion||'',
+      nivel_metodo:activeClient.nivel||'',
+      num_dias:diasArmados.length,
+      estado:session.planEstado||'activo',
+      dias:session.dias,
+      plazos:planMeta||null,
+      resumen:resumirPlan(session.dias),
+      es_ejemplo:session.planEsEjemplo||false,
+      notas:session.planNotasGlobal||'',
+    };
+    try{
+      await saveGymPlan(registro);
+      setSession(p=>({...p,planId:id}));
+      alert('💾 Plan guardado en el historial del cliente.');
+    }catch(e){alert('Error al guardar el plan: '+e.message);}
+  };
+  const cargarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:plan.id,
+      planNombre:plan.nombre,
+      fecha:plan.fecha_inicio||p.fecha,
+      planEstado:plan.estado,
+      planEsEjemplo:plan.es_ejemplo,
+      dias:(plan.dias&&plan.dias.length)?plan.dias:[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setExpandedBlock(null);setSelBlock(null);
+    setTab('session');
+  };
+  const duplicarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:null, // nuevo registro
+      planNombre:`${plan.nombre} (copia)`,
+      fecha:new Date().toISOString().split('T')[0],
+      planEstado:'activo',planEsEjemplo:false,
+      dias:(plan.dias&&plan.dias.length)?JSON.parse(JSON.stringify(plan.dias)):[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setTab('session');
+  };
+  const cambiarEstadoPlan=async(plan,estado)=>{try{await saveGymPlan({...plan,estado});}catch(e){console.error(e);}};
+  const marcarEjemploPlan=async(plan,val)=>{try{await saveGymPlan({...plan,es_ejemplo:val});}catch(e){console.error(e);}};
 
   // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
   const applyAISession=(aiResult)=>{
@@ -2110,7 +2209,7 @@ export default function App(){
             </div>
           </div>
           <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} onApply={applyAISession}/></div>}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
@@ -2118,6 +2217,9 @@ export default function App(){
               {activeClient&&<span style={{fontSize:12}}>{SF[activeClient.semaforo].emoji}</span>}
             </div>
             <div style={{display:'flex',gap:6}}>
+              <button onClick={guardarPlanActual} style={{...s.btnBK,fontSize:11,padding:'5px 10px',background:'#16A34A'}}>💾 Guardar plan</button>
+              {activeClient&&<button onClick={()=>setShowHistorial(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>📂 Historial{gymPlanes.length?` (${gymPlanes.length})`:''}</button>}
+              <button onClick={()=>setShowEntrenarIA(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>🧠 Entrenar IA</button>
               <button onClick={()=>setTab('export')} style={{...s.btnBK,fontSize:11,padding:'5px 10px'}}>Exportar plan →</button>
               <button onClick={()=>setDia(d=>({...d,obj:null,blocks:[]}))} style={s.btnG}>↺ Rearmar día</button>
               <button onClick={resetPlan} style={s.btnG}>← Nuevo plan</button>
@@ -2125,6 +2227,74 @@ export default function App(){
           </div>
         </div>
         {activeClient&&<SemaforoBanner cliente={activeClient}/>}
+        {/* ── MODAL: HISTORIAL DE PLANES DEL CLIENTE ── */}
+        {showHistorial&&(
+          <OverlayWrap wide>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:17,fontWeight:800}}>📂 Historial de planes — {activeClient?.nombre} {activeClient?.apellido}</div>
+              <button onClick={()=>setShowHistorial(false)} style={s.btnG}>✕</button>
+            </div>
+            {gymPlanes.length===0
+              ?<div style={{fontSize:13,color:G3,padding:'20px 0',textAlign:'center'}}>Todavía no hay planes guardados para este cliente.<br/>Armá un plan y tocá <strong>💾 Guardar plan</strong>.</div>
+              :<div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:'60vh',overflowY:'auto'}}>
+                {gymPlanes.map(pl=>{
+                  const estCol=pl.estado==='completado'?'#16A34A':pl.estado==='reemplazado'?'#999':R;
+                  return(
+                    <div key={pl.id} style={{border:`1px solid ${G2}`,borderLeft:`4px solid ${estCol}`,borderRadius:8,padding:'10px 12px'}}>
+                      <div style={{flex:1,minWidth:200}}>
+                        <div style={{fontSize:13,fontWeight:800}}>{pl.nombre} {pl.es_ejemplo&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 6px',borderRadius:99,fontWeight:700}}>⭐ EJEMPLO IA</span>}</div>
+                        <div style={{fontSize:10,color:G3,marginTop:1}}>{pl.fecha_inicio||'sin fecha'} · {pl.num_dias} día/s · {(pl.periodizacion||'').replace(/_/g,' ')} · <span style={{color:estCol,fontWeight:700}}>{pl.estado}</span></div>
+                        {pl.resumen&&<div style={{fontSize:9,color:'#888',marginTop:3,lineHeight:1.4}}>{pl.resumen.slice(0,180)}{pl.resumen.length>180?'…':''}</div>}
+                      </div>
+                      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:8}}>
+                        <button onClick={()=>cargarPlan(pl)} style={{...s.btnBK,fontSize:10,padding:'4px 9px'}}>Abrir</button>
+                        <button onClick={()=>duplicarPlan(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>Duplicar</button>
+                        {pl.estado!=='completado'&&<button onClick={()=>cambiarEstadoPlan(pl,'completado')} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>✓ Completar</button>}
+                        <button onClick={()=>marcarEjemploPlan(pl,!pl.es_ejemplo)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>{pl.es_ejemplo?'Quitar ejemplo':'⭐ Marcar ejemplo'}</button>
+                        <button onClick={()=>{if(confirm('¿Eliminar este plan del historial?'))deleteGymPlan(pl.id);}} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:R}}>Eliminar</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            }
+            <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Los planes marcados como ⭐ ejemplo y el historial reciente se le pasan a la IA como contexto al generar nuevas sesiones.</div>
+          </OverlayWrap>
+        )}
+        {/* ── MODAL: ENTRENAR IA (base de conocimiento) ── */}
+        {showEntrenarIA&&(()=>{
+          const AMB={entrenamiento:'Entrenamiento',rehab:'Rehabilitación',nutricion:'Nutrición',evaluacion:'Evaluaciones',general:'General'};
+          return(
+            <OverlayWrap wide>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <div style={{fontSize:17,fontWeight:800}}>🧠 Entrenar IA — Reglas y criterio</div>
+                <button onClick={()=>setShowEntrenarIA(false)} style={s.btnG}>✕</button>
+              </div>
+              <div style={{fontSize:11,color:G3,marginBottom:12,lineHeight:1.5}}>Escribí tus principios de planificación, tratamiento o evaluación. La IA los lee y los aplica en cada recomendación. Ej: <em>"Para principiantes, nunca superar 3 series las primeras 2 semanas"</em> o <em>"En RESTAURA priorizar isométricos sin dolor antes que rango completo"</em>.</div>
+              <NuevaReglaIA onSave={r=>saveIaRegla(r)} genId={genId}/>
+              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'48vh',overflowY:'auto',marginTop:12}}>
+                {iaReglas.length===0
+                  ?<div style={{fontSize:12,color:G3,textAlign:'center',padding:'16px 0'}}>Sin reglas todavía. Agregá la primera arriba.</div>
+                  :iaReglas.map(r=>(
+                    <div key={r.id} style={{border:`1px solid ${G2}`,borderRadius:8,padding:'8px 10px',opacity:r.activo?1:.5}}>
+                      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+                        <div style={{flex:1}}>
+                          <span style={{background:BK,color:WH,fontSize:8,padding:'1px 7px',borderRadius:99,fontWeight:700,textTransform:'uppercase'}}>{AMB[r.ambito]||r.ambito}</span>
+                          <div style={{fontSize:12,color:'#111',marginTop:4,lineHeight:1.4}}>{r.regla}</div>
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                          <button onClick={()=>saveIaRegla({...r,activo:!r.activo})} style={{...s.btnG,fontSize:9,padding:'3px 7px'}}>{r.activo?'Pausar':'Activar'}</button>
+                          <button onClick={()=>{if(confirm('¿Eliminar esta regla?'))deleteIaRegla(r.id);}} style={{...s.btnG,fontSize:9,padding:'3px 7px',color:R}}>Eliminar</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+              <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Las reglas activas de ámbito "Entrenamiento" y "General" se inyectan al generar sesiones. Las de Rehab/Nutrición/Evaluaciones se sumarán a esos generadores en la próxima fase.</div>
+            </OverlayWrap>
+          );
+        })()}
         {/* BLOQUEO TOTAL SEMÁFORO ROJO */}
         {activeClient&&activeClient.semaforo==='rojo'&&(
           <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'16px 14px',marginBottom:12,textAlign:'center'}}>

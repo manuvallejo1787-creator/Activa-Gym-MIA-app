@@ -65,7 +65,7 @@ const Spinner = ({ msg = "Generando..." }) => (
 );
 
 // ─── MÓDULO 1: GENERADOR DE SESIONES DE ENTRENAMIENTO ───────────────────────
-export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, onApply }) {
+export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historial = [], reglas = [], onApply }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);
@@ -78,6 +78,21 @@ export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, onApply 
       const faseActiva = periodizacion?.fases?.[0];
       const rm1s = tests?.map(t => `${t.test_nombre}: ${t.rm1_real||t.rm1_calculado||'sin dato'} kg`).join(", ") || "sin tests registrados";
 
+      // Contexto de aprendizaje: reglas del profesional + historial de planes del cliente
+      const reglasActivas = (reglas||[]).filter(r => r.activo && ['entrenamiento','general'].includes(r.ambito));
+      const reglasTxt = reglasActivas.length
+        ? `\nREGLAS DEL PROFESIONAL (obligatorias, tienen prioridad sobre criterios genéricos):\n${reglasActivas.map(r => `- ${r.regla}`).join("\n")}\n`
+        : "";
+      const ejemplos = (historial||[]).filter(p => p.es_ejemplo).slice(0,2);
+      const recientes = (historial||[]).filter(p => !p.es_ejemplo).slice(0,3);
+      const histTxt = (ejemplos.length || recientes.length)
+        ? `\nHISTORIAL DE PLANES DE ESTE CLIENTE (para progresar, NO repetir igual):\n` +
+          ejemplos.map(p => `★ EJEMPLO (${p.fecha_inicio||''}, ${p.estado}): ${p.resumen||p.nombre}`).join("\n") +
+          (ejemplos.length?"\n":"") +
+          recientes.map(p => `· ${p.fecha_inicio||''} (${p.estado}): ${p.resumen||p.nombre}`).join("\n") +
+          `\nProgresá respecto a lo ya realizado: variá estímulos, subí dificultad donde corresponda y respetá la continuidad.\n`
+        : "";
+
       const prompt = `Generá una sesión de entrenamiento en JSON para este cliente:
 
 Cliente: ${cliente?.nombre} ${cliente?.apellido}
@@ -89,7 +104,7 @@ Periodización activa: ${periodizacion?.nombre || "sin plan"}
 Fase actual: ${faseActiva ? `${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : "no definida"}
 Tests de fuerza 1RM: ${rm1s}
 Instrucciones adicionales: ${instrucciones || "ninguna"}
-
+${reglasTxt}${histTxt}
 ESTRUCTURA OBLIGATORIA DE LA SESIÓN (orden fijo de bloques):
 1. movilidad → 2. activacion → 3. fuerza/potencia (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
 El orden NO se altera. Una sesión típica usa 4-6 bloques siguiendo ese flujo.
