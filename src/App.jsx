@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
@@ -819,6 +819,68 @@ function NuevaReglaIA({ onSave, genId }){
   );
 }
 
+// Tablero de ejecución real: prescripto vs lo que cargó el cliente (8 semanas)
+function EjecucionModal({ plan, exs, onClose }){
+  const { registros } = useEjecucion(plan?.id || null);
+  const SEM = 8;
+  const mapa = {};
+  (registros||[]).forEach(r => { mapa[`${r.dia_id}|${r.ejercicio_id}|${r.semana}`] = r; });
+  const dias = (plan?.dias||[]).filter(d => d.obj && (d.blocks||[]).some(b => (b.exercises||[]).length));
+  let totalCeldas = 0, llenas = 0;
+  dias.forEach(d => (d.blocks||[]).forEach(b => (b.exercises||[]).forEach(be => {
+    for(let s=1;s<=SEM;s++){ totalCeldas++; const r=mapa[`${d.id}|${be.exId}|${s}`]; if(r&&(r.peso_real!=null||r.reps_real))llenas++; }
+  })));
+  const adh = totalCeldas ? Math.round(llenas/totalCeldas*100) : 0;
+  const ov={position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 12px'};
+  const card={background:'#fff',borderRadius:12,padding:20,width:'100%',maxWidth:880,marginBottom:20};
+  const th={background:'#1a1a1a',color:'#fff',fontSize:9,padding:'4px 5px',textAlign:'center',fontWeight:700};
+  return(
+    <div style={ov} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={card}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+          <div style={{fontSize:16,fontWeight:800}}>📊 Ejecución real — {plan?.nombre}</div>
+          <button onClick={onClose} style={{border:'1px solid #ddd',background:'#fff',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontSize:12}}>✕</button>
+        </div>
+        <div style={{fontSize:11,color:'#666',marginBottom:12}}>Adherencia del cliente: <strong style={{color:adh>=60?'#16A34A':adh>=30?'#D97706':'#CC0000'}}>{adh}%</strong> ({llenas}/{totalCeldas} celdas cargadas) · datos que el cliente registró desde su portal</div>
+        {registros.length===0
+          ?<div style={{fontSize:13,color:'#888',textAlign:'center',padding:'24px 0'}}>El cliente todavía no cargó ningún dato de este plan.</div>
+          :dias.map(d=>(
+            <div key={d.id} style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:800,color:'#CC0000',marginBottom:6}}>{d.name}</div>
+              <div style={{overflowX:'auto'}}>
+                <table style={{borderCollapse:'collapse',width:'100%',minWidth:620}}>
+                  <thead><tr><th style={{...th,textAlign:'left',minWidth:130}}>Ejercicio</th><th style={th}>Prescr.</th>{Array.from({length:SEM},(_,i)=><th key={i} style={th}>S{i+1}</th>)}<th style={th}>Δ</th></tr></thead>
+                  <tbody>
+                    {(d.blocks||[]).flatMap(b=>(b.exercises||[]).map(be=>{
+                      const nom=(exs.find(e=>e.id===be.exId)?.nombre)||be.exId;
+                      const p=be.params||b.params||{};
+                      const celdas=[];const pesos=[];
+                      for(let s=1;s<=SEM;s++){const r=mapa[`${d.id}|${be.exId}|${s}`];if(r&&r.peso_real!=null)pesos.push({s,peso:Number(r.peso_real)});celdas.push(r);}
+                      const delta=pesos.length>=2?pesos[pesos.length-1].peso-pesos[0].peso:null;
+                      return(
+                        <tr key={be.exId} style={{borderBottom:'1px solid #eee'}}>
+                          <td style={{fontSize:10,fontWeight:700,padding:'4px 5px'}}>{nom}</td>
+                          <td style={{fontSize:9,color:'#888',textAlign:'center',padding:'4px 5px'}}>{(p.series||'?')+'×'+(p.reps||'?')}</td>
+                          {celdas.map((r,i)=>(
+                            <td key={i} style={{fontSize:9,textAlign:'center',padding:'3px 4px',color:r&&r.peso_real!=null?'#111':'#ccc',background:r&&r.peso_real!=null?'#F0FDF4':'#fff'}}>
+                              {r&&(r.peso_real!=null||r.reps_real)?`${r.peso_real!=null?r.peso_real:''}${r.reps_real?'×'+r.reps_real:''}`:'—'}
+                            </td>
+                          ))}
+                          <td style={{fontSize:10,fontWeight:800,textAlign:'center',padding:'3px 5px',color:delta==null?'#ccc':delta>0?'#16A34A':delta<0?'#CC0000':'#888'}}>{delta==null?'—':(delta>0?'+'+delta:delta)}</td>
+                        </tr>
+                      );
+                    }))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -889,8 +951,27 @@ export default function App(){
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
   // Registro de planes del cliente activo + base de conocimiento de la IA
   const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
+  // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
+  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
+  const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
+  // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
+  const ejecucionResumen=useMemo(()=>{
+    if(!ejecRegistros.length)return [];
+    const porEx={};
+    ejecRegistros.forEach(r=>{
+      if(r.peso_real==null&&!r.reps_real)return;
+      const nom=r.ejercicio_nombre||(exs.find(e=>e.id===r.ejercicio_id)?.nombre)||r.ejercicio_id;
+      (porEx[nom]=porEx[nom]||[]).push({sem:r.semana,peso:r.peso_real,reps:r.reps_real});
+    });
+    return Object.entries(porEx).map(([nom,arr])=>{
+      arr.sort((a,b)=>a.sem-b.sem);
+      const pts=arr.map(x=>`S${x.sem}: ${x.peso!=null?x.peso+'kg':''}${x.reps?'×'+x.reps:''}`.trim());
+      return `${nom} → ${pts.join(', ')}`;
+    });
+  },[ejecRegistros,exs]);
   const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
   const [showHistorial,setShowHistorial]=useState(false);
+  const [verEjecucion,setVerEjecucion]=useState(null);
   const [showEntrenarIA,setShowEntrenarIA]=useState(false);
   // Fase activa del plan de periodización del cliente
   const activeFasePlan=useMemo(()=>{
@@ -1091,6 +1172,28 @@ export default function App(){
   const saveClient=(client)=>{
     saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
     setClientWizard(null);
+  };
+  // Genera (si hace falta) y copia el link del portal personal del cliente
+  const copiarPortalCliente=async(c)=>{
+    let token=c.portal_token;
+    if(!token){
+      token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+      try{await updateClientFn(c.id,{portal_token:token});}
+      catch(e){alert('No se pudo generar el acceso: '+e.message);return;}
+    }
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('📲 Link del portal copiado:\n\n'+link+'\n\nEnviáselo al cliente (WhatsApp). Con ese enlace entra a SU entrenamiento y carga los pesos/reps de cada semana. Solo ve sus propios datos.');}
+    catch(e){prompt('Copiá el link del portal de '+c.nombre+':',link);}
+  };
+  // Regenera el token: invalida el link anterior y crea uno nuevo
+  const regenerarPortalCliente=async(c)=>{
+    if(!confirm(`¿Regenerar el link de ${c.nombre}?\n\nEl link anterior dejará de funcionar. Tenés que enviarle el nuevo.`))return;
+    const token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+    try{await updateClientFn(c.id,{portal_token:token});}
+    catch(e){alert('No se pudo regenerar: '+e.message);return;}
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('🔄 Link nuevo generado y copiado:\n\n'+link+'\n\nEl anterior ya no sirve. Enviale este al cliente.');}
+    catch(e){prompt('Nuevo link del portal de '+c.nombre+':',link);}
   };
   const deleteClient=(id)=>{
     deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
@@ -2007,6 +2110,8 @@ export default function App(){
                   )}
                   {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
                   {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
+                  <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
+                  {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
                   <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Editar</button>
                   <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
                 </div>
@@ -2209,7 +2314,7 @@ export default function App(){
             </div>
           </div>
           <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} onApply={applyAISession}/></div>}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
@@ -2251,6 +2356,7 @@ export default function App(){
                         <button onClick={()=>duplicarPlan(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>Duplicar</button>
                         {pl.estado!=='completado'&&<button onClick={()=>cambiarEstadoPlan(pl,'completado')} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>✓ Completar</button>}
                         <button onClick={()=>marcarEjemploPlan(pl,!pl.es_ejemplo)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>{pl.es_ejemplo?'Quitar ejemplo':'⭐ Marcar ejemplo'}</button>
+                        <button onClick={()=>setVerEjecucion(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:'#16A34A',borderColor:'#16A34A'}}>📊 Ejecución</button>
                         <button onClick={()=>{if(confirm('¿Eliminar este plan del historial?'))deleteGymPlan(pl.id);}} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:R}}>Eliminar</button>
                       </div>
                     </div>
@@ -2295,6 +2401,7 @@ export default function App(){
             </OverlayWrap>
           );
         })()}
+        {verEjecucion&&<EjecucionModal plan={verEjecucion} exs={exs} onClose={()=>setVerEjecucion(null)}/>}
         {/* BLOQUEO TOTAL SEMÁFORO ROJO */}
         {activeClient&&activeClient.semaforo==='rojo'&&(
           <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'16px 14px',marginBottom:12,textAlign:'center'}}>

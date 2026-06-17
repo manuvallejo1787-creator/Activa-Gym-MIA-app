@@ -80,7 +80,7 @@ const Spinner = ({ msg = "Generando..." }) => (
 );
 
 // ─── MÓDULO 1: GENERADOR DE SESIONES DE ENTRENAMIENTO ───────────────────────
-export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historial = [], reglas = [], onApply }) {
+export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historial = [], reglas = [], ejecucion = [], onApply }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);
@@ -107,6 +107,9 @@ export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historia
           recientes.map(p => `· ${p.fecha_inicio||''} (${p.estado}): ${p.resumen||p.nombre}`).join("\n") +
           `\nProgresá respecto a lo ya realizado: variá estímulos, subí dificultad donde corresponda y respetá la continuidad.\n`
         : "";
+      const ejecTxt = (ejecucion||[]).length
+        ? `\nCARGAS REALES QUE EL CLIENTE EJECUTÓ (registradas por él, semana a semana — son el dato MÁS importante para progresar):\n${ejecucion.map(e => `- ${e}`).join("\n")}\nUsá estas cargas reales para calibrar el nuevo plan: si progresó, subí; si se estancó o bajó, ajustá volumen/intensidad. No prescribas a ciegas.\n`
+        : "";
 
       const prompt = `Generá una sesión de entrenamiento en JSON para este cliente:
 
@@ -119,7 +122,7 @@ Periodización activa: ${periodizacion?.nombre || "sin plan"}
 Fase actual: ${faseActiva ? `${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : "no definida"}
 Tests de fuerza 1RM: ${rm1s}
 Instrucciones adicionales: ${instrucciones || "ninguna"}
-${reglasTxt}${histTxt}
+${reglasTxt}${histTxt}${ejecTxt}
 ESTRUCTURA OBLIGATORIA DE LA SESIÓN (orden fijo de bloques):
 1. movilidad → 2. activacion → 3. fuerza/potencia (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
 El orden NO se altera. Una sesión típica usa 4-6 bloques siguiendo ese flujo.

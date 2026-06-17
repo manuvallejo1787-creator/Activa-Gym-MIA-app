@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Mi Entrenamiento — ACTIVA</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:#1A1A1A;color:#fff;min-height:100vh;padding-bottom:40px}
+  .hdr{background:linear-gradient(135deg,#CC0000,#1A1A1A);padding:18px 16px;position:sticky;top:0;z-index:5;box-shadow:0 2px 12px rgba(0,0,0,.4)}
+  .hdr h1{font-size:18px;font-weight:900;letter-spacing:2px}
+  .hdr .sub{font-size:11px;opacity:.85;letter-spacing:3px;margin-top:2px}
+  .hdr .cli{font-size:13px;margin-top:8px;font-weight:600}
+  .wrap{padding:14px 12px;max-width:560px;margin:0 auto}
+  .planname{font-size:15px;font-weight:800;margin-bottom:2px}
+  .planmeta{font-size:11px;color:#aaa;margin-bottom:12px}
+  .tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:6px}
+  .tab{flex:0 0 auto;background:#2a2a2a;color:#ccc;border:1px solid #3a3a3a;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer}
+  .tab.on{background:#CC0000;color:#fff;border-color:#CC0000}
+  .blk{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#CC0000;font-weight:800;margin:14px 0 6px}
+  .ex{background:#242424;border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid #333}
+  .ex .nm{font-size:14px;font-weight:800;margin-bottom:1px}
+  .ex .pr{font-size:11px;color:#999;margin-bottom:8px}
+  .grid{display:flex;flex-direction:column;gap:5px}
+  .wk{display:flex;align-items:center;gap:8px}
+  .wk .lbl{flex:0 0 58px;font-size:11px;color:#888;font-weight:700}
+  .wk input{flex:1;min-width:0;background:#1A1A1A;border:1px solid #3a3a3a;border-radius:6px;color:#fff;padding:8px 9px;font-size:14px;outline:none}
+  .wk input:focus{border-color:#CC0000}
+  .wk input.saved{border-color:#16A34A}
+  .wk .u{font-size:10px;color:#777;flex:0 0 auto}
+  .msg{text-align:center;padding:40px 20px;color:#aaa;font-size:14px;line-height:1.6}
+  .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#16A34A;color:#fff;padding:8px 18px;border-radius:99px;font-size:13px;font-weight:700;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20}
+  .toast.show{opacity:1}
+  .foot{text-align:center;font-size:10px;color:#666;margin-top:20px;letter-spacing:1px}
+</style>
+</head>
+<body>
+  <div class="hdr">
+    <h1>ACTIVA</h1>
+    <div class="sub">FITNESS CLUB</div>
+    <div class="cli" id="cli"></div>
+  </div>
+  <div class="wrap" id="wrap">
+    <div class="msg" id="msg">Cargando tu entrenamiento…</div>
+  </div>
+  <div class="toast" id="toast">Guardado ✓</div>
+
+<script>
+const SEMANAS = 8;
+const params = new URLSearchParams(location.search);
+const TOKEN = params.get('t') || params.get('token') || '';
+let DATA = null;        // {cliente, plan, logs, nombres}
+let LOGMAP = {};        // key dia|ex|sem -> {peso_real, reps_real}
+let activeDia = 0;
+
+const $ = id => document.getElementById(id);
+const key = (d,e,s) => `${d}|${e}|${s}`;
+
+function toast(txt, ok){
+  const t = $('toast');
+  t.textContent = txt; t.style.background = ok===false ? '#CC0000' : '#16A34A';
+  t.classList.add('show'); clearTimeout(t._t);
+  t._t = setTimeout(()=>t.classList.remove('show'), 1400);
+}
+
+async function cargar(){
+  if(!TOKEN){ $('msg').textContent = 'Link inválido. Pedile a tu entrenador el enlace de tu portal.'; return; }
+  try{
+    const r = await fetch('/api/portal?token=' + encodeURIComponent(TOKEN));
+    if(r.status === 403){ $('msg').textContent = 'Acceso no válido. Revisá el link con tu entrenador.'; return; }
+    if(!r.ok) throw new Error('No se pudo cargar');
+    DATA = await r.json();
+    $('cli').textContent = DATA.cliente ? `Hola, ${DATA.cliente.nombre} 💪` : '';
+    LOGMAP = {};
+    (DATA.logs||[]).forEach(l => { LOGMAP[key(l.dia_id, l.ejercicio_id, l.semana)] = l; });
+    render();
+  }catch(e){ $('msg').textContent = 'Hubo un problema al cargar. Probá de nuevo en un rato.'; }
+}
+
+function render(){
+  const plan = DATA.plan;
+  if(!plan){ $('wrap').innerHTML = '<div class="msg">Todavía no tenés un plan activo asignado.<br>Tu entrenador lo va a publicar pronto.</div>'; return; }
+  const dias = (plan.dias||[]).filter(d => d.obj && (d.blocks||[]).some(b => (b.exercises||[]).length));
+  if(!dias.length){ $('wrap').innerHTML = '<div class="msg">Tu plan todavía no tiene ejercicios cargados.</div>'; return; }
+  if(activeDia >= dias.length) activeDia = 0;
+
+  let html = `<div class="planname">${esc(plan.nombre||'Mi plan')}</div>`;
+  html += `<div class="planmeta">${plan.fecha_inicio?('Desde '+plan.fecha_inicio):''}${plan.fecha_fin_estimada?(' · hasta '+plan.fecha_fin_estimada):''} · ${dias.length} día/s por semana</div>`;
+
+  html += `<div class="tabs">` + dias.map((d,i)=>
+    `<div class="tab ${i===activeDia?'on':''}" onclick="setDia(${i})">${esc(d.name||('Día '+(i+1)))}</div>`
+  ).join('') + `</div>`;
+
+  const d = dias[activeDia];
+  (d.blocks||[]).forEach(b=>{
+    const exs = b.exercises||[];
+    if(!exs.length) return;
+    html += `<div class="blk">${esc(b.type||'')}</div>`;
+    exs.forEach(be=>{
+      const nombre = (DATA.nombres && DATA.nombres[be.exId]) || be.exId;
+      const p = be.params || b.params || {};
+      html += `<div class="ex"><div class="nm">${esc(nombre)}</div>`;
+      html += `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}</div>`;
+      html += `<div class="grid">`;
+      for(let s=1;s<=SEMANAS;s++){
+        const lg = LOGMAP[key(d.id, be.exId, s)] || {};
+        const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
+        const reps = lg.reps_real ?? '';
+        html += `<div class="wk"><span class="lbl">Sem ${s}</span>`+
+          `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'peso')"><span class="u">kg</span>`+
+          `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'reps')"><span class="u">reps</span>`+
+          `</div>`;
+      }
+      html += `</div></div>`;
+    });
+  });
+  html += `<div class="foot">ACTIVA · Tus datos se guardan automáticamente</div>`;
+  $('wrap').innerHTML = html;
+}
+
+window.setDia = i => { activeDia = i; render(); };
+
+window.guardar = async (inp, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
+  const k = key(dia_id, ejercicio_id, semana);
+  const prev = LOGMAP[k] || {};
+  const payload = {
+    token: TOKEN, plan_id: DATA.plan.id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
+    peso_real: campo==='peso' ? inp.value.trim() : (prev.peso_real ?? ''),
+    reps_real: campo==='reps' ? inp.value.trim() : (prev.reps_real ?? ''),
+  };
+  // nada que guardar si ambos vacíos y no había nada antes
+  if(payload.peso_real==='' && payload.reps_real==='' && !prev.peso_real && !prev.reps_real) return;
+  try{
+    const r = await fetch('/api/portal', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    if(!r.ok) throw new Error();
+    LOGMAP[k] = { ...prev, peso_real: payload.peso_real==='' ? null : payload.peso_real, reps_real: payload.reps_real };
+    inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
+    toast('Guardado ✓', true);
+  }catch(e){ toast('No se pudo guardar', false); }
+};
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function escAttr(s){ return esc(s).replace(/'/g,"\\'"); }
+
+cargar();
+</script>
+</body>
+</html>

@@ -187,6 +187,7 @@ function mapClientFromDB(r) {
     notasInternas: r.notas_internas||'', screeningCompleto: r.screening_completo||false,
     screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
     periodizacion: r.periodizacion||'',
+    portal_token: r.portal_token||'',
   }
 }
 function mapClientToDB(c) {
@@ -201,6 +202,7 @@ function mapClientToDB(c) {
     notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
     screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
     periodizacion: c.periodizacion||'',
+    ...(c.portal_token?{portal_token:c.portal_token}:{}),
   }
 }
 function mapClientUpdatesToDB(u) {
@@ -213,6 +215,7 @@ function mapClientUpdatesToDB(u) {
   if(u.screeningCompleto!==undefined)  m.screening_completo=u.screeningCompleto
   if(u.notasInternas!==undefined)      m.notas_internas=u.notasInternas
   if(u.objetivo!==undefined)           m.objetivo=u.objetivo
+  if(u.portal_token!==undefined)       m.portal_token=u.portal_token
   return m
 }
 function mapPacienteFromDB(r) {
@@ -472,6 +475,30 @@ export function useGymPlanes(clientId) {
     else setGymPlanes(a=>a.filter(x=>x.id!==id))
   },[])
   return{gymPlanes,loading,savePlan,deletePlan,refetch:fetch}
+}
+
+// ─── HOOK: Registros de ejecución real (ejecucion_registros) ──────────────
+export function useEjecucion(planId) {
+  const [registros,setRegistros]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!planId){setRegistros([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('ejecucion_registros').select('*').eq('plan_id',planId).order('semana',{ascending:true})
+      if(error)throw error
+      setRegistros(data||[])
+    }catch(e){console.error('ejecucion_registros:',e.message)}
+    finally{setLoading(false)}
+  },[planId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!planId)return
+    const ch=supabase.channel('ejec_'+planId+'_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'ejecucion_registros',filter:`plan_id=eq.${planId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,planId])
+  return{registros,loading,refetch:fetch}
 }
 
 // ─── HOOK: Registro de Planes de Nutrición (gym_planes_nutricion) ─────────
