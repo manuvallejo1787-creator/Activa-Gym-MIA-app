@@ -3463,7 +3463,7 @@ export default function App(){
               {tests.map(t=>{
                 const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
                 const rm1=t.rm1_real||t.rm1_calculado;
-                const niv=rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
+                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
                 return(
                   <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
                     <div>

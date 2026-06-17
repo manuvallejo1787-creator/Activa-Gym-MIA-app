@@ -113,8 +113,9 @@ export const calcular1RM = (peso, reps, formula = 'epley_brzycki') => {
 };
 
 export const nivelFuerza = (test, rm1, pesoCorporal) => {
-  if (!rm1 || !pesoCorporal) return null;
+  if (!test || !rm1 || !pesoCorporal) return null;
   const n = test.nivel;
+  if (!n) return null;
   // For pull-ups: ratio = additional weight / bodyweight
   // A person completing reps with bodyweight (0 lastre) is Principiante minimum
   if (test.id === 'pull_ups') {
