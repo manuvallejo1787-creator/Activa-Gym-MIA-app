@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
@@ -3350,11 +3350,23 @@ export default function App(){
     const [editingTest,setEditingTest]=useState(null);
     const [showPlan,setShowPlan]=useState(false);
     const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
-    // ── Ejercicios personalizados (max 3, guardados en localStorage por cliente)
-    const [customTests,setCustomTests]=useState(()=>{
-      try{ return JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]').slice(0,3); }catch{ return []; }
-    });
+    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
+    const {customRows,saveCustom}=useCustomTests(selClientId||null);
+    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
     const [showCustomEdit,setShowCustomEdit]=useState(false);
+    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
+    const migradoRef=useRef(new Set());
+    useEffect(()=>{
+      if(!selClientId||migradoRef.current.has(selClientId))return;
+      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
+      try{
+        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
+        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
+          migradoRef.current.add(selClientId);
+          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
+        }
+      }catch{}
+    },[selClientId,customRows,saveCustom]);
 
     // Sync custom tests when client changes
     const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
@@ -3364,9 +3376,7 @@ export default function App(){
         {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
         {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)}/>}
         {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} onSave={(tests)=>{
-          const withIds=tests.map((t,i)=>({...t,id:'ct'+(i+1),custom:true}));
-          setCustomTests(withIds);
-          try{localStorage.setItem('custom_tests_'+selClientId,JSON.stringify(withIds));}catch{}
+          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
         }}/>}
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>

@@ -477,6 +477,49 @@ export function useGymPlanes(clientId) {
   return{gymPlanes,loading,savePlan,deletePlan,refetch:fetch}
 }
 
+// ─── HOOK: Ejercicios personalizados de fuerza (fuerza_tests_custom) ──────
+export function useCustomTests(clientId) {
+  const [customRows,setCustomRows]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clientId){setCustomRows([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('fuerza_tests_custom').select('*').eq('gym_client_id',clientId).order('slot',{ascending:true})
+      if(error)throw error
+      setCustomRows(data||[])
+    }catch(e){console.error('fuerza_tests_custom:',e.message)}
+    finally{setLoading(false)}
+  },[clientId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!clientId)return
+    const ch=supabase.channel('fcustom_'+clientId+'_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'fuerza_tests_custom',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,clientId])
+  // items: array de hasta 3 {nombre,patron,protocolo}. Se asignan a slots ct1/ct2/ct3.
+  const saveCustom=useCallback(async(items)=>{
+    if(!clientId)return
+    const slots=['ct1','ct2','ct3']
+    if(isSupabaseReady){
+      for(let i=0;i<slots.length;i++){
+        const slot=slots[i];const it=items[i]
+        const rid=`${clientId}__${slot}`
+        if(it&&it.nombre&&it.nombre.trim()){
+          await supabase.from('fuerza_tests_custom').upsert({id:rid,gym_client_id:clientId,slot,nombre:it.nombre.trim(),patron:it.patron||'',protocolo:it.protocolo||'',updated_at:new Date().toISOString()},{onConflict:'id'})
+        }else{
+          await supabase.from('fuerza_tests_custom').delete().eq('id',rid)
+        }
+      }
+      await fetch()
+    }else{
+      setCustomRows(items.filter(t=>t&&t.nombre).map((t,i)=>({id:`${clientId}__ct${i+1}`,gym_client_id:clientId,slot:'ct'+(i+1),nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||''})))
+    }
+  },[clientId,fetch])
+  return{customRows,loading,saveCustom,refetch:fetch}
+}
+
 // ─── HOOK: Registros de ejecución real (ejecucion_registros) ──────────────
 export function useEjecucion(planId) {
   const [registros,setRegistros]=useState([])
