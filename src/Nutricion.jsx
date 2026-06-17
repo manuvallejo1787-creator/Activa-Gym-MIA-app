@@ -7,6 +7,7 @@ import {
   calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
 } from "./alimentos.js";
 import { AIGeneradorNutricion } from "./AIActiva.jsx";
+import { useNutricionPlanes } from "./db.js";
 
 // ─── PALETA ──────────────────────────────────────────────────────────────────
 const BK='#1a1a1a', WH='#FFFFFF', R='#CC0000';
@@ -87,7 +88,7 @@ const ResumenDia = ({ totales, objetivoNut }) => {
   );
 };
 
-export default function Nutricion({ clients, brand }) {
+export default function Nutricion({ clients, brand, reglas = [] }) {
   // ── Estado principal ──────────────────────────────────────────────────────
   const [view, setView]     = useState('planes');    // planes | plan | alimentos | nuevo_cliente
   const [selClientId, setSelClientId] = useState('');
@@ -109,6 +110,9 @@ export default function Nutricion({ clients, brand }) {
   // Cliente activo
   const cliente = useMemo(() => clients.find(c => c.id === selClientId), [clients, selClientId]);
 
+  // Registro persistente de planes de nutrición del cliente
+  const { nutriPlanes, savePlan: saveNutriPlan, deletePlan: deleteNutriPlan } = useNutricionPlanes(selClientId || null);
+
   // Objetivo nutricional calculado
   const objetivoNut = useMemo(() => {
     if (!planActivo?.perfil) return null;
@@ -125,6 +129,35 @@ export default function Nutricion({ clients, brand }) {
     const items = Object.values(diaData).flat();
     return sumarMacrosDia(items);
   }, [planActivo, diaActivo]);
+
+  // ── Persistencia de planes de nutrición ───────────────────────────────────
+  const resumirPlanNutri = (plan) => {
+    const dias = Object.entries(plan?.semana || {}).filter(([,c]) => Object.values(c||{}).flat().length > 0).map(([d]) => d);
+    const obj = plan?.perfil?.objetivo_nut || '';
+    return `${obj}${objetivoNut ? ` ${objetivoNut.kcal} kcal` : ''} · días cargados: ${dias.length}/7`;
+  };
+  const dbToPlan = (row) => ({ id: row.id, nombre: row.nombre, clienteId: row.gym_client_id, perfil: row.perfil || {}, semana: row.semana || {}, notas: row.notas || '', fechaCreacion: row.fecha_creacion, es_ejemplo: row.es_ejemplo });
+  const guardarPlanNutri = async () => {
+    if (!planActivo) return;
+    if (!selClientId) { alert('Seleccioná un cliente.'); return; }
+    const registro = {
+      id: planActivo.id,
+      nombre: planActivo.nombre,
+      fecha_creacion: planActivo.fechaCreacion || new Date().toISOString().split('T')[0],
+      objetivo_nut: objetivoNut?.label || planActivo.perfil?.objetivo_nut || '',
+      kcal: objetivoNut?.kcal || null,
+      perfil: planActivo.perfil || {},
+      semana: planActivo.semana || {},
+      resumen: resumirPlanNutri(planActivo),
+      es_ejemplo: planActivo.es_ejemplo || false,
+      notas: planActivo.notas || '',
+    };
+    try { await saveNutriPlan(registro); alert('💾 Plan de nutrición guardado en el historial del cliente.'); }
+    catch (e) { alert('Error al guardar: ' + e.message); }
+  };
+  const cargarPlanNutri = (row) => { setPlanActivo(dbToPlan(row)); setDiaActivo('Lunes'); setView('plan'); };
+  const duplicarPlanNutri = (row) => { const p = dbToPlan(row); setPlanActivo({ ...p, id: genNutId('pl'), nombre: `${p.nombre} (copia)`, fechaCreacion: new Date().toISOString().split('T')[0], es_ejemplo: false }); setDiaActivo('Lunes'); setView('plan'); };
+  const marcarEjemploNutri = async (row) => { try { await saveNutriPlan({ ...row, es_ejemplo: !row.es_ejemplo }); } catch (e) { console.error(e); } };
 
   // ── Crear nuevo plan ──────────────────────────────────────────────────────
   const crearPlan = (nombre, perfil) => {
@@ -534,21 +567,27 @@ export default function Nutricion({ clients, brand }) {
       </div>
       {selClientId&&(
         <>
-          {planes.filter(p=>p.clienteId===selClientId).length>0&&(
+          {nutriPlanes.length>0&&(
             <div style={{marginBottom:12}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Planes del cliente ({planes.filter(p=>p.clienteId===selClientId).length})</div>
-              {planes.filter(p=>p.clienteId===selClientId).map(plan=>(
-                <div key={plan.id} style={{...ns.card,display:'flex',justifyContent:'space-between',alignItems:'center',borderLeft:`3px solid ${TL}`}}>
-                  <div>
-                    <div style={{fontSize:12,fontWeight:700}}>{plan.nombre}</div>
-                    <div style={{fontSize:10,color:G3}}>Creado: {plan.fechaCreacion}</div>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>📂 Historial de planes ({nutriPlanes.length})</div>
+              {nutriPlanes.map(plan=>(
+                <div key={plan.id} style={{...ns.card,borderLeft:`3px solid ${TL}`}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8,flexWrap:'wrap'}}>
+                    <div style={{flex:1,minWidth:160}}>
+                      <div style={{fontSize:12,fontWeight:700}}>{plan.nombre} {plan.es_ejemplo&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 6px',borderRadius:99,fontWeight:700}}>⭐ EJEMPLO IA</span>}</div>
+                      <div style={{fontSize:10,color:G3}}>Creado: {plan.fecha_creacion||'—'}{plan.objetivo_nut?` · ${plan.objetivo_nut}`:''}{plan.kcal?` · ${plan.kcal} kcal`:''}</div>
+                      {plan.resumen&&<div style={{fontSize:9,color:'#999',marginTop:2}}>{plan.resumen}</div>}
+                    </div>
                   </div>
-                  <div style={{display:'flex',gap:5}}>
-                    <button onClick={()=>{setPlanActivo(plan);setView('plan');}} style={{...ns.btnTl,fontSize:10}}>Abrir</button>
-                    <button onClick={()=>setPlanes(p=>p.filter(pl=>pl.id!==plan.id))} style={{...ns.btnG,fontSize:10,color:RJ,borderColor:RJ}}>Eliminar</button>
+                  <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:8}}>
+                    <button onClick={()=>cargarPlanNutri(plan)} style={{...ns.btnTl,fontSize:10}}>Abrir</button>
+                    <button onClick={()=>duplicarPlanNutri(plan)} style={{...ns.btnG,fontSize:10}}>Duplicar</button>
+                    <button onClick={()=>marcarEjemploNutri(plan)} style={{...ns.btnG,fontSize:10}}>{plan.es_ejemplo?'Quitar ejemplo':'⭐ Marcar ejemplo'}</button>
+                    <button onClick={()=>{if(confirm('¿Eliminar este plan del historial?'))deleteNutriPlan(plan.id);}} style={{...ns.btnG,fontSize:10,color:RJ,borderColor:RJ}}>Eliminar</button>
                   </div>
                 </div>
               ))}
+              <div style={{fontSize:9,color:G3,marginTop:4,fontStyle:'italic'}}>Los planes (sobre todo los ⭐ ejemplo) se le pasan a la IA como contexto al generar nuevos planes.</div>
             </div>
           )}
           <NuevoPlanFormComp cliente={cliente} onCrear={crearPlan}/>
@@ -573,6 +612,7 @@ export default function Nutricion({ clients, brand }) {
               <div style={{fontSize:10,color:G3}}>{cliente?.nombre} {cliente?.apellido}</div>
             </div>
             <div style={{display:'flex',gap:5}}>
+              <button onClick={guardarPlanNutri} style={{...ns.btnR,fontSize:10,background:'#16A34A'}}>💾 Guardar plan</button>
               <button onClick={exportarPDF} style={{...ns.btnR,fontSize:10,background:brand?.colorPrimary||R}}>📄 Exportar PDF</button>
               <button onClick={()=>setView('planes')} style={{...ns.btnG,fontSize:10}}>← Volver</button>
             </div>
@@ -587,7 +627,7 @@ export default function Nutricion({ clients, brand }) {
         </div>
 
         {/* GENERADOR IA */}
-        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} onApply={applyAIPlan}/>
+        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} reglas={reglas} historial={nutriPlanes.slice(0,4).map(p=>`${p.fecha_creacion||''} · ${p.objetivo_nut||''} ${p.kcal||'?'}kcal — ${p.resumen||p.nombre}`)} onApply={applyAIPlan}/>
 
         <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:10}}>
           {/* Navegación días */}

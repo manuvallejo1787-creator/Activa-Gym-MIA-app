@@ -295,7 +295,7 @@ const fs={
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── SesionClienteComp — external component (hooks: useState + useSesionesClinicas) ──
-function SesionClienteComp({ paciente }) {
+function SesionClienteComp({ paciente, reglas=[] }) {
   const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
   const [showForm, setShowForm] = useState(false);
   const [form, setF] = useState(null);
@@ -438,7 +438,7 @@ function SesionClienteComp({ paciente }) {
           </div>
 
           {/* GENERADOR IA DE PROTOCOLO */}
-          <AIGeneradorProtocolo paciente={paciente} region={regionActual} fase={faseActual} evaluacion={ultimaEval} onApply={applyAIProtocolo}/>
+          <AIGeneradorProtocolo paciente={paciente} region={regionActual} fase={faseActual} evaluacion={ultimaEval} reglas={reglas} historial={(sesiones||[]).slice(0,4).map(sx=>`${sx.fecha||''} · ${(sx.region||'')} · fase ${(sx.fase||'')} · EVA ${sx.eva_inicio ?? '?'}→${sx.eva_fin ?? '?'} · ${(sx.objetivo||'').slice(0,60)}`)} onApply={applyAIProtocolo}/>
 
           {/* EJERCICIOS DEL PROTOCOLO — auto-cargados, editables */}
           <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:7,padding:'10px 12px',marginBottom:8}}>
@@ -616,7 +616,7 @@ function SesionClienteComp({ paciente }) {
   );
 }
 
-export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient }){
+export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, reglas=[] }){
   const [view,setView]=useState('dashboard');
   // Estado levantado de sub-componentes (evita pérdida de foco en inputs)
   const [protFase,setProtFase]=useState('restaura');
@@ -877,7 +877,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
               alert('✅ Fase actualizada a '+(ai.fase_sugerida||'').toUpperCase()+' según análisis IA');
             }
           };
-          return <div style={{marginBottom:12}}><AIAnalisisEvaluacion tipo="fisio" datos={datosIA} onApply={aplicarFisio}/></div>;
+          return <div style={{marginBottom:12}}><AIAnalisisEvaluacion tipo="fisio" datos={datosIA} reglas={reglas} onApply={aplicarFisio}/></div>;
         })()}
         {/* KPIs */}
         {last&&(
@@ -1923,7 +1923,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient })
             {pacientes.map(p=><option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.region?`· ${p.region}`:''}</option>)}
           </select>
         </div>
-        {pacSel&&<SesionClienteComp paciente={pacSel}/>}
+        {pacSel&&<SesionClienteComp paciente={pacSel} reglas={reglas}/>}
         {!sesionPacId&&<div style={{...fs.card,textAlign:'center',padding:28,borderStyle:'dashed',color:GM}}>Seleccioná un paciente para ver y registrar sesiones.</div>}
       </div>
     );

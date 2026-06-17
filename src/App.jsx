@@ -1386,7 +1386,7 @@ export default function App(){
             {cliente.referidoPor&&<div style={{fontSize:10,color:'#92400E',marginTop:3}}>🎁 Referido por: {cliente.referidoPor}</div>}
           </div>
           {/* Análisis IA */}
-          <AIAnalisisEvaluacion tipo="gym" datos={datosIA} onApply={aplicarSugerencia}/>
+          <AIAnalisisEvaluacion tipo="gym" datos={datosIA} reglas={iaReglas} onApply={aplicarSugerencia}/>
         </div>
       </div>
     );
@@ -3453,11 +3453,12 @@ export default function App(){
         {tab==='clientes'&&ClientesTab()}
         {tab==='session'&&SessionTab()}
         {tab==='fuerza'&&<FuerzaTab/>}
-        {tab==='nutricion'&&<Nutricion clients={clients} brand={brand}/>}
+        {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}
         {tab==='rehab'&&<RehabTab/>}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
+          reglas={iaReglas}
           onUpdateGymClient={(gymClientId, updates)=>{
             updateClientFn(gymClientId, updates)
               .catch(e=>console.error('Error sincronizando con gym:',e));
