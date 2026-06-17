@@ -17,6 +17,7 @@ create table if not exists fuerza_tests (
   rm1_calculado   numeric,
   rm1_real        numeric,
   nivel_resultado text,
+  formula         text default 'epley_brzycki',
   notas           text default '',
   evaluador       text default '',
   created_at      timestamptz default now()

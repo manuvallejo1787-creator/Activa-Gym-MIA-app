@@ -474,6 +474,44 @@ export function useGymPlanes(clientId) {
   return{gymPlanes,loading,savePlan,deletePlan,refetch:fetch}
 }
 
+// ─── HOOK: Registro de Planes de Nutrición (gym_planes_nutricion) ─────────
+export function useNutricionPlanes(clientId) {
+  const [nutriPlanes,setNutriPlanes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clientId){setNutriPlanes([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('gym_planes_nutricion').select('*').eq('gym_client_id',clientId).order('created_at',{ascending:false})
+      if(error)throw error
+      setNutriPlanes(data||[])
+    }catch(e){console.error('gym_planes_nutricion:',e.message)}
+    finally{setLoading(false)}
+  },[clientId])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady||!clientId)return
+    const ch=supabase.channel('nutriplanes_'+clientId+'_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'gym_planes_nutricion',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch,clientId])
+  const savePlan=useCallback(async(p)=>{
+    if(!clientId)throw new Error('No hay cliente seleccionado')
+    const toSave={...p,gym_client_id:clientId,updated_at:new Date().toISOString()}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('gym_planes_nutricion').upsert(toSave,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    } else setNutriPlanes(a=>a.find(x=>x.id===p.id)?a.map(x=>x.id===p.id?toSave:x):[toSave,...a])
+    return toSave
+  },[clientId,fetch])
+  const deletePlan=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('gym_planes_nutricion').delete().eq('id',id)
+    else setNutriPlanes(a=>a.filter(x=>x.id!==id))
+  },[])
+  return{nutriPlanes,loading,savePlan,deletePlan,refetch:fetch}
+}
+
 // ─── HOOK: Base de conocimiento de la IA (ia_conocimiento) ────────────────
 export function useIAConocimiento() {
   const [reglas,setReglas]=useState([])
