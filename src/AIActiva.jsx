@@ -495,7 +495,7 @@ Generá menús para ${diasTarget} días. Respondé ÚNICAMENTE con este JSON:
 
 // ─── MÓDULO 4: ANÁLISIS DE EVALUACIÓN → SUGERENCIA DE FASE/MÉTODO/EJERCICIOS ──
 // Lee los datos de una evaluación (gym o fisio) y sugiere ubicación metodológica.
-export function AIAnalisisEvaluacion({ tipo, datos, reglas = [], onApply }) {
+export function AIAnalisisEvaluacion({ tipo, datos, reglas = [], onApply, onResult }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);
@@ -516,16 +516,26 @@ Hallazgos screening: ${datos.screening || "no registrado"}
 Antropometría: ${datos.antropometria || "no registrada"}
 Objetivos: ${datos.objetivos || "no especificados"}
 Tiempo de evolución: ${datos.evolucion || "no registrado"}`
-        : `EVALUACIÓN DE GIMNASIO
+        : `EVALUACIÓN FUNCIONAL DE GIMNASIO
 Cliente: ${datos.nombre || ""} ${datos.apellido || ""}
-Objetivo declarado: ${datos.objetivo || "no registrado"}
-Nivel actual asignado: ${datos.nivel || "no asignado"}
-Semáforo: ${datos.semaforo || "pendiente"}
-Restricciones: ${datos.restricciones || "ninguna"}
-Antropometría: ${datos.antropometria || "no registrada"}
-Tests de fuerza: ${datos.tests || "sin tests"}
-Screening de salud: ${datos.screening || "no registrado"}
-Experiencia previa: ${datos.experiencia || "no registrada"}`;
+
+▸ OBJETIVO declarado: ${datos.objetivo || "no registrado"}
+▸ Experiencia previa: ${datos.experiencia || "no registrada"}
+▸ Nivel actual asignado: ${datos.nivel || "no asignado"} · Semáforo: ${datos.semaforo || "pendiente"}
+
+▸ MEDICIONES CORPORALES (antropometría): ${datos.antropometria || "NO REGISTRADA"}
+
+▸ ÁNGULOS / MOVILIDAD ARTICULAR: ${datos.movilidad || "NO REGISTRADA"}
+▸ POSTURA (por segmento): ${datos.postura || "NO REGISTRADA"}
+▸ CONTROL MOTOR (patrones): ${datos.controlMotor || "no registrado"}
+▸ BALANCE DINÁMICO (Y-Balance): ${datos.yBalance || "no registrado"}
+
+▸ CAPACIDADES FÍSICAS (PVFI): ${datos.capacidades || "sin tests"} · Semáforo PVFI: ${datos.pvfiNivel || "no asignado"}
+▸ TESTS DE FUERZA (1RM y ratios): ${datos.tests || "sin tests"}
+
+▸ SALUD / SCREENING: ${datos.screening || "no registrado"}
+▸ BANDERAS CLÍNICAS: ${datos.banderas || "sin banderas"}
+▸ RESTRICCIONES (filtro de ejercicios): ${datos.restriccionesEstructuradas || "ninguna"}${datos.restricciones && datos.restricciones!=='ninguna' ? ` · Otras: ${datos.restricciones}` : ''}`;
 
       const fases = tipo === "fisio"
         ? "RESTAURA (rehabilitación aguda), ACTIVA (reintegración), POTENCIA (desarrollo de capacidad), RINDE (mantenimiento/rendimiento)"
@@ -542,28 +552,37 @@ Metodologías de planificación: ${metodologias}
 ${ctxReglas(reglas,'evaluacion')}
 Respondé ÚNICAMENTE con este JSON:
 {
-  "interpretacion": "interpretación clínica/funcional de la evaluación en 3-4 líneas, integrando los datos",
+  "interpretacion": "síntesis integradora de 3-4 líneas que cruza objetivo + cuerpo + movilidad + fuerza, no una lista",
+  "analisis_objetivos": "relación entre lo que la persona busca y lo que la evaluación muestra: ¿el objetivo es realista hoy?, ¿qué hay que resolver antes? (2-3 líneas)",
+  "analisis_corporal": "lectura de las mediciones corporales: IMC, % graso, perímetros y ratio cintura/cadera si están; qué implican para el objetivo (2-3 líneas). Si dice NO REGISTRADA, indicá que falta el dato",
+  "analisis_movilidad": "lectura de los ángulos de movilidad y la postura: qué articulaciones están limitadas o con dolor, asimetrías relevantes y cómo condicionan los ejercicios (2-3 líneas). Si dice NO REGISTRADA, indicá que falta el dato",
+  "deficiencias_funcionales": ["déficit funcional concreto detectado (control motor, postura, balance, movilidad) con su implicancia"],
+  "deficiencias_fuerza": ["déficit de fuerza concreto: grupo/patrón débil según tests 1RM, ratios o PVFI, con referencia al valor"],
   "fase_sugerida": "restaura|activa|potencia|rinde",
-  "fase_justificacion": "por qué esta fase (2 líneas)",
+  "fase_justificacion": "por qué esta fase, citando los datos que la fundamentan (2 líneas)",
   "metodologia_sugerida": "nombre exacto de una de las metodologías listadas",
   "metodologia_justificacion": "por qué este sistema para este caso (2 líneas)",
+  "prioridades": ["en orden, qué atacar primero según lo que más limita hoy"],
   "ejercicios_base": [
-    {"nombre": "ejercicio", "razon": "por qué para este caso"}
+    {"nombre": "ejercicio", "razon": "qué déficit o capacidad puntual ataca en ESTE cliente"}
   ],
-  "precauciones": "consideraciones de seguridad para esta persona",
+  "precauciones": "consideraciones de seguridad concretas, integrando banderas, dolor y restricciones",
   "objetivos_sugeridos": ["objetivo 1", "objetivo 2", "objetivo 3"]
 }
 
-Incluí 4-6 ejercicios base apropiados. Basate en evidencia y en el estado real de la persona.
+Incluí 4-6 ejercicios base y 2-4 ítems en cada lista de deficiencias y prioridades (si no hay déficit en un eje, devolvé lista vacía).
 
 INSTRUCCIONES CRÍTICAS:
-- USÁ todos los datos provistos arriba. Si hay antropometría, tests de fuerza o hallazgos, INTEGRALOS explícitamente en tu interpretación.
-- Solo decí que un dato "no está disponible" si el texto dice literalmente "NO REGISTRADA", "NO HAY" o "no registrado". No asumas ausencia de datos que sí están.
-- Si hay tests de fuerza con niveles y ratios, usalos para fundamentar la fase y la metodología (ej: un cliente con fuerza nivel Intermedio/Avanzado no debería ir a RESTAURA salvo que haya dolor o lesión).
-- La interpretación debe referirse a los números concretos del cliente, no ser genérica.`;
+- Analizá TODOS los ejes provistos: objetivo, mediciones corporales, ángulos de movimiento/postura, control motor/balance, capacidades físicas y fuerza. Cada campo de análisis debe referirse a los valores concretos del cliente, nunca genérico.
+- Conectá los déficits con el objetivo: si el objetivo choca con una limitación (ej. quiere hipertrofia de hombro pero tiene flexión de hombro limitada o restricción overhead), decilo explícitamente y ponelo en prioridades.
+- Solo declarás un dato ausente si el texto dice literalmente "NO REGISTRADA", "NO HAY", "no registrado" o "sin tests". No asumas ausencia de lo que sí está.
+- Usá los ángulos y la escala (Normal/Limitado/Muy limitado/Dolor) para fundamentar movilidad; usá 1RM, ratios (×peso corporal) y PVFI para fundamentar fuerza. "Dolor" en cualquier movimiento es una precaución obligatoria.
+- Una bandera roja obliga a derivación y a fase RESTAURA con precaución explícita, sin importar la fuerza. Las restricciones (impacto/overhead/carga axial) deben respetarse en los ejercicios sugeridos.
+- Coherencia: no mandes a RESTAURA a alguien con fuerza Intermedia/Avanzada y movilidad normal salvo dolor/lesión/bandera; no mandes a POTENCIA/RINDE a alguien con déficits funcionales marcados o semáforo PVFI rojo.`;
 
-      const data = await callClaude(prompt, 2200);
+      const data = await callClaude(prompt, 3200);
       setResult(data);
+      onResult && onResult(data);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -591,6 +610,33 @@ INSTRUCCIONES CRÍTICAS:
             <div style={{fontSize:10,fontWeight:700,color:G3,textTransform:'uppercase',marginBottom:4}}>Interpretación</div>
             <div style={{fontSize:11,color:G4,lineHeight:1.5,marginBottom:10}}>{result.interpretacion}</div>
 
+            {(result.analisis_objetivos||result.analisis_corporal||result.analisis_movilidad)&&(
+              <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:10}}>
+                {result.analisis_objetivos&&<div style={{background:'#EFF6FF',borderRadius:6,padding:'7px 10px'}}><div style={{fontSize:9,fontWeight:700,color:'#1D4ED8',textTransform:'uppercase',marginBottom:2}}>🎯 Objetivos vs. evaluación</div><div style={{fontSize:10.5,color:G4,lineHeight:1.45}}>{result.analisis_objetivos}</div></div>}
+                {result.analisis_corporal&&<div style={{background:'#F0FDF4',borderRadius:6,padding:'7px 10px'}}><div style={{fontSize:9,fontWeight:700,color:'#15803D',textTransform:'uppercase',marginBottom:2}}>📏 Mediciones corporales</div><div style={{fontSize:10.5,color:G4,lineHeight:1.45}}>{result.analisis_corporal}</div></div>}
+                {result.analisis_movilidad&&<div style={{background:'#FEF6F0',borderRadius:6,padding:'7px 10px'}}><div style={{fontSize:9,fontWeight:700,color:'#C2410C',textTransform:'uppercase',marginBottom:2}}>🦴 Ángulos y movilidad</div><div style={{fontSize:10.5,color:G4,lineHeight:1.45}}>{result.analisis_movilidad}</div></div>}
+              </div>
+            )}
+
+            {(result.deficiencias_funcionales?.length>0||result.deficiencias_fuerza?.length>0)&&(
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+                <div style={{background:'#FFF9EC',borderRadius:6,padding:'8px 10px',border:'1px solid #FCD34D'}}>
+                  <div style={{fontSize:9,fontWeight:700,color:'#92400E',textTransform:'uppercase',marginBottom:3}}>Déficits funcionales</div>
+                  {result.deficiencias_funcionales?.length>0?result.deficiencias_funcionales.map((d,i)=><div key={i} style={{fontSize:10,color:'#78350F',marginBottom:2}}>• {d}</div>):<div style={{fontSize:10,color:G3}}>Sin déficits marcados</div>}
+                </div>
+                <div style={{background:'#FEF2F2',borderRadius:6,padding:'8px 10px',border:'1px solid #FCA5A5'}}>
+                  <div style={{fontSize:9,fontWeight:700,color:'#991B1B',textTransform:'uppercase',marginBottom:3}}>Déficits de fuerza</div>
+                  {result.deficiencias_fuerza?.length>0?result.deficiencias_fuerza.map((d,i)=><div key={i} style={{fontSize:10,color:'#7F1D1D',marginBottom:2}}>• {d}</div>):<div style={{fontSize:10,color:G3}}>Sin déficits marcados</div>}
+                </div>
+              </div>
+            )}
+
+            {result.prioridades?.length>0&&(
+              <div style={{background:'#1A1A1A',borderRadius:6,padding:'8px 11px',marginBottom:10}}>
+                <div style={{fontSize:9,fontWeight:700,color:'#FCA5A5',textTransform:'uppercase',marginBottom:4}}>🔢 Prioridades (en orden)</div>
+                {result.prioridades.map((p,i)=><div key={i} style={{fontSize:10.5,color:'#fff',marginBottom:2,display:'flex',gap:6}}><span style={{color:'#FCA5A5',fontWeight:800}}>{i+1}.</span><span>{p}</span></div>)}
+              </div>
+            )}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
               <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:`1px solid ${AI_BORDER}`}}>
                 <div style={{fontSize:9,color:G3,textTransform:'uppercase',fontWeight:700}}>Fase sugerida</div>
