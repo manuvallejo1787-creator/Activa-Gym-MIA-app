@@ -355,7 +355,7 @@ Incluí 5-8 ejercicios apropiados para la fase ${fase} en región ${region}. Bas
 }
 
 // ─── MÓDULO 3: GENERADOR DE PLAN NUTRICIONAL ─────────────────────────────────
-export function AIGeneradorNutricion({ cliente, objetivoNut, todosAlimentos, reglas = [], historial = [], onApply }) {
+export function AIGeneradorNutricion({ cliente, objetivoNut, todosAlimentos, reglas = [], historial = [], perfil = null, entrenamiento = '', onApply }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);
@@ -373,12 +373,15 @@ export function AIGeneradorNutricion({ cliente, objetivoNut, todosAlimentos, reg
       const prompt = `Generá un plan nutricional semanal en JSON para este cliente de ACTIVA Fitness Club:
 
 Cliente: ${cliente?.nombre} ${cliente?.apellido}
+Perfil: ${perfil ? `${perfil.sexo==='F'?'Mujer':'Hombre'}, ${perfil.edad||'?'} años, ${perfil.peso||'?'} kg, ${perfil.talla||'?'} cm, nivel de actividad ${perfil.actividad||'?'}` : 'no detallado'}
 Objetivo: ${objetivoNut?.label || "mantenimiento"}
 Calorías target: ${objetivoNut?.kcal || 2000} kcal/día
 Proteínas: ${objetivoNut?.prot_g || 150}g · Carbos: ${objetivoNut?.carb_g || 200}g · Grasas: ${objetivoNut?.gras_g || 70}g
 Nivel de entrenamiento: ${cliente?.nivel?.toUpperCase() || "activo"}
+Plan de entrenamiento que está cursando: ${entrenamiento || "sin plan de entrenamiento activo registrado"}
 Instrucciones especiales: ${instrucciones || "ninguna"}
 ${ctxReglas(reglas,'nutricion')}${ctxHistorial(historial,'PLANES NUTRICIONALES PREVIOS DE ESTE CLIENTE')}
+Considerá el plan de entrenamiento al distribuir macros: más carbohidratos y energía en los días/sesiones de mayor carga, prioridad de proteína en torno al entrenamiento, y coherencia entre el gasto del plan y las calorías target.
 IMPORTANTE: Usá SOLO alimentos de esta lista (ID exacto):
 ${alimentosList}
 

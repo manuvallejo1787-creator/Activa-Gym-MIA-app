@@ -7,7 +7,7 @@ import {
   calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
 } from "./alimentos.js";
 import { AIGeneradorNutricion } from "./AIActiva.jsx";
-import { useNutricionPlanes } from "./db.js";
+import { useNutricionPlanes, useGymPlanes } from "./db.js";
 
 // ─── PALETA ──────────────────────────────────────────────────────────────────
 const BK='#1a1a1a', WH='#FFFFFF', R='#CC0000';
@@ -112,6 +112,35 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
 
   // Registro persistente de planes de nutrición del cliente
   const { nutriPlanes, savePlan: saveNutriPlan, deletePlan: deleteNutriPlan } = useNutricionPlanes(selClientId || null);
+
+  // Plan de entrenamiento que está cursando el cliente (para que la IA lo considere)
+  const { gymPlanes } = useGymPlanes(selClientId || null);
+  const entreno = useMemo(() => gymPlanes.find(p => p.estado === 'activo') || gymPlanes[0] || null, [gymPlanes]);
+  const entrenoResumen = useMemo(() => {
+    if (!entreno) return '';
+    const dias = (entreno.dias || []).filter(d => d.obj && (d.blocks || []).some(b => (b.exercises || []).length));
+    const fases = [...new Set(dias.map(d => d.obj))];
+    const nEjer = dias.reduce((a, d) => a + (d.blocks || []).reduce((x, b) => x + (b.exercises || []).length, 0), 0);
+    return `Plan "${entreno.nombre}"${entreno.periodizacion ? ` · ${entreno.periodizacion}` : ''} · ${dias.length} día/s por semana · fase(s): ${fases.join(', ') || '—'} · ${nEjer} ejercicios${entreno.resumen ? ` · ${entreno.resumen}` : ''}`;
+  }, [entreno]);
+
+  // Datos del cliente para precargar el perfil del plan nutricional
+  const calcEdad = (fechaNac) => { if (!fechaNac) return ''; const d = new Date(fechaNac); if (isNaN(d.getTime())) return ''; const e = Math.floor((Date.now() - d.getTime()) / (365.25 * 24 * 3600 * 1000)); return (e > 0 && e < 120) ? String(e) : ''; };
+  const ACT_MAP = { sedentario: 'sedentario', levemente_activo: 'moderado', moderadamente_activo: 'activo', muy_activo: 'muy_activo', atleta: 'muy_activo' };
+  const prefill = useMemo(() => {
+    if (!cliente) return null;
+    const sc = cliente.screening || {};
+    const obj = (cliente.objetivo || '').toLowerCase();
+    return {
+      peso: sc.peso || '', talla: sc.talla || '', edad: calcEdad(sc.fechaNac),
+      sexo: sc.genero === 'femenino' ? 'F' : 'M',
+      actividad: ACT_MAP[sc.nivelActividad] || 'moderado',
+      objetivo_nut: (obj.includes('grasa') || obj.includes('bajar') || obj.includes('peso')) ? 'perdida_leve'
+        : (obj.includes('masa') || obj.includes('volumen') || obj.includes('hipertrof')) ? 'hipertrofia' : 'mantenimiento',
+      _sexoLbl: sc.genero === 'femenino' ? 'Mujer' : (sc.genero === 'masculino' ? 'Hombre' : '—'),
+      _actLbl: sc.nivelActividad || '—', _objetivo: cliente.objetivo || '—',
+    };
+  }, [cliente]);
 
   // Objetivo nutricional calculado
   const objetivoNut = useMemo(() => {
@@ -488,13 +517,15 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   };
 
   // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
-  const NuevoPlanFormComp = ({cliente, onCrear}) => {
+  const NuevoPlanFormComp = ({cliente, prefill, onCrear}) => {
     const [nombre, setNombre] = useState(cliente?`Plan ${cliente.nombre} ${new Date().toLocaleDateString('es-ES')}`:'');
     const [perfil, setPerfil] = useState({
-      peso:'', talla:'', edad:'', sexo:'M',
-      actividad: cliente?.screening?.actividad||'moderado',
-      objetivo_nut: cliente?.objetivo?.toLowerCase().includes('grasa')||cliente?.objetivo?.toLowerCase().includes('bajar')?'perdida_leve':
-                   cliente?.objetivo?.toLowerCase().includes('masa')||cliente?.objetivo?.toLowerCase().includes('volumen')?'hipertrofia':'mantenimiento',
+      peso: prefill?.peso||'', talla: prefill?.talla||'', edad: prefill?.edad||'',
+      sexo: prefill?.sexo||'M',
+      actividad: prefill?.actividad || cliente?.screening?.actividad || 'moderado',
+      objetivo_nut: prefill?.objetivo_nut ||
+                   (cliente?.objetivo?.toLowerCase().includes('grasa')||cliente?.objetivo?.toLowerCase().includes('bajar')?'perdida_leve':
+                   cliente?.objetivo?.toLowerCase().includes('masa')||cliente?.objetivo?.toLowerCase().includes('volumen')?'hipertrofia':'mantenimiento'),
     });
     const set = (k,v) => setPerfil(p=>({...p,[k]:v}));
     const tdee = perfil.peso&&perfil.talla&&perfil.edad ? calcularTDEE(parseFloat(perfil.peso),parseFloat(perfil.talla),parseInt(perfil.edad),perfil.sexo,perfil.actividad) : null;
@@ -567,6 +598,25 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       </div>
       {selClientId&&(
         <>
+          {prefill&&(
+            <div style={{...ns.card,border:`1px solid ${TL}`,background:'#F0FDFB',marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:800,color:TL,marginBottom:8,textTransform:'uppercase',letterSpacing:.5}}>👤 Datos del cliente</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8}}>
+                {[['Sexo',prefill._sexoLbl],['Peso',prefill.peso?prefill.peso+' kg':'—'],['Talla',prefill.talla?prefill.talla+' cm':'—'],['Edad',prefill.edad?prefill.edad+' años':'—'],['Nivel actividad',prefill._actLbl],['Objetivo',prefill._objetivo]].map(([l,v])=>(
+                  <div key={l} style={{background:WH,borderRadius:6,padding:'6px 8px'}}>
+                    <div style={{fontSize:8,color:G3,textTransform:'uppercase',fontWeight:700}}>{l}</div>
+                    <div style={{fontSize:12,fontWeight:700,color:'#0F766E'}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:WH,borderRadius:6,padding:'7px 9px'}}>
+                <div style={{fontSize:8,color:G3,textTransform:'uppercase',fontWeight:700,marginBottom:2}}>🏋️ Entrenamiento que está cursando</div>
+                <div style={{fontSize:10.5,color:'#0F766E',fontWeight:600,lineHeight:1.4}}>{entrenoResumen||'Sin plan de entrenamiento activo registrado.'}</div>
+              </div>
+              {(!prefill.peso||!prefill.talla||!prefill.edad)&&<div style={{fontSize:9,color:'#B45309',marginTop:6}}>⚠ Faltan datos en la evaluación del cliente (peso/talla/fecha de nacimiento). Completalos en su ficha o cargalos a mano abajo.</div>}
+              <div style={{fontSize:9,color:G3,marginTop:6,fontStyle:'italic'}}>Estos datos y el plan de entrenamiento se precargan abajo y se le pasan a la IA para calcular mejor el plan.</div>
+            </div>
+          )}
           {nutriPlanes.length>0&&(
             <div style={{marginBottom:12}}>
               <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>📂 Historial de planes ({nutriPlanes.length})</div>
@@ -590,7 +640,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
               <div style={{fontSize:9,color:G3,marginTop:4,fontStyle:'italic'}}>Los planes (sobre todo los ⭐ ejemplo) se le pasan a la IA como contexto al generar nuevos planes.</div>
             </div>
           )}
-          <NuevoPlanFormComp cliente={cliente} onCrear={crearPlan}/>
+          <NuevoPlanFormComp cliente={cliente} prefill={prefill} onCrear={crearPlan}/>
         </>
       )}
     </div>
@@ -627,7 +677,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
         </div>
 
         {/* GENERADOR IA */}
-        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} reglas={reglas} historial={nutriPlanes.slice(0,4).map(p=>`${p.fecha_creacion||''} · ${p.objetivo_nut||''} ${p.kcal||'?'}kcal — ${p.resumen||p.nombre}`)} onApply={applyAIPlan}/>
+        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} reglas={reglas} perfil={planActivo?.perfil} entrenamiento={entrenoResumen} historial={nutriPlanes.slice(0,4).map(p=>`${p.fecha_creacion||''} · ${p.objetivo_nut||''} ${p.kcal||'?'}kcal — ${p.resumen||p.nombre}`)} onApply={applyAIPlan}/>
 
         <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:10}}>
           {/* Navegación días */}
