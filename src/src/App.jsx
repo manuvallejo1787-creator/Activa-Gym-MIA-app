@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
@@ -1363,14 +1363,32 @@ export default function App(){
   // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
   const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand})=>{
     const {tests:clientTests}=useFuerzaTests(cliente?.id||null);
+    const [iaInforme,setIaInforme]=useState(null);
     if(!cliente)return null;
     const sc=cliente.screening||{};
     const nv=FASES_METODO[cliente.nivel]||{label:cliente.nivel,badge:'',color:'#374151'};
+
+    // Texto del análisis IA para el PDF (HTML)
+    const composeInformeIA=(ai)=>{
+      const partes=[];
+      if(ai.interpretacion)partes.push(ai.interpretacion);
+      if(ai.analisis_objetivos)partes.push('<strong>Objetivos vs. evaluación:</strong> '+ai.analisis_objetivos);
+      if(ai.analisis_corporal)partes.push('<strong>Mediciones corporales:</strong> '+ai.analisis_corporal);
+      if(ai.analisis_movilidad)partes.push('<strong>Ángulos y movilidad:</strong> '+ai.analisis_movilidad);
+      if(ai.deficiencias_funcionales?.length)partes.push('<strong>Déficits funcionales:</strong> '+ai.deficiencias_funcionales.join('; '));
+      if(ai.deficiencias_fuerza?.length)partes.push('<strong>Déficits de fuerza:</strong> '+ai.deficiencias_fuerza.join('; '));
+      if(ai.prioridades?.length)partes.push('<strong>Prioridades:</strong> '+ai.prioridades.map((p,i)=>`${i+1}) ${p}`).join('; '));
+      if(ai.fase_sugerida)partes.push('<strong>Fase sugerida:</strong> '+String(ai.fase_sugerida).toUpperCase()+(ai.fase_justificacion?' — '+ai.fase_justificacion:''));
+      if(ai.metodologia_sugerida)partes.push('<strong>Metodología:</strong> '+ai.metodologia_sugerida+(ai.metodologia_justificacion?' — '+ai.metodologia_justificacion:''));
+      if(ai.precauciones)partes.push('<strong>Precauciones:</strong> '+ai.precauciones);
+      return partes.join('<br><br>');
+    };
 
     const aplicarSugerencia=(ai)=>{
       const upd={...cliente};
       if(ai.fase_sugerida)upd.nivel=ai.fase_sugerida;
       if(ai.objetivos_sugeridos?.length)upd.objetivo=ai.objetivos_sugeridos[0];
+      upd._informeIA=composeInformeIA(ai);
       // mapear metodología sugerida a key de periodización
       const metaMap={'Lineal Clásica':'lineal','DUP Ondulante':'dup','Bloques':'bloques','ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'trifasico','Fitness General':'fitness','Pérdida de Grasa':'perdida_grasa'};
       const found=Object.entries(metaMap).find(([k])=>ai.metodologia_sugerida?.includes(k));
@@ -1419,7 +1437,7 @@ export default function App(){
         <table style="margin-bottom:14px">${row('Condición médica',sc.condicionMedica==='si'?sc.condicionDetalle||'Sí':'No refiere')}${row('Medicación',sc.medicacion==='si'?sc.medicacionDetalle||'Sí':'No')}${row('Lesiones activas',sc.lesionesActivas==='si'?sc.lesionesDetalle||'Sí':'No')}${row('Cirugías',sc.cirugias==='si'?sc.cirugiasDetalle||'Sí':'No')}${row('Dolor actual',sc.dolorActual==='si'?sc.dolorDetalle||'Sí':'No')}${cliente.restricciones?row('Restricciones',cliente.restricciones):''}</table>
         ${(sc.postura_hallazgos||sc.movilidad_hallazgos||sc.capacidades_hallazgos)?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Hallazgos funcionales</h3><table style="margin-bottom:14px">${row('Postura',sc.postura_hallazgos)}${row('Movilidad',sc.movilidad_hallazgos)}${row('Capacidades',sc.capacidades_hallazgos)}</table>`:''}
         ${testsRows?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Tests de fuerza</h3><table style="margin-bottom:14px"><thead><tr style="background:#1a1a1a;color:#fff"><th style="padding:5px 8px;font-size:9px;text-align:left">Ejercicio</th><th style="padding:5px 8px;font-size:9px">1RM</th><th style="padding:5px 8px;font-size:9px">Nivel</th><th style="padding:5px 8px;font-size:9px">Fecha</th></tr></thead><tbody>${testsRows}</tbody></table>`:''}
-        ${cliente._informeIA?`<h3 style="font-size:13px;color:#6D28D9;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Interpretación y plan sugerido (IA)</h3><div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:5px;padding:10px 14px;margin-bottom:10px;font-size:11px;line-height:1.6">${cliente._informeIA}</div>`:''}
+        ${(cliente._informeIA||iaInforme)?`<h3 style="font-size:13px;color:#6D28D9;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Interpretación y plan sugerido (IA)</h3><div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:5px;padding:10px 14px;margin-bottom:10px;font-size:11px;line-height:1.6">${cliente._informeIA||composeInformeIA(iaInforme)}</div>`:''}
         <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · ${brand.gymSub} · Método Activa Integra · Informe generado ${new Date().toLocaleDateString('es-ES')}</div>
         <script>window.onload=()=>window.print()<\/script></body></html>`;
       const w=window.open('','_blank');w.document.write(html);w.document.close();
@@ -1451,6 +1469,41 @@ export default function App(){
         }).join(' | ')
       : 'NO HAY TESTS DE FUERZA REGISTRADOS para este cliente';
 
+    // ── Postura estructurada (marcar desvíos del patrón normal) ──
+    const POSTURA_DEF={postura_cabeza:'Centrada',postura_hombros:'Simétrico',postura_columna_lat:'Normal',postura_columna_tor:'Normal',postura_pelvis:'Neutra',postura_rodillas:'Neutro',postura_pies:'Neutro'};
+    const POSTURA_LBL={postura_cabeza:'Cabeza',postura_hombros:'Hombros',postura_columna_lat:'Curva lumbar',postura_columna_tor:'Curva torácica',postura_pelvis:'Pelvis',postura_rodillas:'Rodillas',postura_pies:'Pies'};
+    const posturaRows=Object.keys(POSTURA_LBL).filter(k=>sc[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}${sc[k]===POSTURA_DEF[k]?' (normal)':''}`);
+    const posturaTxt=posturaRows.length?posturaRows.join('; '):'NO REGISTRADA';
+    // ── Movilidad articular / ángulos (N/L/ML/D con referencias) ──
+    const MOV=[['mov_tobillo','Dorsiflexión tobillo','ref ≥20°'],['mov_cad_rot','Rotación interna cadera','ref 40-45°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
+    const GMAP={N:'Óptimo',L:'Limitado (leve)',ML:'Muy limitado (severo)',D:'Dolor'};
+    const movRows=MOV.map(([k,lbl,ref])=>{
+      const d=sc[k+'_DBil'],i=sc[k+'_Izq'],g=sc[k+'_grados'];
+      if(!d&&!i&&!g)return null;
+      const parts=[];
+      if(d)parts.push(`Der/Bil ${GMAP[d]||d}`);
+      if(i)parts.push(`Izq ${GMAP[i]||i}`);
+      if(g)parts.push(`grados ${g}`);
+      return `${lbl} (${ref}): ${parts.join(', ')}`;
+    }).filter(Boolean);
+    const movTxt=movRows.length?movRows.join(' | '):'NO REGISTRADA';
+    // ── Control motor ──
+    const CM=[['cm_squat','Deep/Overhead squat','Óptimo'],['cm_lunge','Estocada','Óptimo D/I'],['cm_sls','Single leg stance','Estable D/I'],['cm_birddog','Bird-dog','Óptimo'],['cm_deadbug','Dead bug','Óptimo'],['cm_bisagra','Bisagra cadera','Óptimo']];
+    const cmRows=CM.filter(([k])=>sc[k]).map(([k,lbl,ok])=>`${lbl}: ${sc[k]}${sc[k]===ok?' (óptimo)':''}`);
+    const cmTxt=cmRows.length?cmRows.join('; '):'NO REGISTRADA';
+    // ── Y-Balance ──
+    const ybArr=[];
+    ['d','i'].forEach(side=>{const a=sc[`yreach_${side}_ant`],pm=sc[`yreach_${side}_pm`],pl=sc[`yreach_${side}_pl`];if(a||pm||pl)ybArr.push(`Pierna ${side==='d'?'der':'izq'}: ant ${a||'—'}, pm ${pm||'—'}, pl ${pl||'—'} cm`);});
+    const ybTxt=ybArr.length?ybArr.join(' | ')+' (asimetría bilateral >4cm = significativa)':'no registrado';
+    // ── PVFI capacidades físicas ──
+    const PVFI=[['pvfi_chair_stand','30s Chair Stand','reps','ref 12-17'],['pvfi_dino_d','Dinamometría der','kg','H>27 M>16'],['pvfi_dino_i','Dinamometría izq','kg','H>27 M>16'],['pvfi_tug','TUG','seg','<10 óptimo'],['pvfi_plancha_elev','Plancha elevada','seg','>30'],['pvfi_wallsit','Wall sit 90°','seg','35-50 prom'],['pvfi_pushup_rod','Push-up rodillas','reps','15-24 prom'],['pvfi_plancha_suelo','Plancha suelo','seg','45-75 prom'],['pvfi_row_iso','Row isométrico','seg','>30'],['pvfi_dino2','Dinamometría TS','kg','H>35 M>22']];
+    const pvfiRows=PVFI.filter(([k])=>sc[k]).map(([k,lbl,u,ref])=>`${lbl}: ${sc[k]}${u} (${ref})`);
+    const pvfiTxt=pvfiRows.length?pvfiRows.join(' | '):'sin tests PVFI cargados';
+    const pvfiNivel=sc.pvfi_nivel?({rojo:'🔴 ROJO (rehab/adaptación)',amarillo:'🟡 AMARILLO (acondicionamiento)',verde:'🟢 VERDE (optimización)'}[sc.pvfi_nivel]||sc.pvfi_nivel):'no asignado';
+    // ── Banderas clínicas + restricciones estructuradas ──
+    const banderas=[sc.banderaRoja==='si'&&'🔴 Bandera roja (patología seria → derivación médica)',sc.banderaNaranja==='si'&&'🟠 Bandera naranja (factor psicológico)',sc.banderaAmarilla==='si'&&'🟡 Bandera amarilla (kinesiofobia/catastrofismo)'].filter(Boolean).join('; ')||'sin banderas';
+    const restrEst=[sc.restriccionImpacto==='si'&&'sin impacto/pliometría',sc.restriccionOverhead==='si'&&'sin cargas overhead',sc.restriccionCargaAxial==='si'&&'sin carga axial pesada'].filter(Boolean).join('; ')||'ninguna';
+
     const datosIA={
       nombre:cliente.nombre,apellido:cliente.apellido,
       objetivo:cliente.objetivo||'no declarado',
@@ -1458,8 +1511,17 @@ export default function App(){
       restricciones:cliente.restricciones||'ninguna',
       antropometria:antroParts.length>0?antroParts.join(', '):'NO REGISTRADA',
       tests:testsTxt,
-      screening:`Nivel de actividad: ${sc.nivelActividad||'?'}. Experiencia de entrenamiento: ${sc.expEntrenamiento||'?'}. Entrena actualmente: ${sc.entrenamientoActual||'?'}. Dolor actual: ${dolorTxt}. Lesiones: ${lesionTxt}. Condición médica: ${sc.condicionMedica==='si'?(sc.condicionDetalle||'sí'):'no'}. Cirugías: ${sc.cirugias==='si'?(sc.cirugiasDetalle||'sí'):'no'}. Hallazgos funcionales: ${hallazgos}`,
+      screening:`Nivel de actividad: ${sc.nivelActividad||'?'}. Experiencia de entrenamiento: ${sc.expEntrenamiento||'?'}. Entrena actualmente: ${sc.entrenamientoActual||'?'}. Dolor actual: ${dolorTxt}. Lesiones: ${lesionTxt}. Condición médica: ${sc.condicionMedica==='si'?(sc.condicionDetalle||'sí'):'no'}. Cirugías: ${sc.cirugias==='si'?(sc.cirugiasDetalle||'sí'):'no'}. Hallazgos funcionales (texto libre): ${hallazgos}`,
       experiencia:sc.expEntrenamiento||'no registrada',
+      // ── Datos estructurados (antes se descartaban) ──
+      postura:posturaTxt,
+      movilidad:movTxt,
+      controlMotor:cmTxt,
+      yBalance:ybTxt,
+      capacidades:pvfiTxt,
+      pvfiNivel,
+      banderas,
+      restriccionesEstructuradas:restrEst,
     };
 
     return(
@@ -1489,7 +1551,7 @@ export default function App(){
             {cliente.referidoPor&&<div style={{fontSize:10,color:'#92400E',marginTop:3}}>🎁 Referido por: {cliente.referidoPor}</div>}
           </div>
           {/* Análisis IA */}
-          <AIAnalisisEvaluacion tipo="gym" datos={datosIA} reglas={iaReglas} onApply={aplicarSugerencia}/>
+          <AIAnalisisEvaluacion tipo="gym" datos={datosIA} reglas={iaReglas} onApply={aplicarSugerencia} onResult={setIaInforme}/>
         </div>
       </div>
     );
@@ -1701,7 +1763,8 @@ export default function App(){
             ].map(([k,lbl,opts])=>(
               <div key={k} style={{marginBottom:8,display:'grid',gridTemplateColumns:'160px 1fr',gap:8,alignItems:'center'}}>
                 <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||opts[0]} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value="">— sin evaluar</option>
                   {opts.map(o=><option key={o}>{o}</option>)}
                 </select>
               </div>
@@ -1713,10 +1776,10 @@ export default function App(){
         case 7: return(
           <div>
             <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
-              🩺 Escala: <strong>N</strong> = Normal · <strong>L</strong> = Limitado · <strong>ML</strong> = Muy limitado · <strong>D</strong> = Dolor presente
+              🩺 Marcá el estado de cada movimiento por lado. Dejá en <strong>—</strong> lo que no evalúes. Si medís los grados exactos, agregalos en el campo de cada fila.
             </div>
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:6}}>Screening de movilidad articular</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 70px 70px',gap:4,marginBottom:2}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:2}}>
               <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Movimiento · Referencia</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Der/Bil</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
@@ -1730,16 +1793,23 @@ export default function App(){
               ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°'],
               ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°'],
             ].map(([k,lbl,ref])=>(
-              <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 70px 70px',gap:4,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
-                  <div style={{fontSize:9,color:G3}}>{ref}</div>
+              <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
+                    <div style={{fontSize:9,color:G3}}>{ref}</div>
+                  </div>
+                  {['DBil','Izq'].map(side=>(
+                    <select key={side} value={sc[k+'_'+side]||''} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
+                      <option value="">—</option>
+                      <option value="N">Óptimo</option>
+                      <option value="L">Limitado</option>
+                      <option value="ML">Muy limitado</option>
+                      <option value="D">Dolor</option>
+                    </select>
+                  ))}
                 </div>
-                {['DBil','Izq'].map(side=>(
-                  <select key={side} value={sc[k+'_'+side]||'N'} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:11,textAlign:'center'}}>
-                    {['N','L','ML','D'].map(o=><option key={o}>{o}</option>)}
-                  </select>
-                ))}
+                <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,marginTop:4,padding:'4px 8px'}}/>
               </div>
             ))}
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
@@ -1753,7 +1823,8 @@ export default function App(){
             ].map(([k,lbl,opts])=>(
               <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 180px',gap:8,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
                 <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||opts[0]} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                  <option value="">— sin evaluar</option>
                   {opts.map(o=><option key={o}>{o}</option>)}
                 </select>
               </div>
@@ -3350,11 +3421,23 @@ export default function App(){
     const [editingTest,setEditingTest]=useState(null);
     const [showPlan,setShowPlan]=useState(false);
     const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
-    // ── Ejercicios personalizados (max 3, guardados en localStorage por cliente)
-    const [customTests,setCustomTests]=useState(()=>{
-      try{ return JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]').slice(0,3); }catch{ return []; }
-    });
+    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
+    const {customRows,saveCustom}=useCustomTests(selClientId||null);
+    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
     const [showCustomEdit,setShowCustomEdit]=useState(false);
+    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
+    const migradoRef=useRef(new Set());
+    useEffect(()=>{
+      if(!selClientId||migradoRef.current.has(selClientId))return;
+      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
+      try{
+        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
+        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
+          migradoRef.current.add(selClientId);
+          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
+        }
+      }catch{}
+    },[selClientId,customRows,saveCustom]);
 
     // Sync custom tests when client changes
     const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
@@ -3364,9 +3447,7 @@ export default function App(){
         {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
         {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)}/>}
         {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} onSave={(tests)=>{
-          const withIds=tests.map((t,i)=>({...t,id:'ct'+(i+1),custom:true}));
-          setCustomTests(withIds);
-          try{localStorage.setItem('custom_tests_'+selClientId,JSON.stringify(withIds));}catch{}
+          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
         }}/>}
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
@@ -3463,7 +3544,7 @@ export default function App(){
               {tests.map(t=>{
                 const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
                 const rm1=t.rm1_real||t.rm1_calculado;
-                const niv=rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
+                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
                 return(
                   <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
                     <div>
