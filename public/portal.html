@@ -67,14 +67,16 @@ async function cargar(){
   if(!TOKEN){ $('msg').textContent = 'Link inválido. Pedile a tu entrenador el enlace de tu portal.'; return; }
   try{
     const r = await fetch('/api/portal?token=' + encodeURIComponent(TOKEN));
+    let body = null;
+    try { body = await r.json(); } catch {}
     if(r.status === 403){ $('msg').textContent = 'Acceso no válido. Revisá el link con tu entrenador.'; return; }
-    if(!r.ok) throw new Error('No se pudo cargar');
-    DATA = await r.json();
+    if(!r.ok){ $('msg').textContent = 'Error del servidor: ' + ((body && body.error) || ('HTTP ' + r.status)) + '. Avisale a tu entrenador.'; return; }
+    DATA = body;
     $('cli').textContent = DATA.cliente ? `Hola, ${DATA.cliente.nombre} 💪` : '';
     LOGMAP = {};
     (DATA.logs||[]).forEach(l => { LOGMAP[key(l.dia_id, l.ejercicio_id, l.semana)] = l; });
     render();
-  }catch(e){ $('msg').textContent = 'Hubo un problema al cargar. Probá de nuevo en un rato.'; }
+  }catch(e){ $('msg').textContent = 'No se pudo conectar (' + (e.message||'red') + '). Revisá tu internet y probá de nuevo.'; }
 }
 
 function render(){

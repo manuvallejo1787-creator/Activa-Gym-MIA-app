@@ -7,8 +7,9 @@
 //   SUPABASE_URL                (ej: https://husokxkdwgpjwtgrijei.supabase.co)
 //   SUPABASE_SERVICE_ROLE_KEY   (Supabase → Settings → API → service_role)
 
-const URL = process.env.SUPABASE_URL;
-const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Limpia barras finales y un /rest/v1 pegado de más, para evitar paths inválidos (PGRST125)
+const URL = (process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "").replace(/\/rest\/v1$/, "");
+const KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 async function sb(path, opts = {}) {
   const res = await fetch(`${URL}/rest/v1/${path}`, {

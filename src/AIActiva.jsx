@@ -579,7 +579,7 @@ INSTRUCCIONES CRÍTICAS:
 - Analizá TODOS los ejes provistos: objetivo, mediciones corporales, ángulos de movimiento/postura, control motor/balance, capacidades físicas y fuerza. Cada campo de análisis debe referirse a los valores concretos del cliente, nunca genérico.
 - Conectá los déficits con el objetivo: si el objetivo choca con una limitación (ej. quiere hipertrofia de hombro pero tiene flexión de hombro limitada o restricción overhead), decilo explícitamente y ponelo en prioridades.
 - Solo declarás un dato ausente si el texto dice literalmente "NO REGISTRADA", "NO HAY", "no registrado" o "sin tests". No asumas ausencia de lo que sí está.
-- Usá los ángulos y la escala (Normal/Limitado/Muy limitado/Dolor) para fundamentar movilidad; usá 1RM, ratios (×peso corporal) y PVFI para fundamentar fuerza. "Dolor" en cualquier movimiento es una precaución obligatoria.
+- Usá los grados exactos cuando estén informados y la escala (Óptimo/Limitado/Muy limitado/Dolor) para fundamentar movilidad; usá 1RM, ratios (×peso corporal) y PVFI para fundamentar fuerza. "Dolor" en cualquier movimiento es una precaución obligatoria.
 - Una bandera roja obliga a derivación y a fase RESTAURA con precaución explícita, sin importar la fuerza. Las restricciones (impacto/overhead/carga axial) deben respetarse en los ejercicios sugeridos.
 - Coherencia: no mandes a RESTAURA a alguien con fuerza Intermedia/Avanzada y movilidad normal salvo dolor/lesión/bandera; no mandes a POTENCIA/RINDE a alguien con déficits funcionales marcados o semáforo PVFI rojo.`;
 

@@ -1472,17 +1472,25 @@ export default function App(){
     // ── Postura estructurada (marcar desvíos del patrón normal) ──
     const POSTURA_DEF={postura_cabeza:'Centrada',postura_hombros:'Simétrico',postura_columna_lat:'Normal',postura_columna_tor:'Normal',postura_pelvis:'Neutra',postura_rodillas:'Neutro',postura_pies:'Neutro'};
     const POSTURA_LBL={postura_cabeza:'Cabeza',postura_hombros:'Hombros',postura_columna_lat:'Curva lumbar',postura_columna_tor:'Curva torácica',postura_pelvis:'Pelvis',postura_rodillas:'Rodillas',postura_pies:'Pies'};
-    const posturaDesvios=Object.keys(POSTURA_LBL).filter(k=>sc[k]&&sc[k]!==POSTURA_DEF[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}`);
-    const posturaTxt=posturaDesvios.length?posturaDesvios.join('; '):(Object.keys(POSTURA_LBL).some(k=>sc[k])?'Sin desvíos posturales significativos (todo en rango normal)':'NO REGISTRADA');
+    const posturaRows=Object.keys(POSTURA_LBL).filter(k=>sc[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}${sc[k]===POSTURA_DEF[k]?' (normal)':''}`);
+    const posturaTxt=posturaRows.length?posturaRows.join('; '):'NO REGISTRADA';
     // ── Movilidad articular / ángulos (N/L/ML/D con referencias) ──
     const MOV=[['mov_tobillo','Dorsiflexión tobillo','ref ≥20°'],['mov_cad_rot','Rotación interna cadera','ref 40-45°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
-    const GMAP={N:'Normal',L:'Limitado',ML:'Muy limitado',D:'Dolor'};
-    const movRows=MOV.map(([k,lbl,ref])=>{const d=sc[k+'_DBil'],i=sc[k+'_Izq'];if(!d&&!i)return null;if((d||'N')==='N'&&(i||'N')==='N')return null;return `${lbl} (${ref}): Der/Bil ${GMAP[d||'N']}, Izq ${GMAP[i||'N']}`;}).filter(Boolean);
-    const movTxt=movRows.length?movRows.join(' | '):(MOV.some(([k])=>sc[k+'_DBil']||sc[k+'_Izq'])?'Movilidad articular sin limitaciones marcadas':'NO REGISTRADA');
+    const GMAP={N:'Óptimo',L:'Limitado (leve)',ML:'Muy limitado (severo)',D:'Dolor'};
+    const movRows=MOV.map(([k,lbl,ref])=>{
+      const d=sc[k+'_DBil'],i=sc[k+'_Izq'],g=sc[k+'_grados'];
+      if(!d&&!i&&!g)return null;
+      const parts=[];
+      if(d)parts.push(`Der/Bil ${GMAP[d]||d}`);
+      if(i)parts.push(`Izq ${GMAP[i]||i}`);
+      if(g)parts.push(`grados ${g}`);
+      return `${lbl} (${ref}): ${parts.join(', ')}`;
+    }).filter(Boolean);
+    const movTxt=movRows.length?movRows.join(' | '):'NO REGISTRADA';
     // ── Control motor ──
     const CM=[['cm_squat','Deep/Overhead squat','Óptimo'],['cm_lunge','Estocada','Óptimo D/I'],['cm_sls','Single leg stance','Estable D/I'],['cm_birddog','Bird-dog','Óptimo'],['cm_deadbug','Dead bug','Óptimo'],['cm_bisagra','Bisagra cadera','Óptimo']];
-    const cmRows=CM.filter(([k,,ok])=>sc[k]&&sc[k]!==ok).map(([k,lbl])=>`${lbl}: ${sc[k]}`);
-    const cmTxt=cmRows.length?cmRows.join('; '):(CM.some(([k])=>sc[k])?'Control motor óptimo en todos los patrones':'no registrado');
+    const cmRows=CM.filter(([k])=>sc[k]).map(([k,lbl,ok])=>`${lbl}: ${sc[k]}${sc[k]===ok?' (óptimo)':''}`);
+    const cmTxt=cmRows.length?cmRows.join('; '):'NO REGISTRADA';
     // ── Y-Balance ──
     const ybArr=[];
     ['d','i'].forEach(side=>{const a=sc[`yreach_${side}_ant`],pm=sc[`yreach_${side}_pm`],pl=sc[`yreach_${side}_pl`];if(a||pm||pl)ybArr.push(`Pierna ${side==='d'?'der':'izq'}: ant ${a||'—'}, pm ${pm||'—'}, pl ${pl||'—'} cm`);});
@@ -1755,7 +1763,8 @@ export default function App(){
             ].map(([k,lbl,opts])=>(
               <div key={k} style={{marginBottom:8,display:'grid',gridTemplateColumns:'160px 1fr',gap:8,alignItems:'center'}}>
                 <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||opts[0]} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value="">— sin evaluar</option>
                   {opts.map(o=><option key={o}>{o}</option>)}
                 </select>
               </div>
@@ -1767,10 +1776,10 @@ export default function App(){
         case 7: return(
           <div>
             <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
-              🩺 Escala: <strong>N</strong> = Normal · <strong>L</strong> = Limitado · <strong>ML</strong> = Muy limitado · <strong>D</strong> = Dolor presente
+              🩺 Marcá el estado de cada movimiento por lado. Dejá en <strong>—</strong> lo que no evalúes. Si medís los grados exactos, agregalos en el campo de cada fila.
             </div>
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:6}}>Screening de movilidad articular</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 70px 70px',gap:4,marginBottom:2}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:2}}>
               <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Movimiento · Referencia</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Der/Bil</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
@@ -1784,16 +1793,23 @@ export default function App(){
               ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°'],
               ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°'],
             ].map(([k,lbl,ref])=>(
-              <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 70px 70px',gap:4,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
-                  <div style={{fontSize:9,color:G3}}>{ref}</div>
+              <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
+                    <div style={{fontSize:9,color:G3}}>{ref}</div>
+                  </div>
+                  {['DBil','Izq'].map(side=>(
+                    <select key={side} value={sc[k+'_'+side]||''} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
+                      <option value="">—</option>
+                      <option value="N">Óptimo</option>
+                      <option value="L">Limitado</option>
+                      <option value="ML">Muy limitado</option>
+                      <option value="D">Dolor</option>
+                    </select>
+                  ))}
                 </div>
-                {['DBil','Izq'].map(side=>(
-                  <select key={side} value={sc[k+'_'+side]||'N'} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:11,textAlign:'center'}}>
-                    {['N','L','ML','D'].map(o=><option key={o}>{o}</option>)}
-                  </select>
-                ))}
+                <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,marginTop:4,padding:'4px 8px'}}/>
               </div>
             ))}
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
@@ -1807,7 +1823,8 @@ export default function App(){
             ].map(([k,lbl,opts])=>(
               <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 180px',gap:8,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
                 <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||opts[0]} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                  <option value="">— sin evaluar</option>
                   {opts.map(o=><option key={o}>{o}</option>)}
                 </select>
               </div>
