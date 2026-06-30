@@ -925,6 +925,7 @@ export default function App(){
   const [editingEx,setEditingEx]=useState(null);
   const [expandedBlock,setExpandedBlock]=useState(null);
   const [selBlock,setSelBlock]=useState(null);
+  const [replaceTarget,setReplaceTarget]=useState(null);
   const [exSearch,setExSearch]=useState('');
   const [overrideState,setOverrideState]=useState(null);
   const [addBType,setAddBType]=useState('');
@@ -1147,6 +1148,22 @@ export default function App(){
     if(b.id!==blockId)return b;
     return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
   })}));
+  // Mover un ejercicio dentro del bloque (por índice, sin perder el resto)
+  const moveExInBlock=(blockId,idx,dir)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();const j=idx+dir;
+    if(idx<0||idx>=arr.length||j<0||j>=arr.length)return b;
+    [arr[idx],arr[j]]=[arr[j],arr[idx]];
+    return{...b,exercises:arr};
+  })}));
+  // Reemplazar el ejercicio en una posición por otro, conservando series/reps/etc.
+  const replaceExInBlock=(blockId,idx,ex,override=false,note='')=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();
+    if(idx<0||idx>=arr.length)return b;
+    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:'',pesoReal:'',anotacion:''};
+    return{...b,exercises:arr};
+  })}));
   const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
 
   const handlePickEx=(block,ex)=>{
@@ -1155,16 +1172,19 @@ export default function App(){
       alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
       return;
     }
+    const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
     if(rest==='warn'){
-      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true});
+      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true,replaceIdx:repl});
       return;
     }
-    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false});}
+    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false,replaceIdx:repl});return;}
+    if(repl!=null){replaceExInBlock(block.id,repl,ex);setReplaceTarget(null);setSelBlock(null);setExSearch('');}
     else{addExToBlock(block.id,ex.id);setSelBlock(null);setExSearch('');}
   };
   const confirmOverride=()=>{
     if(!overrideState)return;
-    addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
+    if(overrideState.replaceIdx!=null){replaceExInBlock(overrideState.blockId,overrideState.replaceIdx,overrideState.ex,true,overrideState.note);setReplaceTarget(null);}
+    else addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
     setOverrideState(null);setSelBlock(null);setExSearch('');
   };
 
@@ -2530,6 +2550,8 @@ export default function App(){
           const bd=BLOCKS[block.type];
           const isExp=expandedBlock===block.id;
           const isSel=selBlock===block.id;
+          const replMode=!!(replaceTarget&&replaceTarget.blockId===block.id);
+          const replEx=replMode?exs.find(e=>e.id===block.exercises[replaceTarget.idx]?.exId):null;
           return(
             <div key={block.id} style={{border:`1px solid ${G2}`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
               <div style={s.bHdr(block.type)}>
@@ -2587,7 +2609,7 @@ export default function App(){
                       <div key={k}><span style={s.lbl}>{lbl}</span><input value={block.params[k]} onChange={e=>updateParams(block.id,k,e.target.value)} style={s.inp}/></div>
                     ))}
                   </div>
-                  {block.exercises.map(be=>{
+                  {block.exercises.map((be,exIdx)=>{
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
                     const exParams=be.params||block.params;
@@ -2597,16 +2619,21 @@ export default function App(){
                       setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
                     }
                     return(
-                      <div key={be.exId} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:7,padding:'8px 10px',marginBottom:6}}>
+                      <div key={be.exId+'_'+exIdx} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:7,padding:'8px 10px',marginBottom:6}}>
                         {/* Cabecera ejercicio */}
                         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:5}}>
                           <div style={{flex:1}}>
-                            <div style={{fontSize:12,fontWeight:700}}>{ex.nombre}</div>
+                            <div style={{fontSize:12,fontWeight:700}}><span style={{color:G3,fontWeight:600}}>{exIdx+1}.</span> {ex.nombre}</div>
                             <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
                             {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
                             {rest==='warn'&&<span style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:9,color:'#92400E'}}>⚠ Restricción</span>}
                           </div>
-                          <button onClick={()=>removeExFromBlock(block.id,be.exId)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                          <div style={{display:'flex',alignItems:'center',gap:1,flexShrink:0}}>
+                            <button onClick={()=>moveExInBlock(block.id,exIdx,-1)} disabled={exIdx===0} title="Subir" style={{background:'none',border:'none',cursor:exIdx===0?'default':'pointer',fontSize:12,color:exIdx===0?'#ddd':G4,padding:'2px 3px'}}>▲</button>
+                            <button onClick={()=>moveExInBlock(block.id,exIdx,1)} disabled={exIdx===block.exercises.length-1} title="Bajar" style={{background:'none',border:'none',cursor:exIdx===block.exercises.length-1?'default':'pointer',fontSize:12,color:exIdx===block.exercises.length-1?'#ddd':G4,padding:'2px 3px'}}>▼</button>
+                            <button onClick={()=>{setReplaceTarget({blockId:block.id,idx:exIdx});setSelBlock(block.id);setExSearch('');}} title="Cambiar por otro ejercicio" style={{background:'none',border:'1px solid #C4B5FD',borderRadius:5,cursor:'pointer',fontSize:11,color:'#7C3AED',padding:'2px 5px',fontWeight:700}}>⇄</button>
+                            <button onClick={()=>removeExFromBlock(block.id,be.exId)} title="Quitar" style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px'}}>×</button>
+                          </div>
                         </div>
                         {/* Parámetros individuales por ejercicio */}
                         {(()=>{
@@ -2668,11 +2695,17 @@ export default function App(){
                       </div>
                     );
                   })}
-                  {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&(
+                  {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&!replMode&&(
                     <button onClick={()=>{setSelBlock(isSel?null:block.id);setExSearch('');}} style={{...s.btnBK,width:'100%',marginTop:4}}>{isSel?'✕ Cerrar':'+ Agregar ejercicio'}</button>
                   )}
                   {isSel&&(
-                    <div style={{marginTop:8,background:WH,border:`1px solid ${G2}`,borderRadius:8,padding:10}}>
+                    <div style={{marginTop:8,background:WH,border:`1px solid ${replMode?'#C4B5FD':G2}`,borderRadius:8,padding:10}}>
+                      {replMode&&(
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#F5F3FF',borderRadius:6,padding:'6px 9px',marginBottom:8}}>
+                          <div style={{fontSize:10.5,color:'#5B21B6',fontWeight:700}}>⇄ Reemplazando: {replEx?.nombre||'ejercicio'} <span style={{fontWeight:400,color:'#7C3AED'}}>— elegí el nuevo (mantiene series/reps)</span></div>
+                          <button onClick={()=>{setReplaceTarget(null);setSelBlock(null);setExSearch('');}} style={{background:'none',border:'none',color:'#7C3AED',cursor:'pointer',fontSize:11,fontWeight:700}}>Cancelar</button>
+                        </div>
+                      )}
                       <input placeholder={`Buscar en ${bd.label}...`} value={exSearch} onChange={e=>setExSearch(e.target.value)} style={{...s.inp,marginBottom:8}}/>
                       <div style={s.lbl}>Ejercicios del bloque</div>
                       <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
@@ -2692,9 +2725,9 @@ export default function App(){
                                   <div style={{fontSize:10,color:G3}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
                                   {pickSug&&<div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontWeight:700}}>💡 {pickSug.pesoSugerido} kg ({pickSug.pesoRango}) · {pickSug.pct}% 1RM{pickSug.repsTarget?` · ${pickSug.repsTarget} reps`:''}</div>}
                                 </div>
-                              {!added&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:rest==='warn'?'#D97706':brand.colorPrimary,flexShrink:0}}>+</button>}
+                              {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:replMode?'#7C3AED':rest==='warn'?'#D97706':brand.colorPrimary,flexShrink:0}}>{replMode?'⇄':'+'}</button>}
                               {!added&&rest==='block'&&<span style={{fontSize:10,color:R,fontWeight:700}}>🚫</span>}
-                              {added&&<span style={{fontSize:10,color:G3}}>✓</span>}
+                              {added&&!replMode&&<span style={{fontSize:10,color:G3}}>✓</span>}
                               </div>
                             </div>
                           );
@@ -2709,7 +2742,7 @@ export default function App(){
                             return(
                               <div key={ex.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 6px',borderBottom:`1px solid ${G2}`,opacity:added?.4:1}}>
                                 <div><div style={{fontSize:11}}>{ex.nombre} <span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>{BLOCKS[ex.bloque]?.tag}</span>{rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:2}}>BLOQ.</span>}</div></div>
-                                {!added&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnG,padding:'2px 7px',fontSize:10,color:'#92400E',borderColor:'#F59E0B'}}>+</button>}
+                                {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnG,padding:'2px 7px',fontSize:10,color:'#92400E',borderColor:'#F59E0B'}}>{replMode?'⇄':'+'}</button>}
                                 {!added&&rest==='block'&&<span style={{fontSize:10,color:R}}>🚫</span>}
                               </div>
                             );
