@@ -101,7 +101,10 @@ function render(){
     exs.forEach(be=>{
       const nombre = (DATA.nombres && DATA.nombres[be.exId]) || be.exId;
       const p = be.params || b.params || {};
-      html += `<div class="ex"><div class="nm">${esc(nombre)}</div>`;
+      const GC={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
+      const GL={bi:'Biserie',tri:'Triserie',circuito:'Circuito'};
+      const gtag = be.grupo ? `<span style="background:${GC[be.grupo.id]||'#7C3AED'};color:#fff;font-size:9px;font-weight:800;border-radius:99px;padding:1px 7px;margin-right:5px;">🔗 ${GL[be.grupo.tipo]||''} ${be.grupo.id}</span>` : '';
+      html += `<div class="ex"><div class="nm">${gtag}${esc(nombre)}</div>`;
       html += `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}</div>`;
       html += `<div class="grid">`;
       for(let s=1;s<=SEMANAS;s++){

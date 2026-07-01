@@ -76,6 +76,10 @@ function checkRestriction(ex, client){
 }
 
 const NIVEL_COLOR={Principiante:'#16A34A',Intermedio:'#D97706',Avanzado:'#CC0000'};
+const GRUPO_COL={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
+const GRUPO_LBL={bi:'Biserie',tri:'Triserie',circuito:'Circuito'};
+const GRUPO_SHORT={bi:'Bi',tri:'Tri',circuito:'Circ'};
+const grupoTagTxt=(g)=>g?`${GRUPO_SHORT[g.tipo]||''} ${g.id}`:'';
 const NIVEL_EMOJI={Principiante:'🌱',Intermedio:'🌿',Avanzado:'🔥'};
 
 // ─── LOGO ───────────────────────────────────────────────────────────────────
@@ -1130,9 +1134,11 @@ export default function App(){
   const addExToBlock=(blockId,exId,override=false,note='')=>{
     setDia(d=>({...d,blocks:d.blocks.map(b=>{
       if(b.id!==blockId||b.exercises.length>=5)return b;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,b.params.reps):null;
       const exEntry={exId,override,note,
         params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
-        pesoSug:'',pesoReal:'',anotacion:''};
+        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:''};
       return{...b,exercises:[...b.exercises,exEntry]};
     })}));
   };
@@ -1142,7 +1148,32 @@ export default function App(){
   })}));
   const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
     if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,params:{...(be.params||{}), ...params}}:be)};
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const merged={...be,params:{...(be.params||{}),...params}};
+      // Recalcular peso sugerido al cambiar reps/modo, salvo que se haya fijado a mano
+      if(('reps'in params||'modo'in params)&&be.pesoSugAuto!==false){
+        const exObj=exs.find(e=>e.id===exId);
+        const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,merged.params.reps):null;
+        merged.pesoSug=(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'';
+      }
+      return merged;
+    })};
+  })}));
+  // El usuario escribe un peso a mano → deja de recalcularse solo
+  const setPesoSugManual=(blockId,exId,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,pesoSug:val,pesoSugAuto:false}:be)};
+  })}));
+  // Volver a modo automático y recalcular desde las reps actuales
+  const reAutoPesoSug=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,(be.params||{}).reps):null;
+      return{...be,pesoSugAuto:true,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):''};
+    })};
   })}));
   const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
     if(b.id!==blockId)return b;
@@ -1161,10 +1192,16 @@ export default function App(){
     if(b.id!==blockId)return b;
     const arr=b.exercises.slice();
     if(idx<0||idx>=arr.length)return b;
-    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:'',pesoReal:'',anotacion:''};
+    const ns=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,(arr[idx].params||b.params).reps);
+    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:'',pesoSugAuto:true};
     return{...b,exercises:arr};
   })}));
   const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
+  // Agrupar ejercicios: biserie / triserie / circuito, con letra de grupo (A/B/C/D)
+  const setExGrupo=(blockId,exId,grupo)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,grupo}:be)};
+  })}));
 
   const handlePickEx=(block,ex)=>{
     const rest=checkRestriction(ex,activeClient);
@@ -1248,7 +1285,7 @@ export default function App(){
             :'';
           return`<tr>
             ${bloqueCel}
-            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
+            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
             <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
             ${celdasSem}
           </tr>`;
@@ -1347,7 +1384,7 @@ export default function App(){
           const ex=exs.find(e=>e.id===be.exId);
           const pr=be.params||b.params;
           const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          rows.push([diaLbl,b.position,bd.label,ex?ex.nombre:be.exId,be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
+          rows.push([diaLbl,b.position,bd.label,(be.grupo?`[${grupoTagTxt(be.grupo)}] `:'')+(ex?ex.nombre:be.exId),be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
         });
       });
     });
@@ -2619,7 +2656,7 @@ export default function App(){
                       setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
                     }
                     return(
-                      <div key={be.exId+'_'+exIdx} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:7,padding:'8px 10px',marginBottom:6}}>
+                      <div key={be.exId+'_'+exIdx} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderLeft:be.grupo?`4px solid ${GRUPO_COL[be.grupo.id]||'#7C3AED'}`:(rest==='warn'?'1px solid #FCD34D':`1px solid ${sug?'#C4B5FD':G2}`),borderRadius:7,padding:'8px 10px',marginBottom:6}}>
                         {/* Cabecera ejercicio */}
                         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:5}}>
                           <div style={{flex:1}}>
@@ -2635,6 +2672,27 @@ export default function App(){
                             <button onClick={()=>removeExFromBlock(block.id,be.exId)} title="Quitar" style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px'}}>×</button>
                           </div>
                         </div>
+                        {/* Agrupación: biserie / triserie / circuito */}
+                        {(()=>{
+                          const g=be.grupo||null;const col=g?(GRUPO_COL[g.id]||'#7C3AED'):'#999';
+                          return(
+                            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,flexWrap:'wrap'}}>
+                              <span style={{fontSize:8,color:G3,textTransform:'uppercase',fontWeight:700}}>⛓ Agrupar:</span>
+                              <select value={g?g.tipo:''} onChange={e=>{const t=e.target.value;setExGrupo(block.id,be.exId,t?{tipo:t,id:(g&&g.id)||'A'}:null);}}
+                                style={{border:`1px solid ${G2}`,borderRadius:4,padding:'2px 5px',fontSize:10,background:WH,outline:'none'}}>
+                                <option value="">Individual</option>
+                                <option value="bi">Biserie</option>
+                                <option value="tri">Triserie</option>
+                                <option value="circuito">Circuito</option>
+                              </select>
+                              {g&&<select value={g.id} onChange={e=>setExGrupo(block.id,be.exId,{...g,id:e.target.value})}
+                                style={{border:`1px solid ${col}`,borderRadius:4,padding:'2px 5px',fontSize:10,color:col,fontWeight:700,background:WH,outline:'none'}}>
+                                {['A','B','C','D'].map(L=><option key={L} value={L}>Grupo {L}</option>)}
+                              </select>}
+                              {g&&<span style={{background:col,color:'#fff',borderRadius:99,fontSize:8,fontWeight:800,padding:'2px 8px'}}>🔗 {GRUPO_LBL[g.tipo]} {g.id}</span>}
+                            </div>
+                          );
+                        })()}
                         {/* Parámetros individuales por ejercicio */}
                         {(()=>{
                           const modoT=exParams.modo?exParams.modo==='tiempo':/seg|min|\d+:\d{2}/.test(String(exParams.reps||'').toLowerCase());
@@ -2667,9 +2725,14 @@ export default function App(){
                         {/* Peso sugerido + real + anotaciones */}
                         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:4}}>
                           <div>
-                            <div style={{fontSize:8,color:'#7C3AED',marginBottom:1,textTransform:'uppercase',fontWeight:700}}>💡 Peso sugerido</div>
+                            <div style={{fontSize:8,color:'#7C3AED',marginBottom:1,textTransform:'uppercase',fontWeight:700,display:'flex',alignItems:'center',gap:4}}>
+                              💡 Peso sugerido
+                              {be.pesoSugAuto===false
+                                ? <button onClick={()=>reAutoPesoSug(block.id,be.exId)} title="Volver a cálculo automático según reps" style={{background:'#EDE9FE',border:'1px solid #C4B5FD',borderRadius:4,color:'#6D28D9',cursor:'pointer',fontSize:8,fontWeight:700,padding:'0 4px'}}>↻ manual</button>
+                                : <span title="Se recalcula solo al cambiar las reps" style={{background:'#DCFCE7',color:'#166534',borderRadius:4,fontSize:8,fontWeight:700,padding:'0 4px'}}>auto</span>}
+                            </div>
                             <div style={{position:'relative'}}>
-                              <input value={be.pesoSug||''} onChange={e=>updateExParam(block.id,be.exId,'pesoSug',e.target.value)}
+                              <input value={be.pesoSug||''} onChange={e=>setPesoSugManual(block.id,be.exId,e.target.value)}
                                 placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
                                 style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
                               {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1,lineHeight:1.3}}>

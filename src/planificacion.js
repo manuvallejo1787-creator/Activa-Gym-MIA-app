@@ -59,6 +59,16 @@ export const TESTS_FUERZA = [
     nivel: { debil: 0, promedio: 0.2, bueno: 0.5, elite: 0.8 },
     nota_sin_peso: true,
   },
+  {
+    id: 'remo_apoyo',
+    nombre: 'Remo con apoyo en pecho (remo a caballo)',
+    patron: 'Tirón horizontal',
+    protocolo: 'Pecho apoyado en banco inclinado (o seal row en banco alto). El apoyo es lo que hace válido el test: elimina el impulso de tronco y saca la espalda baja como limitante. NO testear a 1 rep: usar 4-6 reps máximas limpias, rango completo, sin despegar el pecho del banco, y estimar el 1RM con la fórmula. Si en la ejecución hay body english o se levanta el pecho, el dato no sirve para comparar.',
+    referencia: { masculino: 1.0, femenino: 0.65 },
+    unidad: '× peso corporal',
+    nivel: { debil: 0.5, promedio: 0.75, bueno: 1.0, elite: 1.3 },
+    referencial: true,
+  },
 ];
 
 // ─── FÓRMULAS DE ESTIMACIÓN DE 1RM ──────────────────────────────────────────
@@ -429,6 +439,7 @@ export const colorDuracion = (minutos) => {
 // ─── MAPEO EJERCICIO → TEST DE FUERZA ────────────────────────────────────
 // Mapea palabras clave del nombre del ejercicio al test de 1RM más relevante
 const EXERCISE_TEST_MAP = [
+  { testId: 'remo_apoyo', keywords: ['remo con apoyo','remo apoyo','remo a caballo','chest supported','chest-supported','seal row','t-bar','remo t','remo con barra','remo pendlay','remo mancuerna','remo con mancuerna','barbell row','bent over row','bent-over row','dumbbell row'] },
   { testId: 'squat',    keywords: ['sentadilla','squat','goblet','búlgara','bulgara','pistol','front squat'] },
   { testId: 'deadlift', keywords: ['peso muerto','deadlift','romanian','rdl','rumano','stiff','sumo','trap bar','hex bar'] },
   { testId: 'bench',    keywords: ['press pecho','press banca','bench press','banca','pecho','press inclinado','press declinado','aperturas'] },
