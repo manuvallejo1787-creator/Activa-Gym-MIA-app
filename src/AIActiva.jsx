@@ -48,7 +48,7 @@ async function callClaude(userPrompt, maxTokens = 2000) {
   try {
     return JSON.parse(clean);
   } catch {
-    throw new Error("La IA no devolvió un formato válido. Probá regenerar.");
+    throw new Error("La IA devolvió una respuesta incompleta o cortada. Probá regenerar (o reducí la cantidad de días si el plan es muy largo).");
   }
 }
 
@@ -405,7 +405,7 @@ Generá menús para ${diasTarget} días. Respondé ÚNICAMENTE con este JSON:
   "razonamiento": "justificación nutricional (2-3 líneas)"
 }`;
 
-      const data = await callClaude(prompt, 3000);
+      const data = await callClaude(prompt, 8000);
       setResult(data);
     } catch (e) {
       setError(e.message);
