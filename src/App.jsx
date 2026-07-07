@@ -977,6 +977,7 @@ export default function App(){
   const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
   const [showHistorial,setShowHistorial]=useState(false);
   const [verEjecucion,setVerEjecucion]=useState(null);
+  const [compilarSel,setCompilarSel]=useState([]);
   const [showEntrenarIA,setShowEntrenarIA]=useState(false);
   // Fase activa del plan de periodización del cliente
   const activeFasePlan=useMemo(()=>{
@@ -1000,7 +1001,7 @@ export default function App(){
     return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
   });
   const addDia=()=>setSession(p=>{
-    if((p.dias?.length||0)>=5)return p;
+    if((p.dias?.length||0)>=6)return p;
     return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
   });
   const removeDia=(idx)=>setSession(p=>{
@@ -1011,7 +1012,7 @@ export default function App(){
   const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
   const setNumDias=(target)=>setSession(p=>{
     const cur=p.dias?.length||1;
-    if(target===cur||target<1||target>5)return p;
+    if(target===cur||target<1||target>6)return p;
     if(target>cur){
       const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
       return {...p,dias:[...p.dias,...extra]};
@@ -1364,6 +1365,78 @@ export default function App(){
       ${seccionesDias}
       <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
       <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+  };
+
+  // Compila varios planes guardados (fases del bloque) en UN solo PDF, en orden
+  const compilarBloquePDF=(planes)=>{
+    const lista=(planes||[]).filter(p=>Array.isArray(p.dias)&&p.dias.some(d=>d.obj&&(d.blocks||[]).length>0));
+    if(lista.length===0){alert('Elegí al menos un plan con días armados para compilar.');return;}
+    const ord=[...lista].sort((a,b)=>{const fa=a.fecha_inicio||'',fb=b.fecha_inicio||'';if(!fa&&!fb)return 0;if(!fa)return 1;if(!fb)return -1;return fa<fb?-1:fa>fb?1:0;});
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+    const tablaDia=(d)=>{
+      const rows=(d.blocks||[]).flatMap(b=>{
+        const bd=BLOCKS[b.type]||{color:'#333',label:b.type,emoji:''};const bg=bd.color;
+        if((b.exercises||[]).length===0)return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);const exNombre=ex?ex.nombre:be.exId;const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`:'';
+          return`<tr>${bloqueCel}<td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td><td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>${celdasSem}</tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr><th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}</tr></thead><tbody>${rows}</tbody></table>${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+    const fasesSecc=ord.map((pl,pi)=>{
+      const dias=(pl.dias||[]).filter(d=>d.obj&&(d.blocks||[]).length>0);
+      const rango=pl.fecha_inicio?`${pl.fecha_inicio}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}`:'';
+      const seccionesDias=dias.map((d,i)=>{
+        const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+        return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}><div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${(d.blocks||[]).reduce((a,b)=>a+(b.exercises||[]).length,0)} ejercicios</div></div></div>${tablaDia(d)}</section>`;
+      }).join('');
+      return`<div class="fase" style="page-break-before:always;"><div class="fase-hdr"><div class="fase-num">FASE ${pi+1}</div><div><div class="fase-title">${pl.nombre}</div><div class="fase-sub">${rango?`${rango} · `:''}${(pl.periodizacion||'').replace(/_/g,' ')} · ${dias.length} sesión/es por semana</div></div></div>${seccionesDias}</div>`;
+    }).join('');
+    const idxRows=ord.map((pl,pi)=>`<tr><td style="padding:5px 9px;font-weight:700;font-size:11px;">Fase ${pi+1}</td><td style="padding:5px 9px;font-size:11px;">${pl.nombre}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.fecha_inicio||'—'}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${(pl.periodizacion||'').replace(/_/g,' ')||'—'}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.num_dias||((pl.dias||[]).filter(d=>d.obj).length)} día/s</td></tr>`).join('');
+    const logoHtml=brand.logoImg
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      table.idx{width:100%;border-collapse:collapse;margin-top:14px}
+      table.idx th{background:#1a1a1a;color:#fff;padding:7px 9px;font-size:10px;text-align:left;text-transform:uppercase}
+      table.idx td{border-bottom:1px solid #e0e0e0}
+      .cover-title{font-size:26px;font-weight:900;color:${brand.colorPrimary};margin-top:26px;letter-spacing:1px}
+      .cover-sub{font-size:13px;color:#555;margin-top:6px}
+      .fase-hdr{display:flex;align-items:center;gap:12px;background:${brand.colorPrimary};color:#fff;padding:12px 16px;border-radius:8px;margin-bottom:10px}
+      .fase-num{background:rgba(255,255,255,.22);border-radius:6px;padding:6px 12px;font-weight:900;font-size:14px;flex-shrink:0}
+      .fase-title{font-size:18px;font-weight:900}
+      .fase-sub{font-size:10px;opacity:.9;margin-top:2px}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px}
+      .dia-num{background:#1a1a1a;color:#fff;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+      .dia-title{font-size:14px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:14px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+    const nombreBloque=`Bloque de entrenamiento — ${activeClient?`${activeClient.nombre} ${activeClient.apellido}`:'Cliente'}`;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${nombreBloque}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">Plan por fases</div><div style="font-size:10px;color:#666;margin-top:3px">Generado ${new Date().toLocaleDateString('es-UY')}</div></div></div>
+      <div class="cover-title">${nombreBloque}</div>
+      <div class="cover-sub">${ord.length} fases · ${activeClient?`Nivel: ${NIVEL[activeClient.nivel].label}`:''}</div>
+      <table class="idx"><thead><tr><th>#</th><th>Fase</th><th style="text-align:center;">Fechas</th><th style="text-align:center;">Periodización</th><th style="text-align:center;">Sesiones</th></tr></thead><tbody>${idxRows}</tbody></table>
+      <div class="leyenda">Cada fase arranca en página nueva. S1–S8 = semanas de esa fase; el cliente anota el peso real usado. Las fases se ordenan por fecha de inicio.</div>
+      ${fasesSecc}
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Método Activa Integra</div>
       <script>window.onload=()=>{window.print()}<\/script></body></html>`;
     const w=window.open('','_blank');w.document.write(html);w.document.close();
   };
@@ -2272,7 +2345,7 @@ export default function App(){
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
         <div style={{fontSize:12,fontWeight:700,color:'#111'}}>🗓️ Sesiones por semana</div>
         <div style={{display:'flex',gap:4,alignItems:'center'}}>
-          {[1,2,3,4,5].map(n=>(
+          {[1,2,3,4,5,6].map(n=>(
             <button key={n} onClick={()=>setNumDias(n)} style={{width:28,height:28,borderRadius:6,border:`1px solid ${numDias===n?brand.colorPrimary:G2}`,background:numDias===n?brand.colorPrimary:WH,color:numDias===n?WH:G4,fontWeight:800,fontSize:12,cursor:'pointer'}}>{n}</button>
           ))}
           <span style={{fontSize:10,color:G3,marginLeft:4}}>día/s</span>
@@ -2293,7 +2366,7 @@ export default function App(){
             </div>
           );
         })}
-        {numDias<5&&<button onClick={addDia} style={{...s.btnG,fontSize:11,padding:'6px 10px',borderStyle:'dashed'}}>+ Día</button>}
+        {numDias<6&&<button onClick={addDia} style={{...s.btnG,fontSize:11,padding:'6px 10px',borderStyle:'dashed'}}>+ Día</button>}
       </div>
     </div>
   );
@@ -2467,19 +2540,30 @@ export default function App(){
               <div style={{fontSize:17,fontWeight:800}}>📂 Historial de planes — {activeClient?.nombre} {activeClient?.apellido}</div>
               <button onClick={()=>setShowHistorial(false)} style={s.btnG}>✕</button>
             </div>
+            {gymPlanes.length>0&&(
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,background:compilarSel.length?'#F5F3FF':'#F8F8F8',border:`1px solid ${compilarSel.length?'#C4B5FD':G2}`,borderRadius:8,padding:'8px 12px',marginBottom:10,flexWrap:'wrap'}}>
+                <div style={{fontSize:11,color:G4}}>🧩 <strong>Compilar bloque:</strong> marcá las fases y unilas en un solo PDF (se ordenan por fecha de inicio). {compilarSel.length>0&&<span style={{color:'#6D28D9',fontWeight:700}}>{compilarSel.length} seleccionada/s</span>}</div>
+                <div style={{display:'flex',gap:6}}>
+                  {compilarSel.length>0&&<button onClick={()=>setCompilarSel([])} style={{...s.btnG,fontSize:10,padding:'5px 10px'}}>Limpiar</button>}
+                  <button onClick={()=>compilarBloquePDF(gymPlanes.filter(p=>compilarSel.includes(p.id)))} disabled={compilarSel.length<1} style={{...s.btnR,fontSize:10,padding:'5px 12px',background:'#6D28D9',opacity:compilarSel.length<1?.5:1,cursor:compilarSel.length<1?'default':'pointer'}}>🧩 Compilar {compilarSel.length>0?`(${compilarSel.length}) `:''}en un PDF</button>
+                </div>
+              </div>
+            )}
             {gymPlanes.length===0
               ?<div style={{fontSize:13,color:G3,padding:'20px 0',textAlign:'center'}}>Todavía no hay planes guardados para este cliente.<br/>Armá un plan y tocá <strong>💾 Guardar plan</strong>.</div>
               :<div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:'60vh',overflowY:'auto'}}>
                 {gymPlanes.map(pl=>{
                   const estCol=pl.estado==='completado'?'#16A34A':pl.estado==='reemplazado'?'#999':R;
+                  const selB=compilarSel.includes(pl.id);
                   return(
-                    <div key={pl.id} style={{border:`1px solid ${G2}`,borderLeft:`4px solid ${estCol}`,borderRadius:8,padding:'10px 12px'}}>
+                    <div key={pl.id} style={{border:`1px solid ${selB?'#C4B5FD':G2}`,borderLeft:`4px solid ${estCol}`,borderRadius:8,padding:'10px 12px',background:selB?'#FAF8FF':WH}}>
                       <div style={{flex:1,minWidth:200}}>
                         <div style={{fontSize:13,fontWeight:800}}>{pl.nombre} {pl.es_ejemplo&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 6px',borderRadius:99,fontWeight:700}}>⭐ EJEMPLO IA</span>}</div>
                         <div style={{fontSize:10,color:G3,marginTop:1}}>{pl.fecha_inicio||'sin fecha'} · {pl.num_dias} día/s · {(pl.periodizacion||'').replace(/_/g,' ')} · <span style={{color:estCol,fontWeight:700}}>{pl.estado}</span></div>
                         {pl.resumen&&<div style={{fontSize:9,color:'#888',marginTop:3,lineHeight:1.4}}>{pl.resumen.slice(0,180)}{pl.resumen.length>180?'…':''}</div>}
                       </div>
                       <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:8}}>
+                        <button onClick={()=>setCompilarSel(sl=>sl.includes(pl.id)?sl.filter(x=>x!==pl.id):[...sl,pl.id])} style={{...s.btnG,fontSize:10,padding:'4px 9px',background:selB?'#6D28D9':WH,color:selB?'#fff':'#6D28D9',borderColor:'#6D28D9',fontWeight:700}}>{selB?'☑ En el bloque':'☐ Al bloque'}</button>
                         <button onClick={()=>cargarPlan(pl)} style={{...s.btnBK,fontSize:10,padding:'4px 9px'}}>Abrir</button>
                         <button onClick={()=>duplicarPlan(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>Duplicar</button>
                         {pl.estado!=='completado'&&<button onClick={()=>cambiarEstadoPlan(pl,'completado')} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>✓ Completar</button>}

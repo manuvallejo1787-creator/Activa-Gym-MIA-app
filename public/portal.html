@@ -18,9 +18,16 @@
   .tab{flex:0 0 auto;background:#2a2a2a;color:#ccc;border:1px solid #3a3a3a;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer}
   .tab.on{background:#CC0000;color:#fff;border-color:#CC0000}
   .blk{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#CC0000;font-weight:800;margin:14px 0 6px}
-  .ex{background:#242424;border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid #333}
-  .ex .nm{font-size:14px;font-weight:800;margin-bottom:1px}
-  .ex .pr{font-size:11px;color:#999;margin-bottom:8px}
+  .ex{background:#242424;border-radius:10px;margin-bottom:8px;border:1px solid #333;overflow:hidden}
+  .exhead{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px;cursor:pointer;user-select:none}
+  .exhead:active{background:#2c2c2c}
+  .exhead-l{display:flex;align-items:center;gap:9px;min-width:0}
+  .exhead .nm{font-size:14px;font-weight:800;line-height:1.2}
+  .arrow{color:#CC0000;font-size:12px;flex-shrink:0;width:12px;text-align:center;transition:transform .15s}
+  .exdone{background:#16A34A;color:#fff;font-size:10px;font-weight:800;border-radius:99px;padding:2px 9px;white-space:nowrap;flex-shrink:0}
+  .exnone{color:#777;font-size:10px;white-space:nowrap;flex-shrink:0}
+  .exbody{padding:0 12px 12px}
+  .exbody .pr{font-size:11px;color:#999;margin-bottom:8px}
   .grid{display:flex;flex-direction:column;gap:5px}
   .wk{display:flex;align-items:center;gap:8px}
   .wk .lbl{flex:0 0 58px;font-size:11px;color:#888;font-weight:700}
@@ -98,25 +105,36 @@ function render(){
     const exs = b.exercises||[];
     if(!exs.length) return;
     html += `<div class="blk">${esc(b.type||'')}</div>`;
-    exs.forEach(be=>{
+    exs.forEach((be,exj)=>{
       const nombre = (DATA.nombres && DATA.nombres[be.exId]) || be.exId;
       const p = be.params || b.params || {};
       const GC={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
       const GL={bi:'Biserie',tri:'Triserie',circuito:'Circuito'};
       const gtag = be.grupo ? `<span style="background:${GC[be.grupo.id]||'#7C3AED'};color:#fff;font-size:9px;font-weight:800;border-radius:99px;padding:1px 7px;margin-right:5px;">🔗 ${GL[be.grupo.tipo]||''} ${be.grupo.id}</span>` : '';
-      html += `<div class="ex"><div class="nm">${gtag}${esc(nombre)}</div>`;
-      html += `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}</div>`;
-      html += `<div class="grid">`;
+      const uid = `${d.id}_${be.exId}_${exj}`.replace(/[^a-zA-Z0-9_]/g,'');
+      // ¿cuántas semanas ya cargó?
+      let filled=0;
+      for(let s=1;s<=SEMANAS;s++){const lg=LOGMAP[key(d.id,be.exId,s)]||{}; if((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)filled++;}
+      const estado = filled>0 ? `<span class="exdone">✓ ${filled}/${SEMANAS}</span>` : `<span class="exnone">${SEMANAS} sem.</span>`;
+      // cuerpo (oculto por defecto)
+      let body = `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}</div><div class="grid">`;
       for(let s=1;s<=SEMANAS;s++){
         const lg = LOGMAP[key(d.id, be.exId, s)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
-        html += `<div class="wk"><span class="lbl">Sem ${s}</span>`+
+        body += `<div class="wk"><span class="lbl">Sem ${s}</span>`+
           `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'peso')"><span class="u">kg</span>`+
           `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'reps')"><span class="u">reps</span>`+
           `</div>`;
       }
-      html += `</div></div>`;
+      body += `</div>`;
+      html += `<div class="ex">`+
+        `<div class="exhead" onclick="toggleEx('${uid}')">`+
+          `<div class="exhead-l"><span class="arrow" id="arr_${uid}">▸</span><span class="nm">${gtag}${esc(nombre)}</span></div>`+
+          `<div class="exhead-r">${estado}</div>`+
+        `</div>`+
+        `<div class="exbody" id="body_${uid}" style="display:none;">${body}</div>`+
+      `</div>`;
     });
   });
   html += `<div class="foot">ACTIVA · Tus datos se guardan automáticamente</div>`;
@@ -124,6 +142,14 @@ function render(){
 }
 
 window.setDia = i => { activeDia = i; render(); };
+
+window.toggleEx = (uid) => {
+  const b = document.getElementById('body_'+uid), a = document.getElementById('arr_'+uid);
+  if(!b) return;
+  const willOpen = (b.style.display === 'none');
+  b.style.display = willOpen ? 'block' : 'none';
+  if(a) a.textContent = willOpen ? '▾' : '▸';
+};
 
 window.guardar = async (inp, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
   const k = key(dia_id, ejercicio_id, semana);
