@@ -156,8 +156,8 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
     if (!planActivo) return { proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0 };
     const diaData = planActivo.semana[diaActivo] || {};
     const items = Object.values(diaData).flat();
-    return sumarMacrosDia(items);
-  }, [planActivo, diaActivo]);
+    return sumarMacrosDia(items, customAlimentos);
+  }, [planActivo, diaActivo, customAlimentos]);
 
   // ── Persistencia de planes de nutrición ───────────────────────────────────
   const resumirPlanNutri = (plan) => {
@@ -267,13 +267,13 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
 
     const diasHtml = DIAS_SEMANA.map(dia => {
       const diaData = planActivo.semana[dia] || {};
-      const totDia = sumarMacrosDia(Object.values(diaData).flat());
+      const totDia = sumarMacrosDia(Object.values(diaData).flat(), customAlimentos);
       const semDia = calcSemaforo(totDia.calorias, objetivoNut?.kcal);
       const comidasHtml = COMIDAS.map(com => {
         const items = diaData[com.id] || [];
         if (items.length === 0) return `<tr><td style="padding:5px 10px;color:#aaa;font-style:italic;font-size:10px;" colspan="5">${com.emoji} ${com.label} — sin alimentos</td></tr>`;
         const itemsHtml = items.map((item, idx) => {
-          const al = getAlimentoById(item.alimentoId);
+          const al = getAlimentoById(item.alimentoId, customAlimentos);
           if (!al) return '';
           const m = calcularMacros(al, item.gramos);
           return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">
@@ -650,7 +650,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   const VistaConstructor = () => {
     if (!planActivo) return <div style={{padding:28,textAlign:'center',color:G3}}>No hay plan activo</div>;
     const comidaData = planActivo.semana[diaActivo]?.[comidaActiva] || [];
-    const totalesComida = sumarMacrosDia(comidaData);
+    const totalesComida = sumarMacrosDia(comidaData, customAlimentos);
 
     return (
       <div style={{padding:'12px 14px'}}>
@@ -683,7 +683,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
           {/* Navegación días */}
           <div style={{display:'flex',flexDirection:'column',gap:3,minWidth:88}}>
             {DIAS_SEMANA.map(dia=>{
-              const totDia = sumarMacrosDia(Object.values(planActivo.semana[dia]||{}).flat());
+              const totDia = sumarMacrosDia(Object.values(planActivo.semana[dia]||{}).flat(), customAlimentos);
               const semDia = calcSemaforo(totDia.calorias, objetivoNut?.kcal);
               return(
                 <div key={dia} onClick={()=>setDiaActivo(dia)} style={{cursor:'pointer',padding:'6px 8px',borderRadius:6,background:dia===diaActivo?BK:WH,border:`1px solid ${dia===diaActivo?TL:G2}`,transition:'all .15s'}}>
@@ -700,7 +700,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
             <div style={{display:'flex',gap:4,marginBottom:8,flexWrap:'wrap'}}>
               {COMIDAS.map(com=>{
                 const items = planActivo.semana[diaActivo]?.[com.id]||[];
-                const tot = sumarMacrosDia(items);
+                const tot = sumarMacrosDia(items, customAlimentos);
                 const isActive = com.id===comidaActiva;
                 return(
                   <div key={com.id} onClick={()=>setComidaActiva(com.id)} style={{cursor:'pointer',flex:1,padding:'6px 6px',borderRadius:6,border:`1px solid ${isActive?TL:G2}`,background:isActive?'#EFF6FF':WH,textAlign:'center',minWidth:70}}>
@@ -720,7 +720,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
               </div>
               {comidaData.length===0&&<div style={{textAlign:'center',padding:16,color:G3,fontSize:11,borderStyle:'dashed',border:`1px dashed ${G2}`,borderRadius:6}}>Sin alimentos. Tocá "+ Agregar" para comenzar.</div>}
               {comidaData.map((item,i)=>{
-                const al = getAlimentoById(item.alimentoId);
+                const al = getAlimentoById(item.alimentoId, customAlimentos);
                 if (!al) return null;
                 const m = calcularMacros(al, item.gramos);
                 const cat = CATEGORIAS_ALIMENTOS[al.categoria];

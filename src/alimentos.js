@@ -259,7 +259,7 @@ export const DB_ALIMENTOS = [
 ];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────
-export const getAlimentoById = (id) => DB_ALIMENTOS.find(a => a.id === id) || null;
+export const getAlimentoById = (id, extra = []) => DB_ALIMENTOS.find(a => a.id === id) || extra.find(a => a.id === id) || null;
 
 // Calcular macros para una cantidad dada de un alimento
 export const calcularMacros = (alimento, gramos) => {
@@ -274,9 +274,9 @@ export const calcularMacros = (alimento, gramos) => {
 };
 
 // Sumar macros de un array de {alimentoId, gramos}
-export const sumarMacrosDia = (items) => {
+export const sumarMacrosDia = (items, extra = []) => {
   return items.reduce((acc, item) => {
-    const al = getAlimentoById(item.alimentoId);
+    const al = getAlimentoById(item.alimentoId, extra);
     if (!al) return acc;
     const m = calcularMacros(al, item.gramos || 100);
     return {
