@@ -477,6 +477,54 @@ export function useGymPlanes(clientId) {
   return{gymPlanes,loading,savePlan,deletePlan,refetch:fetch}
 }
 
+// ─── HOOK: Alimentos personalizados (alimentos_custom) ─────────────────────
+export function useAlimentosCustom() {
+  const [alimentosCustom,setAlimentosCustom]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setAlimentosCustom([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('alimentos_custom').select('*').order('created_at',{ascending:true})
+      if(error)throw error
+      setAlimentosCustom((data||[]).map(r=>({
+        id:r.id,nombre:r.nombre,categoria:r.categoria,porcion_ref:r.porcion_ref,
+        proteinas:r.proteinas,carbos:r.carbos,grasas:r.grasas,fibra:r.fibra,calorias:r.calorias,
+        micro1:{nombre:r.micro1_nombre||'',valor:r.micro1_valor||0,unidad:r.micro1_unidad||'mg'},
+        micro2:{nombre:r.micro2_nombre||'',valor:r.micro2_valor||0,unidad:r.micro2_unidad||'mg'},
+        custom:true,
+      })))
+    }catch(e){console.error('alimentos_custom:',e.message)}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('alimcustom_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'alimentos_custom'},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch])
+  const saveAlimento=useCallback(async(al)=>{
+    const row={
+      id:al.id,nombre:al.nombre,categoria:al.categoria,porcion_ref:al.porcion_ref,
+      proteinas:al.proteinas,carbos:al.carbos,grasas:al.grasas,fibra:al.fibra,calorias:al.calorias,
+      micro1_nombre:al.micro1?.nombre||'',micro1_valor:al.micro1?.valor||0,micro1_unidad:al.micro1?.unidad||'mg',
+      micro2_nombre:al.micro2?.nombre||'',micro2_valor:al.micro2?.valor||0,micro2_unidad:al.micro2?.unidad||'mg',
+      updated_at:new Date().toISOString(),
+    };
+    if(isSupabaseReady){
+      const{error}=await supabase.from('alimentos_custom').upsert(row,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    }else setAlimentosCustom(p=>[...p,al])
+  },[fetch])
+  const deleteAlimento=useCallback(async(id)=>{
+    if(isSupabaseReady)await supabase.from('alimentos_custom').delete().eq('id',id)
+    else setAlimentosCustom(p=>p.filter(a=>a.id!==id))
+  },[])
+  return{alimentosCustom,loading,saveAlimento,deleteAlimento,refetch:fetch}
+}
+
 // ─── HOOK: Ejercicios personalizados de fuerza (fuerza_tests_custom) ──────
 export function useCustomTests(clientId) {
   const [customRows,setCustomRows]=useState([])

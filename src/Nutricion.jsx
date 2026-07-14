@@ -7,7 +7,7 @@ import {
   calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
 } from "./alimentos.js";
 import { AIGeneradorNutricion } from "./AIActiva.jsx";
-import { useNutricionPlanes, useGymPlanes } from "./db.js";
+import { useNutricionPlanes, useGymPlanes, useAlimentosCustom } from "./db.js";
 
 // ─── PALETA ──────────────────────────────────────────────────────────────────
 const BK='#1a1a1a', WH='#FFFFFF', R='#CC0000';
@@ -98,7 +98,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   const [comidaActiva, setComidaActiva] = useState('desayuno');
 
   // Datos de alimentos (DB + personalizados)
-  const [customAlimentos, setCustomAlimentos] = useState([]);
+  const {alimentosCustom:customAlimentos,saveAlimento:saveAlimentoCustom,deleteAlimento:deleteAlimentoCustom}=useAlimentosCustom();
   const todosAlimentos = useMemo(() => [...DB_ALIMENTOS, ...customAlimentos], [customAlimentos]);
 
   // Estado picker de alimentos
@@ -770,7 +770,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   };
 
   // ─── VISTA: BASE DE ALIMENTOS ─────────────────────────────────────────────
-  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento}) => {
+  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento, onEliminar}) => {
     const [search, setSearch] = useState('');
     const [cat, setCat] = useState('all');
     const filtered = todosAlimentos.filter(a =>
@@ -795,7 +795,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
             <thead>
               <tr style={{background:BK,color:WH}}>
-                {['Alimento','Categoría','P (g)','C (g)','G (g)','F (g)','Kcal','Micro 1','Micro 2'].map(h=>(
+                {['Alimento','Categoría','P (g)','C (g)','G (g)','F (g)','Kcal','Micro 1','Micro 2',''].map(h=>(
                   <th key={h} style={{padding:'7px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,whiteSpace:'nowrap'}}>{h}</th>
                 ))}
               </tr>
@@ -814,10 +814,11 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
                     <td style={{padding:'5px 8px',fontWeight:700,color:NV}}>{al.calorias}</td>
                     <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro1?.nombre&&`${al.micro1.nombre}: ${al.micro1.valor}${al.micro1.unidad}`}</td>
                     <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro2?.nombre&&`${al.micro2.nombre}: ${al.micro2.valor}${al.micro2.unidad}`}</td>
+                    <td style={{padding:'5px 8px'}}>{al.custom&&<button onClick={()=>{if(confirm(`¿Eliminar "${al.nombre}" de la base?`))onEliminar(al.id);}} style={{background:'none',border:'none',color:'#CC0000',cursor:'pointer',fontSize:13}}>×</button>}</td>
                   </tr>
                 );
               })}
-              {filtered.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
+              {filtered.length===0&&<tr><td colSpan={10} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
             </tbody>
           </table>
         </div>
@@ -829,7 +830,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   return(
     <div style={{minHeight:'100vh',background:G1}}>
       {showPicker && <PickerAlimentosComp onClose={()=>setShowPicker(false)} onAdd={agregarAlimento} comidaActiva={comidaActiva} todosAlimentos={todosAlimentos} onNuevoAlimento={()=>{setShowPicker(false);setShowNuevoAlimento(true);}}/>}
-      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{setCustomAlimentos(p=>[...p,al]);setShowNuevoAlimento(false);}}/>}
+      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{saveAlimentoCustom(al).catch(e=>alert('No se pudo guardar el alimento: '+e.message));setShowNuevoAlimento(false);}}/>}
       {/* Sub-tabs */}
       <div style={{display:'flex',borderBottom:`2px solid ${G2}`,background:WH,overflowX:'auto'}}>
         {[['planes','📋 Planes'],['plan','🏗️ Constructor'],['alimentos','📚 Alimentos']].map(([v,lbl])=>(
@@ -840,7 +841,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       </div>
       {view==='planes'    && VistaPlanes()}
       {view==='plan'      && VistaConstructor()}
-      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)}/>}
+      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)} onEliminar={id=>deleteAlimentoCustom(id).catch(e=>alert('No se pudo eliminar: '+e.message))}/>}
     </div>
   );
 }

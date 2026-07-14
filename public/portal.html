@@ -28,6 +28,7 @@
   .exnone{color:#777;font-size:10px;white-space:nowrap;flex-shrink:0}
   .exbody{padding:0 12px 12px}
   .exbody .pr{font-size:11px;color:#999;margin-bottom:8px}
+  .pr .sug{color:#B794F6;font-weight:800}
   .grid{display:flex;flex-direction:column;gap:5px}
   .wk{display:flex;align-items:center;gap:8px}
   .wk .lbl{flex:0 0 58px;font-size:11px;color:#888;font-weight:700}
@@ -117,7 +118,8 @@ function render(){
       for(let s=1;s<=SEMANAS;s++){const lg=LOGMAP[key(d.id,be.exId,s)]||{}; if((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)filled++;}
       const estado = filled>0 ? `<span class="exdone">✓ ${filled}/${SEMANAS}</span>` : `<span class="exnone">${SEMANAS} sem.</span>`;
       // cuerpo (oculto por defecto)
-      let body = `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}</div><div class="grid">`;
+      const pesoSugTxt = (be.pesoSug!=null && be.pesoSug!=='') ? ` · <span class="sug">💡 sugerido ${esc(be.pesoSug)} kg</span>` : '';
+      let body = `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}${pesoSugTxt}</div><div class="grid">`;
       for(let s=1;s<=SEMANAS;s++){
         const lg = LOGMAP[key(d.id, be.exId, s)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
