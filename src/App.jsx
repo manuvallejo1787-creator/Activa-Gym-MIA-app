@@ -80,6 +80,13 @@ const GRUPO_COL={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
 const GRUPO_LBL={bi:'Biserie',tri:'Triserie',circuito:'Circuito'};
 const GRUPO_SHORT={bi:'Bi',tri:'Tri',circuito:'Circ'};
 const grupoTagTxt=(g)=>g?`${GRUPO_SHORT[g.tipo]||''} ${g.id}`:'';
+// Conteo fraccionado de series por grupo muscular (estándar RP):
+// 1er músculo listado = principal (1 serie), 2do = secundario (0.5), 3ro en adelante = terciario (0.25)
+const FRAC_POR_ORDEN=[1,0.5,0.25];
+const parseMusculosFraccion=(musculosStr)=>{
+  if(!musculosStr)return[];
+  return musculosStr.split(',').map(m=>m.trim()).filter(Boolean).map((nombre,i)=>({nombre,fraccion:FRAC_POR_ORDEN[i]??0.25}));
+};
 const NIVEL_EMOJI={Principiante:'🌱',Intermedio:'🌿',Avanzado:'🔥'};
 
 // ─── LOGO ───────────────────────────────────────────────────────────────────
@@ -2903,6 +2910,42 @@ export default function App(){
             </div>
           );
         })}
+        {/* Series semanales por grupo muscular (conteo fraccionado) — toda la sesión, todos los días */}
+        {(()=>{
+          const acumPorMusculo={};
+          (session.dias||[]).forEach(d=>{
+            (d.blocks||[]).forEach(b=>{
+              (b.exercises||[]).forEach(be=>{
+                const ex=exs.find(e=>e.id===be.exId);if(!ex)return;
+                const series=parseFloat((be.params||b.params||{}).series)||0;if(series<=0)return;
+                parseMusculosFraccion(ex.musculos).forEach(({nombre,fraccion})=>{
+                  acumPorMusculo[nombre]=(acumPorMusculo[nombre]||0)+series*fraccion;
+                });
+              });
+            });
+          });
+          const filas=Object.entries(acumPorMusculo).sort((a,b)=>b[1]-a[1]);
+          if(filas.length===0)return null;
+          const nivelTag=(v)=>v<10?{txt:'Bajo',c:'#D97706'}:v<=20?{txt:'Óptimo',c:'#16A34A'}:{txt:'Alto',c:'#CC0000'};
+          return(
+            <div style={{...s.card,marginTop:10,background:'#FAFAFF',border:'1px solid #E0DDFA'}}>
+              <div style={{fontSize:12,fontWeight:800,marginBottom:2,color:'#4C1D95'}}>🧮 Series semanales por grupo muscular</div>
+              <div style={{fontSize:9,color:G3,marginBottom:9}}>Conteo fraccionado (principal=1, secundario=0.5, terciario=0.25) sobre los {numDias} día/s de esta sesión. Referencia orientativa: 10-20 series/semana por grupo.</div>
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                {filas.map(([m,v])=>{const nv=nivelTag(v);const pct=Math.min(100,(v/20)*100);
+                  return(
+                    <div key={m} style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{width:110,fontSize:10,fontWeight:600,color:G4,flexShrink:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m}</div>
+                      <div style={{flex:1,background:'#EDEBFB',borderRadius:99,height:8,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',background:nv.c,borderRadius:99}}/></div>
+                      <div style={{width:64,textAlign:'right',fontSize:10,fontWeight:800,color:nv.c,flexShrink:0}}>{Math.round(v*100)/100} · {nv.txt}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{fontSize:8,color:'#999',marginTop:8,fontStyle:'italic'}}>Si un ejercicio suma a un músculo que no corresponde, reordená el campo "Músculos" de ese ejercicio en 📚 Ejercicios (el orden define principal/secundario/terciario).</div>
+            </div>
+          );
+        })()}
         {dia.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
           <div style={s.card}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>Agregar bloque manual</div>

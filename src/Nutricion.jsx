@@ -272,14 +272,19 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       const comidasHtml = COMIDAS.map(com => {
         const items = diaData[com.id] || [];
         if (items.length === 0) return `<tr><td style="padding:5px 10px;color:#aaa;font-style:italic;font-size:10px;" colspan="5">${com.emoji} ${com.label} — sin alimentos</td></tr>`;
-        const itemsHtml = items.map((item, idx) => {
-          const al = getAlimentoById(item.alimentoId, customAlimentos);
-          if (!al) return '';
+        // Resolver TODOS los items primero (con placeholder si falta) para que el rowspan nunca se desalinee
+        const resueltos = items.map(item => ({ item, al: getAlimentoById(item.alimentoId, customAlimentos) }));
+        const itemsHtml = resueltos.map(({item, al}, idx) => {
+          const comidaCel = idx===0?`<td rowspan="${resueltos.length}" style="padding:5px 8px;font-size:10px;font-weight:700;background:#f0f4f8;vertical-align:middle;border-right:1px solid #e0e0e0;">${com.emoji} ${com.label}<br/><span style="font-size:8px;color:#888;">${com.hora}</span></td>`:'';
+          if (!al) {
+            return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">${comidaCel}<td colspan="4" style="padding:4px 8px;font-size:10px;color:#CC0000;font-style:italic;">⚠ Alimento no encontrado (fue eliminado de la base) — revisar este plan</td></tr>`;
+          }
           const m = calcularMacros(al, item.gramos);
+          const unidadTxt = al.tiene_unidad && al.gramos_por_unidad ? ` <span style="color:#888;">(≈${(item.gramos/al.gramos_por_unidad).toFixed(1)} ${al.nombre_unidad})</span>` : '';
           return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">
-            ${idx===0?`<td rowspan="${items.length}" style="padding:5px 8px;font-size:10px;font-weight:700;background:#f0f4f8;vertical-align:middle;border-right:1px solid #e0e0e0;">${com.emoji} ${com.label}<br/><span style="font-size:8px;color:#888;">${com.hora}</span></td>`:''}
+            ${comidaCel}
             <td style="padding:4px 8px;font-size:11px;">${al.nombre}</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;">${item.gramos}g</td>
+            <td style="padding:4px 8px;font-size:10px;text-align:center;white-space:nowrap;">${item.gramos}g${unidadTxt}</td>
             <td style="padding:4px 8px;font-size:10px;text-align:center;">${m.proteinas}g P / ${m.carbos}g C / ${m.grasas}g G</td>
             <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;">${m.calorias} kcal</td>
           </tr>`;
@@ -341,7 +346,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
 
   // ─── NUEVO ALIMENTO FORM ──────────────────────────────────────────────────
   const NuevoAlimentoFormComp = ({onClose, onSave}) => {
-    const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg' });
+    const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg', tiene_unidad:false, nombre_unidad:'', gramos_por_unidad:'' });
     const set = (k,v) => setF(f=>({...f,[k]:v}));
     const calAuto = Math.round(form.proteinas*4 + form.carbos*4 + form.grasas*9);
     return (
@@ -389,10 +394,25 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
                 <div><span style={ns.lbl}>Unidad</span><input value={form.micro2_unidad} onChange={e=>set('micro2_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
               </div>
             </div>
+            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
+              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:10,fontWeight:700,color:G4,cursor:'pointer'}}>
+                <input type="checkbox" checked={form.tiene_unidad} onChange={e=>set('tiene_unidad',e.target.checked)}/>
+                Se mide por unidad/porción (ej: fetas, rebanadas, unidades)
+              </label>
+              {form.tiene_unidad&&(
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:6,marginTop:7}}>
+                  <div><span style={ns.lbl}>Nombre de la unidad</span><input value={form.nombre_unidad} onChange={e=>set('nombre_unidad',e.target.value)} placeholder="Ej: feta, rebanada, unidad" style={ns.inp}/></div>
+                  <div><span style={ns.lbl}>Gramos por unidad</span><input type="number" value={form.gramos_por_unidad} onChange={e=>set('gramos_por_unidad',e.target.value)} placeholder="Ej: 25" style={ns.inp}/></div>
+                </div>
+              )}
+            </div>
           </div>
           <button onClick={()=>{
             if(!form.nombre.trim())return;
-            onSave({...form,id:'ca_'+genNutId(),micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
+            onSave({...form,id:'ca_'+genNutId(),
+              tiene_unidad:!!form.tiene_unidad,
+              gramos_por_unidad:form.tiene_unidad?(parseFloat(form.gramos_por_unidad)||null):null,
+              micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
             onClose();
           }} disabled={!form.nombre.trim()} style={{...ns.btnR,width:'100%',padding:'9px',marginTop:10}}>Guardar alimento</button>
         </div>
@@ -721,7 +741,12 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
               {comidaData.length===0&&<div style={{textAlign:'center',padding:16,color:G3,fontSize:11,borderStyle:'dashed',border:`1px dashed ${G2}`,borderRadius:6}}>Sin alimentos. Tocá "+ Agregar" para comenzar.</div>}
               {comidaData.map((item,i)=>{
                 const al = getAlimentoById(item.alimentoId, customAlimentos);
-                if (!al) return null;
+                if (!al) return (
+                  <div key={item.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 8px',background:'#FEF2F2',borderRadius:5,marginBottom:3,border:`1px solid ${RJ}`}}>
+                    <div style={{fontSize:10,color:RJ,fontStyle:'italic'}}>⚠ Alimento no encontrado (fue eliminado de la base)</div>
+                    <button onClick={()=>eliminarAlimento(item.id)} style={{...ns.btnG,color:RJ,borderColor:RJ,padding:'3px 6px',fontSize:12}}>×</button>
+                  </div>
+                );
                 const m = calcularMacros(al, item.gramos);
                 const cat = CATEGORIAS_ALIMENTOS[al.categoria];
                 return(

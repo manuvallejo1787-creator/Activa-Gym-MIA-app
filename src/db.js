@@ -489,6 +489,7 @@ export function useAlimentosCustom() {
       setAlimentosCustom((data||[]).map(r=>({
         id:r.id,nombre:r.nombre,categoria:r.categoria,porcion_ref:r.porcion_ref,
         proteinas:r.proteinas,carbos:r.carbos,grasas:r.grasas,fibra:r.fibra,calorias:r.calorias,
+        tiene_unidad:r.tiene_unidad||false,nombre_unidad:r.nombre_unidad||'',gramos_por_unidad:r.gramos_por_unidad||null,
         micro1:{nombre:r.micro1_nombre||'',valor:r.micro1_valor||0,unidad:r.micro1_unidad||'mg'},
         micro2:{nombre:r.micro2_nombre||'',valor:r.micro2_valor||0,unidad:r.micro2_unidad||'mg'},
         custom:true,
@@ -508,6 +509,7 @@ export function useAlimentosCustom() {
     const row={
       id:al.id,nombre:al.nombre,categoria:al.categoria,porcion_ref:al.porcion_ref,
       proteinas:al.proteinas,carbos:al.carbos,grasas:al.grasas,fibra:al.fibra,calorias:al.calorias,
+      tiene_unidad:!!al.tiene_unidad,nombre_unidad:al.nombre_unidad||'',gramos_por_unidad:al.tiene_unidad?(al.gramos_por_unidad||null):null,
       micro1_nombre:al.micro1?.nombre||'',micro1_valor:al.micro1?.valor||0,micro1_unidad:al.micro1?.unidad||'mg',
       micro2_nombre:al.micro2?.nombre||'',micro2_valor:al.micro2?.valor||0,micro2_unidad:al.micro2?.unidad||'mg',
       updated_at:new Date().toISOString(),
