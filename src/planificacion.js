@@ -666,3 +666,49 @@ export const planTimeline = (periodizacion, fechaInicioISO) => {
     fechaFin,
   };
 };
+
+// ═══════════════════════════════════════════════════════════════════════
+// TESTS DE POTENCIA Y SALTOS — SOLO PARA DEPORTISTAS
+// Umbrales orientativos y generales, NO específicos por deporte/disciplina.
+// Fuentes: Haugen et al. 2020 (CMJ élite por deporte), literatura NSCA de
+// salto horizontal, y criterio de simetría LSI≥90% estándar en retorno
+// deportivo (ACL RTS testing). El RSI usa banda de referencia aproximada
+// de uso común en S&C; varía más según protocolo/equipo que el resto.
+// ═══════════════════════════════════════════════════════════════════════
+export const POTENCIA_NORMAS = {
+  cmj:   { masculino:{debil:30,promedio:40,bueno:50}, femenino:{debil:20,promedio:28,bueno:36} },
+  sj:    { masculino:{debil:25,promedio:34,bueno:43}, femenino:{debil:17,promedio:24,bueno:31} },
+  broad: { masculino:{debil:190,promedio:220,bueno:250}, femenino:{debil:140,promedio:170,bueno:200} },
+  rsi:   { general:{debil:1.5,promedio:2.0,bueno:2.5} },
+};
+const clasificarPotencia = (valor, u) => {
+  if (valor >= u.bueno)    return { label: 'Élite',    color: '#7C3AED' };
+  if (valor >= u.promedio) return { label: 'Bueno',    color: '#16A34A' };
+  if (valor >= u.debil)    return { label: 'Promedio', color: '#D97706' };
+  return { label: 'Bajo', color: '#CC0000' };
+};
+const sexoKey = (sexo) => sexo === 'femenino' ? 'femenino' : 'masculino';
+
+export const nivelCMJ = (alturaCm, sexo) => (!alturaCm ? null : clasificarPotencia(alturaCm, POTENCIA_NORMAS.cmj[sexoKey(sexo)]));
+export const nivelSJ = (alturaCm, sexo) => (!alturaCm ? null : clasificarPotencia(alturaCm, POTENCIA_NORMAS.sj[sexoKey(sexo)]));
+export const nivelBroadJump = (distCm, sexo) => (!distCm ? null : clasificarPotencia(distCm, POTENCIA_NORMAS.broad[sexoKey(sexo)]));
+
+// RSI = altura de salto (m) / tiempo de contacto (s)
+export const calcularRSI = (alturaCm, contactoSeg) => {
+  if (!alturaCm || !contactoSeg) return null;
+  return Math.round((alturaCm / 100 / contactoSeg) * 100) / 100;
+};
+export const nivelRSI = (rsi) => (rsi == null ? null : clasificarPotencia(rsi, POTENCIA_NORMAS.rsi.general));
+
+// LSI = Limb Symmetry Index — pierna menor / pierna mayor × 100
+export const calcularLSI = (domCm, noDomCm) => {
+  if (!domCm || !noDomCm) return null;
+  const menor = Math.min(domCm, noDomCm), mayor = Math.max(domCm, noDomCm);
+  return Math.round((menor / mayor) * 1000) / 10;
+};
+export const nivelLSI = (lsi) => {
+  if (lsi == null) return null;
+  if (lsi >= 90) return { label: 'Simétrico', color: '#16A34A' };
+  if (lsi >= 85) return { label: 'Asimetría leve', color: '#D97706' };
+  return { label: 'Asimetría significativa', color: '#CC0000' };
+};

@@ -534,6 +534,7 @@ Cliente: ${datos.nombre || ""} ${datos.apellido || ""}
 ▸ BALANCE DINÁMICO (Y-Balance): ${datos.yBalance || "no registrado"}
 
 ▸ CAPACIDADES FÍSICAS (PVFI): ${datos.capacidades || "sin tests"} · Semáforo PVFI: ${datos.pvfiNivel || "no asignado"}
+▸ POTENCIA Y SALTOS (solo si es deportista): ${datos.potencia || "no registrada"}
 ▸ TESTS DE FUERZA (1RM y ratios): ${datos.tests || "sin tests"}
 
 ▸ SALUD / SCREENING: ${datos.screening || "no registrado"}

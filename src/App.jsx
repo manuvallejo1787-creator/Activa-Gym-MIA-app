@@ -4,7 +4,7 @@ import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, get
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -1494,6 +1494,7 @@ export default function App(){
     {title:'Movilidad y control motor', icon:'🦵',fase:2},
     {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
     {title:'Banderas clínicas',         icon:'🚩',fase:2},
+    {title:'Potencia y saltos (deportistas)',icon:'🏃',fase:2},
     {title:'Síntesis y plan',           icon:'📋',fase:2},
   ];
 
@@ -1641,6 +1642,19 @@ export default function App(){
     const banderas=[sc.banderaRoja==='si'&&'🔴 Bandera roja (patología seria → derivación médica)',sc.banderaNaranja==='si'&&'🟠 Bandera naranja (factor psicológico)',sc.banderaAmarilla==='si'&&'🟡 Bandera amarilla (kinesiofobia/catastrofismo)'].filter(Boolean).join('; ')||'sin banderas';
     const restrEst=[sc.restriccionImpacto==='si'&&'sin impacto/pliometría',sc.restriccionOverhead==='si'&&'sin cargas overhead',sc.restriccionCargaAxial==='si'&&'sin carga axial pesada'].filter(Boolean).join('; ')||'ninguna';
 
+    // ── Potencia y saltos (solo deportistas) ──
+    const potBloqueado = sc.banderaRoja==='si' || sc.restriccionImpacto==='si';
+    const potRows=[];
+    if(!potBloqueado){
+      const _cmj=nivelCMJ(parseFloat(sc.pot_cmj),sc.genero);if(_cmj)potRows.push(`CMJ ${sc.pot_cmj}cm (${_cmj.label})`);
+      const _sj=nivelSJ(parseFloat(sc.pot_sj),sc.genero);if(_sj)potRows.push(`SJ ${sc.pot_sj}cm (${_sj.label})`);
+      const _broad=nivelBroadJump(parseFloat(sc.pot_broad),sc.genero);if(_broad)potRows.push(`Salto horizontal ${sc.pot_broad}cm (${_broad.label})`);
+      const _rsiVal=calcularRSI(parseFloat(sc.pot_drop_altura),parseFloat(sc.pot_drop_contacto));if(_rsiVal!=null)potRows.push(`RSI ${_rsiVal} (${nivelRSI(_rsiVal)?.label||''})`);
+      const _lsiVal=calcularLSI(parseFloat(sc.pot_hop_dom),parseFloat(sc.pot_hop_nodom));if(_lsiVal!=null)potRows.push(`Hop test LSI ${_lsiVal}% (${nivelLSI(_lsiVal)?.label||''})`);
+      if(sc.pot_mb_dist)potRows.push(`Lanzamiento balón medicinal: ${sc.pot_mb_peso||'?'}kg → ${sc.pot_mb_dist}cm (sin tabla normativa, solo seguimiento)`);
+    }
+    const potenciaTxt = potBloqueado ? 'Sección bloqueada por bandera roja o restricción de impacto (no evaluado)' : (potRows.length?potRows.join(' | '):'NO REGISTRADA');
+
     const datosIA={
       nombre:cliente.nombre,apellido:cliente.apellido,
       objetivo:cliente.objetivo||'no declarado',
@@ -1659,6 +1673,7 @@ export default function App(){
       pvfiNivel,
       banderas,
       restriccionesEstructuradas:restrEst,
+      potencia:potenciaTxt,
     };
 
     return(
@@ -2119,8 +2134,97 @@ export default function App(){
             </div>
           </div>
         );
+        // ── PASO 10: POTENCIA Y SALTOS (SOLO DEPORTISTAS) ─────────────────
+        case 10: {
+          const bloqueado = sc.banderaRoja==='si' || sc.restriccionImpacto==='si';
+          if (bloqueado) return (
+            <div>
+              <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'18px 16px',textAlign:'center'}}>
+                <div style={{fontSize:28,marginBottom:6}}>🚫</div>
+                <div style={{fontSize:13,fontWeight:800,color:R,marginBottom:6}}>Sección bloqueada</div>
+                <div style={{fontSize:11,color:G4,lineHeight:1.5}}>
+                  {sc.banderaRoja==='si' && <>Hay una <strong>bandera roja</strong> activa (patología seria pendiente de derivación médica).<br/></>}
+                  {sc.restriccionImpacto==='si' && <>Hay una <strong>restricción de impacto</strong> activa (sin saltos/pliometría).<br/></>}
+                  Los tests de salto y potencia implican impacto y aterrizaje — no corresponde aplicarlos mientras estas condiciones estén vigentes. Resolvé la causa clínica primero.
+                </div>
+              </div>
+            </div>
+          );
+          const sexo = sc.genero;
+          const cmj = nivelCMJ(parseFloat(sc.pot_cmj), sexo);
+          const sj = nivelSJ(parseFloat(sc.pot_sj), sexo);
+          const broad = nivelBroadJump(parseFloat(sc.pot_broad), sexo);
+          const rsiVal = calcularRSI(parseFloat(sc.pot_drop_altura), parseFloat(sc.pot_drop_contacto));
+          const rsi = nivelRSI(rsiVal);
+          const lsiVal = calcularLSI(parseFloat(sc.pot_hop_dom), parseFloat(sc.pot_hop_nodom));
+          const lsi = nivelLSI(lsiVal);
+          const Campo = ({lbl, children, niv}) => (
+            <div style={{background:G1,borderRadius:6,padding:'8px 10px',marginBottom:8}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <span style={{fontSize:11,fontWeight:700,color:G4}}>{lbl}</span>
+                {niv && <span style={s.tag(niv.color)}>{niv.label}</span>}
+              </div>
+              {children}
+            </div>
+          );
+          return(
+            <div>
+              <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12,color:'#5B21B6'}}>
+                🏃 <strong>Solo para deportistas activos.</strong> No aplicar a población clínica, sedentaria o que entrena por salud/estética. Los niveles son <strong>orientativos y generales</strong>, no específicos por disciplina — usalos para seguir la progresión del deportista, no como corte diagnóstico.
+              </div>
+
+              <Campo lbl="CMJ — Salto con contramovimiento (manos en cadera)" niv={cmj}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_cmj||''} onChange={e=>setSCK('pot_cmj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                </div>
+              </Campo>
+
+              <Campo lbl="SJ — Squat jump (sin contramovimiento, manos en cadera)" niv={sj}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_sj||''} onChange={e=>setSCK('pot_sj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                  {sc.pot_cmj && sc.pot_sj && parseFloat(sc.pot_sj)>0 && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>Ratio CMJ/SJ: {(parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)).toFixed(2)} {parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)<1.05?'(bajo uso del ciclo elástico)':''}</span>}
+                </div>
+              </Campo>
+
+              <Campo lbl="Salto horizontal (broad jump)" niv={broad}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_broad||''} onChange={e=>setSCK('pot_broad',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                </div>
+              </Campo>
+
+              <Campo lbl="Drop Jump — Reactive Strength Index (RSI)" niv={rsi}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_drop_altura||''} onChange={e=>setSCK('pot_drop_altura',e.target.value)} placeholder="Altura salto (cm)" style={{...s.inp,width:120}}/>
+                  <input type="number" value={sc.pot_drop_contacto||''} onChange={e=>setSCK('pot_drop_contacto',e.target.value)} placeholder="Contacto (seg)" step="0.01" style={{...s.inp,width:110}}/>
+                  {rsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>RSI = {rsiVal}</span>}
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Cajón 30cm de referencia · esta banda es aproximada, más dependiente del protocolo/equipo que el resto</div>
+              </Campo>
+
+              <Campo lbl="Salto unipodal (hop test) — simetría entre piernas" niv={lsi}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_hop_dom||''} onChange={e=>setSCK('pot_hop_dom',e.target.value)} placeholder="Pierna dominante (cm)" style={{...s.inp,width:140}}/>
+                  <input type="number" value={sc.pot_hop_nodom||''} onChange={e=>setSCK('pot_hop_nodom',e.target.value)} placeholder="Pierna no dom. (cm)" style={{...s.inp,width:140}}/>
+                  {lsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>LSI = {lsiVal}%</span>}
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Estándar de retorno deportivo: LSI ≥90% aceptable. Menor a 85% = mayor riesgo, especialmente post-lesión.</div>
+              </Campo>
+
+              <Campo lbl="Lanzamiento de balón medicinal (potencia tren superior)">
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_mb_peso||''} onChange={e=>setSCK('pot_mb_peso',e.target.value)} placeholder="Peso balón (kg)" style={{...s.inp,width:120}}/>
+                  <input type="number" value={sc.pot_mb_dist||''} onChange={e=>setSCK('pot_mb_dist',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:120}}/>
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Sin tabla normativa consolidada (varía mucho por peso de balón y técnica) — se registra solo para seguimiento de progresión, sin nivel asignado.</div>
+              </Campo>
+            </div>
+          );
+        }
         // ── PASO 10: SÍNTESIS Y PLAN ─────────────────────────────────────
-        case 10: return(
+        case 11: return(
           <div>
             <div><span style={s.lbl}>Hallazgos principales</span><textarea value={sc.hallazgosPrincipales||''} onChange={e=>setSCK('hallazgosPrincipales',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
             <div style={{marginTop:10}}><span style={s.lbl}>Prioridades de trabajo</span><textarea value={sc.prioridades||''} onChange={e=>setSCK('prioridades',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
