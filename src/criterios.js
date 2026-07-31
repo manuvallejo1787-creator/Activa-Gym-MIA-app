@@ -201,6 +201,84 @@ export const getSemaforoPorFase=(fase)=>{
   return FASES_METODO[fase]?.semaforo||'pendiente';
 };
 
+// ════════════════════════════════════════════════════════════════════════
+// FASES CLÍNICAS DE REHAB (desacopladas del Método Activa Integra)
+// ────────────────────────────────────────────────────────────────────────
+// FASES_METODO (RESTAURA/ACTIVA/POTENCIA/RINDE) sigue existiendo igual
+// porque de ahí depende el semáforo de negocio y syncConGym. No se tocó.
+// Este es un modelo PARALELO que describe el avance clínico de UNA lesión
+// puntual: 3 fases genéricas (protección / carga progresiva / retorno
+// funcional) cuyos criterios se generan según región + tejido sospechado +
+// objetivo del paciente — no según el nivel de negocio del cliente.
+// Al final hay una función de mapeo explícita fase clínica → fase de
+// negocio, para dejar la traducción documentada en un solo lugar.
+// ════════════════════════════════════════════════════════════════════════
+
+export const FASES_REHAB=[
+  {
+    k:'proteccion', label:'Protección / Fase Aguda', badge:'R0', color:'#DC2626', emoji:'🩹',
+    objetivo_clinico:'Controlar dolor e inflamación, proteger el tejido lesionado, evitar el gesto agresor.',
+    criterios_avance_generico:[
+      'EVA ≤ 3/10 en reposo',
+      'Sin signos inflamatorios activos (calor, tumefacción, dolor nocturno)',
+      'Tolerancia a AVDs básicas relacionadas a la zona',
+    ],
+  },
+  {
+    k:'carga_progresiva', label:'Carga Progresiva', badge:'R1', color:'#D97706', emoji:'📈',
+    objetivo_clinico:'Recuperar ROM funcional, reintroducir carga controlada sobre el tejido, restaurar control motor local.',
+    criterios_avance_generico:[
+      'EVA ≤ 2/10 con carga funcional',
+      'ROM funcional recuperado en los movimientos clave de la evaluación',
+      'Test/es específico/s de la región con resultado negativo o claramente mejorado',
+      'Fuerza ≥ 4/5 MRC en grupos musculares involucrados',
+    ],
+  },
+  {
+    k:'retorno_funcion', label:'Retorno Funcional', badge:'R2', color:'#16A34A', emoji:'🎯',
+    objetivo_clinico:'Recuperar la capacidad funcional específica del objetivo del paciente (deporte, trabajo, AVD) sin restricciones ni compensaciones.',
+    criterios_avance_generico:[
+      'EVA 0/10 en la actividad objetivo',
+      'Fuerza simétrica: diferencia < 10-15% vs. contralateral',
+      'Sin dolor ni compensación visible en el gesto específico del objetivo',
+      'Alta clínica habilitada — puede continuar en POTENCIA/RINDE del método sin restricción',
+    ],
+  },
+];
+
+// Genera el protocolo clínico (3 fases) para un caso puntual.
+export const generarProtocoloRehab=(region='', tejido='', objetivo='', evaInicial=null, romPct=null)=>{
+  const obj=(objetivo||'').toLowerCase();
+  const esDeportivo=obj.includes('deport')||obj.includes('jugar')||obj.includes('correr')||obj.includes('entrenar')||obj.includes('competir');
+  const esLaboral=obj.includes('trabajo')||obj.includes('laboral')||obj.includes('carga');
+  const esAVD=obj.includes('caminar')||obj.includes('subir')||obj.includes('vida diaria')||obj.includes('hijo')||obj.includes('nieto');
+
+  return FASES_REHAB.map(fase=>{
+    const extras=[];
+    if(fase.k==='proteccion'){
+      if(evaInicial&&parseFloat(evaInicial)>5)extras.push(`Reducción ≥ 50% del dolor inicial (EVA inicial ${evaInicial}/10 → meta ≤ ${Math.ceil(parseFloat(evaInicial)/2)}/10)`);
+      if(tejido)extras.push(`Sin reproducción de síntomas en gesto compatible con: ${tejido}`);
+    }
+    if(fase.k==='carga_progresiva'){
+      if(romPct!=null)extras.push(`ROM actual ${romPct}% del normal para ${region||'la región'} → meta > 80-85%`);
+      if(esDeportivo)extras.push('Tolerancia a carga específica del deporte sin dolor residual post-actividad');
+      if(esLaboral)extras.push('Tolerancia a postura/carga del puesto de trabajo sin exacerbación');
+    }
+    if(fase.k==='retorno_funcion'){
+      if(objetivo)extras.push(`Capacidad funcional completa para el objetivo declarado: "${objetivo.slice(0,60)}"`);
+      if(esDeportivo)extras.push('Retorno progresivo a entrenamiento grupal / competencia sin restricciones');
+      if(esAVD)extras.push('AVDs de alta demanda sin limitación ni compensación');
+    }
+    return{...fase, criterios:[...fase.criterios_avance_generico,...extras]};
+  });
+};
+
+// Traducción explícita: fase clínica de rehab → fase de negocio del Método.
+export const mapearFaseRehabANegocio=(faseRehabKey)=>{
+  const MAP={proteccion:'restaura', carga_progresiva:'activa', retorno_funcion:'potencia'};
+  return MAP[faseRehabKey]||'restaura';
+};
+
 // ─── ETIQUETA LEGIBLE DE FASE ─────────────────────────────────────────────
 export const getFaseLabel=(fase)=>{
   const f=FASES_METODO[fase];

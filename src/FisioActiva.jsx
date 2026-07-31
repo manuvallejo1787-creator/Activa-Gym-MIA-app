@@ -1,7 +1,8 @@
 // FisioActiva.jsx — Sistema Clínico Premium · Método Activa Integra
 // Integrado con ACTIVA Fitness Club App
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
+import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase, FASES_REHAB, generarProtocoloRehab, mapearFaseRehabANegocio } from "./criterios.js";
+import PoseROM from "./PoseROM.jsx";
 import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
@@ -198,6 +199,15 @@ const TESTS_ESP={
 };
 
 
+// ─── TEJIDOS SOSPECHADOS POR REGIÓN ────────────────────────────────────────
+// Derivado de TESTS_ESP[region].indica — no se duplica información clínica.
+// Cada test ya trae "indica" (la hipótesis/tejido que evalúa), así que la
+// lista de tejidos sospechables por región surge de los valores únicos.
+const getTejidosPorRegion=(region)=>{
+  const tests=TESTS_ESP[region]||[];
+  return[...new Set(tests.map(t=>t.indica))];
+};
+
 // ─── RED FLAGS ────────────────────────────────────────────────────────────
 const RED_FLAGS=[
   {cat:'🔴 Oncológicas',items:['Historia de cáncer previo','Pérdida de peso inexplicable > 5 kg/mes','Fatiga extrema sin causa aparente','Dolor nocturno intenso que no cede en reposo','Masa palpable de crecimiento rápido']},
@@ -220,7 +230,8 @@ const CRITERIOS_ALTA=[
 
 // ─── UTILIDADES ───────────────────────────────────────────────────────────
 const calcEVA=(v)=>{const n=parseFloat(v);if(isNaN(n))return null;if(n<=2)return{color:GN,label:'Leve'};if(n<=5)return{color:AM,label:'Moderado'};return{color:RJ,label:'Intenso'};};
-const calcROMpct=(rom,region)=>{const norms=ROM_NORMS[region];if(!norms||!rom)return null;let t=0,c=0;norms.forEach(n=>{const v=parseFloat(rom[n.mov]);if(!isNaN(v)&&n.normal>0){t+=Math.min(v/n.normal*100,100);c++;}});return c>0?Math.round(t/c):null;};
+const romGrados=(rom,mov)=>{const r=rom?.[mov];if(r==null)return null;return typeof r==='object'?r.grados:r;}; // compat con evaluaciones viejas guardadas como número suelto
+const calcROMpct=(rom,region)=>{const norms=ROM_NORMS[region];if(!norms||!rom)return null;let t=0,c=0;norms.forEach(n=>{const v=parseFloat(romGrados(rom,n.mov));if(!isNaN(v)&&n.normal>0){t+=Math.min(v/n.normal*100,100);c++;}});return c>0?Math.round(t/c):null;};
 const calcYBalanceDiff=(yb)=>{if(!yb)return null;const vals=['ant','pm','pl'].map(d=>[parseFloat(yb['d_'+d]||''),parseFloat(yb['i_'+d]||'')]);const diffs=vals.filter(([a,b])=>!isNaN(a)&&!isNaN(b)).map(([a,b])=>Math.abs(a-b));return diffs.length?Math.max(...diffs).toFixed(1):null;};
 const calcFMSTotal=(fms)=>Object.values(fms||{}).reduce((s,v)=>s+(parseInt(v)||0),0);
 const calcDN4=(dn4)=>Object.values(dn4||{}).filter(Boolean).length;
@@ -239,26 +250,36 @@ const REGIONES_LIST=[
 ];
 
 const EVAL_STEPS=[
-  {title:'Datos y Región',icon:'📋'},{title:'Anamnesis',icon:'🗣️'},
+  {title:'Datos, Región y Tejido',icon:'📋'},{title:'Anamnesis',icon:'🗣️'},
   {title:'Red Flags',icon:'🚩'},{title:'Escalas de Dolor',icon:'🩹'},
   {title:'Escalas Funcionales',icon:'📊'},{title:'Evaluación Postural',icon:'🔍'},
-  {title:'ROM — Goniometría',icon:'📐'},{title:'Fuerza Muscular',icon:'💪'},
-  {title:'Control Motor',icon:'⚡'},{title:'FMS',icon:'🏃'},
-  {title:'Screening Multi-Región',icon:'🎯'},{title:'Antropometría',icon:'📸'},
+  {title:'ROM — Goniometría',icon:'📐'},{title:'Tests Específicos',icon:'🧪'},
+  {title:'Fuerza Muscular',icon:'💪'},{title:'Control Motor',icon:'⚡'},
+  {title:'FMS',icon:'🏃',avanzado:true},
+  {title:'Screening Multi-Región',icon:'🎯',avanzado:true},
+  {title:'Antropometría',icon:'📸',avanzado:true},
   {title:'Síntesis y Plan',icon:'✅'},
 ];
+// Pasos "avanzado:true" quedan ocultos salvo evaluación de alta o que el
+// evaluador tilde "incluir tests avanzados" — son los que Manu identificó
+// como sobrecarga irrelevante para la mayoría de los casos (FMS, Y-Balance,
+// screening multi-región, antropometría completa no aplican a un dolor de
+// hombro puntual; sí aplican para dar el alta a POTENCIA o en deportistas).
 
 const emptyEval=()=>({
   id:'eval_'+Date.now(),fecha:new Date().toISOString().split('T')[0],tipo:'inicial',region:'lumbar',evaluador:'',
+  tejidoSospechado:'',avanzadoManual:false,
   motivo:'',evolucion:'',antecedentes:'',medicacion:'',ocupacion:'',deporte:'',objetivo:'',historialLesional:'',
   redFlags:{},eva_reposo:'',eva_movimiento:'',
   dn4:{q1:false,q2:false,q3:false,q4:false,q5:false,q6:false,q7:false},
   odi:Array(10).fill(0),dash_score:'',koos_sintomas:'',koos_dolor:'',koos_avd:'',koos_sport:'',koos_qol:'',lefs_score:'',
   postural:{ant:{cabeza:'',hombros:'',cintura:'',rodillas:'',pies:''},lat:{cabeza:'',cervical:'',dorsal:'',lumbar:'',pelvis:'',rodillas:''},post:{cabeza:'',hombros:'',escapulas:'',columna:'',pelvis:'',pies:''}},
+  // rom: { [movimiento]: { grados:number|'', funcional:bool, eva:0-10|'' } }
+  // (antes era { [movimiento]: '120' } — un número suelto sin contexto)
   rom:{},fuerza:{},dinamometria:{d:'',i:''},
   sls:{d:'',i:'',obs:''},ybalance:{d_ant:'',d_pm:'',d_pl:'',i_ant:'',i_pm:'',i_pl:''},
   birddog:'',deadbug:'',fms:{},testsEsp:{},
-  diagnosticoPT:'',hipotesis:'',objetivos_tratamiento:'',plan:'',fase:'restaura',prox_eval:'',notas:'',
+  diagnosticoPT:'',hipotesis:'',objetivos_tratamiento:'',plan:'',fase:'restaura',faseRehab:'proteccion',prox_eval:'',notas:'',
   criterios_personalizados:[],
   regiones_screened:[],
   antrop:{peso:'',talla:'',imc:'',perCintura:'',perCadera:'',perBrazo:'',pliegues:'',obs:''},
@@ -972,7 +993,8 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
     if(!currentEval)return null;
     const ev=currentEval;
     const set=(k,v)=>setCurrentEval(p=>({...p,[k]:v}));
-    const setROM=(mov,val)=>setCurrentEval(p=>({...p,rom:{...p.rom,[mov]:val}}));
+    const setROM=(mov,val)=>setCurrentEval(p=>({...p,rom:{...p.rom,[mov]:{...(typeof p.rom[mov]==='object'?p.rom[mov]:{}),grados:val}}}));
+    const setROMField=(mov,field,val)=>setCurrentEval(p=>({...p,rom:{...p.rom,[mov]:{...(typeof p.rom[mov]==='object'?p.rom[mov]:{grados:p.rom[mov]||''}),[field]:val}}}));
     const setFuerza=(k,v)=>setCurrentEval(p=>({...p,fuerza:{...p.fuerza,[k]:v}}));
     const setFMS=(id,v)=>setCurrentEval(p=>({...p,fms:{...p.fms,[id]:v}}));
     const setTestEsp=(nombre,res)=>setCurrentEval(p=>({...p,testsEsp:{...p.testsEsp,[nombre]:res}}));
@@ -1002,8 +1024,25 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                   ))}
                 </div>
               </div>
+              {getTejidosPorRegion(ev.region).length>0&&(
+                <div style={{gridColumn:'1/-1'}}>
+                  <span style={fs.lbl}>Tejido / hipótesis sospechada — acota anamnesis, ROM y tests al paso siguiente</span>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:4}}>
+                    <div onClick={()=>set('tejidoSospechado','')} style={{cursor:'pointer',padding:'6px 10px',borderRadius:99,border:`1px solid ${!ev.tejidoSospechado?NV:GL}`,background:!ev.tejidoSospechado?`${NV}15`:WH,fontSize:10,fontWeight:!ev.tejidoSospechado?700:400,color:!ev.tejidoSospechado?NV:GD}}>Sin definir / screening amplio</div>
+                    {getTejidosPorRegion(ev.region).map(tj=>(
+                      <div key={tj} onClick={()=>set('tejidoSospechado',tj)} style={{cursor:'pointer',padding:'6px 10px',borderRadius:99,border:`1px solid ${ev.tejidoSospechado===tj?TL:GL}`,background:ev.tejidoSospechado===tj?`${TL}15`:WH,fontSize:10,fontWeight:ev.tejidoSospechado===tj?700:400,color:ev.tejidoSospechado===tj?TL:GD}}>{tj}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div><span style={fs.lbl}>Fecha</span><input type="date" value={ev.fecha} onChange={e=>set('fecha',e.target.value)} style={fs.inp}/></div>
               <div><span style={fs.lbl}>Evaluador/a</span><input value={ev.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={fs.inp} placeholder="Nombre del profesional"/></div>
+              <div style={{gridColumn:'1/-1'}}>
+                <label style={{display:'flex',gap:8,alignItems:'center',cursor:'pointer',fontSize:11,color:GD}}>
+                  <input type="checkbox" checked={!!ev.avanzadoManual} onChange={e=>set('avanzadoManual',e.target.checked)}/>
+                  Incluir pasos avanzados (FMS, Y-Balance, screening multi-región, antropometría) — se muestran igual si el tipo es "Evaluación de Alta"
+                </label>
+              </div>
             </div>
             <div style={{...fs.card,background:'#EFF6FF',border:'1px solid #93C5FD',padding:'10px 12px'}}>
               <span style={{...fs.lbl,color:'#1D4ED8'}}>🎯 OBJETIVO DEL PACIENTE — Condiciona los criterios de evolución</span>
@@ -1035,6 +1074,15 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         );
         case 1: return(
           <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {ev.tejidoSospechado&&(()=>{
+              const testsRelacionados=(TESTS_ESP[ev.region]||[]).filter(t=>t.indica===ev.tejidoSospechado);
+              return(
+                <div style={{...fs.card,background:'#F0FDF4',border:'1px solid #86EFAC',padding:'10px 12px'}}>
+                  <div style={{...fs.lbl,color:'#15803D'}}>🎯 Anamnesis dirigida — hipótesis: {ev.tejidoSospechado}</div>
+                  <div style={{fontSize:11,color:GD,marginTop:4,lineHeight:1.6}}>Indagar mecanismo de lesión y patrón de dolor compatible con esta hipótesis. Los tests que la confirman o descartan ({testsRelacionados.map(t=>t.n).join(', ')}) se harán en el paso "Tests Específicos" — anotá acá si el relato del paciente ya es compatible con alguno de esos patrones de dolor.</div>
+                </div>
+              );
+            })()}
             <div><span style={fs.lbl}>Motivo de consulta</span><textarea value={ev.motivo||''} onChange={e=>set('motivo',e.target.value)} rows={2} style={{...fs.inp,resize:'vertical'}}/></div>
             <div><span style={fs.lbl}>Evolución y cronología</span><textarea value={ev.evolucion||''} onChange={e=>set('evolucion',e.target.value)} rows={3} style={{...fs.inp,resize:'vertical'}}/></div>
             <div><span style={fs.lbl}>Antecedentes médicos / quirúrgicos</span><textarea value={ev.antecedentes||''} onChange={e=>set('antecedentes',e.target.value)} rows={2} style={{...fs.inp,resize:'vertical'}}/></div>
@@ -1161,18 +1209,32 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         );
         case 6: return(
           <div>
-            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>📐 Goniómetro. Registrar en grados. El sistema calcula el % respecto al valor normal.</div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:6}}>
-              <div style={{fontSize:10,color:GM,fontWeight:700,textTransform:'uppercase'}}>Movimiento</div>
-              <div style={{fontSize:10,color:GM,fontWeight:700,textTransform:'uppercase',textAlign:'center'}}>Normal (°)</div>
-              <div style={{fontSize:10,color:GM,fontWeight:700,textTransform:'uppercase',textAlign:'center'}}>Medido (°)</div>
-            </div>
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>📐 Por movimiento: grados (goniómetro o foto), si el rango es funcional o disfuncional, y EVA si el paciente refiere dolor en ese movimiento.</div>
             {romKeys.map(n=>{
-              const val=ev.rom[n.mov]||'';const pct=val&&n.normal>0?Math.round(parseFloat(val)/n.normal*100):null;const col=pct?(pct>90?GN:pct>70?AM:RJ):GL;
-              return(<div key={n.mov} style={{display:'grid',gridTemplateColumns:'1fr 70px 1fr',gap:6,alignItems:'center',background:WH,border:`1px solid ${GL}`,borderLeft:`3px solid ${col}`,borderRadius:6,padding:'6px 10px',marginBottom:4}}>
-                <div><div style={{fontSize:11,fontWeight:600}}>{n.mov}</div>{pct&&<div style={{...fs.tag(col),fontSize:9,marginTop:1}}>{pct}%</div>}</div>
-                <div style={{textAlign:'center',fontSize:12,color:GM,fontWeight:600}}>{n.normal}°</div>
-                <input type="number" min="0" value={val} onChange={e=>setROM(n.mov,e.target.value)} placeholder="°" style={{...fs.inp,textAlign:'center'}}/>
+              const romObj=(typeof ev.rom[n.mov]==='object'&&ev.rom[n.mov])||{};
+              const val=romObj.grados??(typeof ev.rom[n.mov]!=='object'?ev.rom[n.mov]:'')??'';
+              const pct=val&&n.normal>0?Math.round(parseFloat(val)/n.normal*100):null;
+              const funcional=romObj.funcional; // undefined = sin marcar, true/false
+              const evaMov=romObj.eva??'';
+              const col=funcional===false?RJ:(pct?(pct>90?GN:pct>70?AM:RJ):GL);
+              return(<div key={n.mov} style={{background:WH,border:`1px solid ${GL}`,borderLeft:`3px solid ${col}`,borderRadius:6,padding:'8px 10px',marginBottom:6}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 60px 80px',gap:6,alignItems:'center'}}>
+                  <div><div style={{fontSize:11,fontWeight:600}}>{n.mov}</div><div style={{fontSize:9,color:GM}}>Normal {n.normal}°{pct?` · ${pct}%`:''}</div></div>
+                  <input type="number" min="0" value={val} onChange={e=>setROM(n.mov,e.target.value)} placeholder="°" style={{...fs.inp,textAlign:'center'}}/>
+                  <PoseROM movimiento={n.mov} region={ev.region} onMedido={(grados)=>setROM(n.mov,String(grados))}/>
+                </div>
+                <div style={{display:'flex',gap:8,alignItems:'center',marginTop:6,flexWrap:'wrap'}}>
+                  <div style={{display:'flex',gap:4}}>
+                    {[['Funcional',true,GN],['Disfuncional',false,RJ]].map(([lbl,v,c])=>(
+                      <button key={lbl} onClick={()=>setROMField(n.mov,'funcional',v)} style={{fontSize:9,fontWeight:700,padding:'4px 8px',borderRadius:99,border:`1px solid ${funcional===v?c:GL}`,background:funcional===v?c:WH,color:funcional===v?WH:GD,cursor:'pointer'}}>{lbl}</button>
+                    ))}
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:4}}>
+                    <span style={{fontSize:9,color:GM,fontWeight:700}}>EVA en el movimiento</span>
+                    <input type="number" min="0" max="10" value={evaMov} onChange={e=>setROMField(n.mov,'eva',e.target.value)} placeholder="0-10" style={{...fs.inp,width:50,padding:'3px 6px',fontSize:11}}/>
+                    {evaMov!==''&&<span style={{...fs.tag(calcEVA(evaMov)?.color||GM),fontSize:8}}>{calcEVA(evaMov)?.label}</span>}
+                  </div>
+                </div>
               </div>);
             })}
             {romPct&&<div style={{marginTop:8,padding:'10px',borderRadius:7,background:romPct>90?'#DCFCE7':romPct>70?'#FEF9C3':'#FEE2E2',border:`1px solid ${romPct>90?'#86EFAC':romPct>70?'#FDE047':'#FCA5A5'}`,display:'flex',gap:12,alignItems:'center'}}>
@@ -1182,6 +1244,72 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
           </div>
         );
         case 7: return(
+          <div>
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
+              🧪 <strong>Tests específicos — {REGIONES_LIST.find(r=>r.k===ev.region)?.label||ev.region}</strong>{ev.tejidoSospechado?<> · filtrados por tejido sospechado: <strong>{ev.tejidoSospechado}</strong></>:<> · elegí un tejido sospechado en el paso 1 para acotar la lista, o dejalo vacío para ver todos.</>}
+            </div>
+            {(TESTS_ESP[ev.region]||[]).filter(t=>!ev.tejidoSospechado||t.indica===ev.tejidoSospechado).map(t=>{
+              const resD=ev.testsEsp[t.n+'_Derecho']||'';
+              const resI=ev.testsEsp[t.n+'_Izquierdo']||'';
+              const anyPos=resD==='positivo'||resI==='positivo';
+              const anyDone=resD||resI;
+              return(
+                <div key={t.n} style={{...fs.card,borderLeft:`4px solid ${anyPos?RJ:anyDone?GN:GL}`,marginBottom:8,padding:'10px 12px'}}>
+                  <div style={{display:'flex',gap:10,alignItems:'flex-start'}}>
+                    {t.img&&(
+                      <div style={{flexShrink:0,width:80,height:70,borderRadius:5,overflow:'hidden',background:BG,border:`1px solid ${GL}`}}>
+                        <img src={t.img} alt={t.n} style={{width:80,height:70,objectFit:'cover'}} onError={e=>{e.target.style.display='none';}}/>
+                      </div>
+                    )}
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12,fontWeight:700,marginBottom:3}}>
+                        {t.n}
+                        {anyPos&&<span style={{marginLeft:8,...fs.tag(RJ)}}>⚠ POSITIVO</span>}
+                        {anyDone&&!anyPos&&<span style={{marginLeft:8,...fs.tag(GN)}}>✓ REALIZADO</span>}
+                      </div>
+                      <div style={{fontSize:10,color:GD,background:BG,borderRadius:5,padding:'6px 8px',marginBottom:6,lineHeight:1.6}}>
+                        <strong>🏥 Indica:</strong> {t.indica}<br/>
+                        <strong>📍 Posición:</strong> {t.posicion}<br/>
+                        <strong>🫀 Estructura:</strong> {t.estructura}
+                      </div>
+                      <details style={{marginBottom:6}}>
+                        <summary style={{fontSize:10,color:TL,cursor:'pointer',fontWeight:700}}>📋 Ver procedimiento detallado</summary>
+                        <div style={{background:'#F0FDF4',border:`1px solid #86EFAC`,borderRadius:5,padding:'8px',marginTop:4,fontSize:11,color:GD,lineHeight:1.6}}>
+                          <strong>Cómo realizar:</strong> {t.como}<br/>
+                          <strong>Test positivo:</strong> {t.positivo}<br/>
+                          <span style={{color:GM}}>Sensibilidad: {t.sens} · Especificidad: {t.esp}</span>
+                        </div>
+                      </details>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                        {['Derecho','Izquierdo'].map(lado=>{
+                          const val=ev.testsEsp[t.n+'_'+lado]||'';
+                          const bg=val==='positivo'?'#FEE2E2':val==='negativo'?'#DCFCE7':WH;
+                          return(
+                            <div key={lado}>
+                              <span style={{...fs.lbl,marginBottom:2}}>{lado}</span>
+                              <select value={val} onChange={e=>setTestEsp(t.n+'_'+lado,e.target.value)} style={{...fs.sel,width:'100%',background:bg,borderColor:val==='positivo'?RJ:val==='negativo'?GN:GL}}>
+                                <option value=''>— Sin realizar —</option>
+                                <option value='negativo'>✓ Negativo</option>
+                                <option value='positivo'>⚠ Positivo</option>
+                                <option value='dudoso'>≈ Dudoso</option>
+                                <option value='no_aplica'>N/A</option>
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <input value={ev.testsEsp[t.n+'_nota']||''} onChange={e=>setTestEsp(t.n+'_nota',e.target.value)} placeholder="Notas de este test..." style={{...fs.inp,marginTop:5,fontSize:10}} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {(TESTS_ESP[ev.region]||[]).filter(t=>!ev.tejidoSospechado||t.indica===ev.tejidoSospechado).length===0&&(
+              <div style={{...fs.card,textAlign:'center',padding:20,borderStyle:'dashed',color:GM,fontSize:12}}>No hay tests cargados para esta región/tejido todavía.</div>
+            )}
+          </div>
+        );
+        case 8: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>💪 Escala MRC (0–5). Evaluar bilateral. 0=Sin contracción · 3=Contra gravedad · 5=Normal</div>
             {fuerzaKeys.map(grupo=>(
@@ -1206,7 +1334,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             </div>
           </div>
         );
-        case 8: return(
+        case 9: return(
           <div>
             {[{titulo:'Single Leg Stance (SLS)',inst:'Apoyo monopodal, ojos abiertos. Normal: > 30 seg. Progresión: ojos cerrados.',campos:[{k:'sls.d',l:'Pierna D (seg)'},{k:'sls.i',l:'Pierna I (seg)'}],obs:'sls.obs',refVal:30},{titulo:'Y-Balance Test',inst:'Apoyo monopodal. Alcance máximo en 3 direcciones. Asimetría ANT > 4 cm = riesgo lesión.'}].map((t,ti)=>(
               ti===0?(
@@ -1259,7 +1387,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             </div>
           </div>
         );
-        case 9: return(
+        case 10: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>🏃 FMS — Functional Movement Screen · Total máximo 21/21 · Score ≤ 14 = mayor riesgo de lesión · 7 patrones de movimiento</div>
             {FMS_TESTS.map(t=>{
@@ -1287,7 +1415,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             {(()=>{const t=calcFMSTotal(ev.fms);const sc=Object.keys(ev.fms).length;return sc>0&&<div style={{padding:'10px',borderRadius:7,background:t>=14?'#DCFCE7':t>=11?'#FEF9C3':'#FEE2E2',display:'flex',gap:12,alignItems:'center',marginTop:4}}><div style={{fontSize:26,fontWeight:800,color:t>=14?GN:t>=11?AM:RJ}}>{t}</div><div><div style={{fontSize:12,fontWeight:700,color:t>=14?GN:t>=11?AM:RJ}}>{t>=14?'Riesgo bajo':t>=11?'Riesgo moderado':'Riesgo elevado'}</div><div style={{fontSize:10,color:GD}}>FMS Total ({sc}/7) · Umbral alta: ≥14</div></div></div>})()}
           </div>
         );
-        case 10: return(
+        case 11: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
               🎯 <strong>Screening Multi-Región</strong> — Seleccioná las regiones que quieras evaluar. Podés seleccionar más de una.
@@ -1404,7 +1532,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             })}
           </div>
         );
-        case 11: return(
+        case 12: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
               📸 <strong>Antropometría y Análisis Corporal</strong> — Medidas corporales + adjuntar imágenes de análisis de composición corporal.
@@ -1487,7 +1615,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             </div>
           </div>
         );
-        case 12: return(
+        case 13: return(
           <div>
             {/* Resumen de KPIs */}
             {(()=>{
@@ -1533,6 +1661,36 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                 </div>
               </div>
             </div>
+            {/* Protocolo clínico de rehab — desacoplado de las fases del Método Activa Integra */}
+            {(()=>{
+              const protocolo=generarProtocoloRehab(ev.region,ev.tejidoSospechado,ev.objetivo,ev.eva_reposo,calcROMpct(ev.rom,ev.region));
+              const faseActualRehab=ev.faseRehab||'proteccion';
+              return(
+                <div style={{...fs.card,borderLeft:`4px solid ${TL}`}}>
+                  <div style={{fontSize:12,fontWeight:700,marginBottom:2}}>🩺 Protocolo de rehab de esta lesión</div>
+                  <div style={{fontSize:10,color:GM,marginBottom:8}}>Fases clínicas de la lesión puntual (protección → carga progresiva → retorno funcional) — independientes de la fase del Método Activa Integra de abajo, que es el nivel de negocio del cliente en el gym.</div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:10}}>
+                    {FASES_REHAB.map(f=>(
+                      <div key={f.k} onClick={()=>set('faseRehab',f.k)} style={{cursor:'pointer',padding:'8px 6px',borderRadius:7,border:`2px solid ${faseActualRehab===f.k?f.color:GL}`,background:faseActualRehab===f.k?`${f.color}15`:WH,textAlign:'center'}}>
+                        <div style={{fontSize:15}}>{f.emoji}</div>
+                        <div style={{fontSize:9,fontWeight:700,color:faseActualRehab===f.k?f.color:GD}}>{f.badge} · {f.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {protocolo.filter(f=>f.k===faseActualRehab).map(f=>(
+                    <div key={f.k} style={{background:BG,borderRadius:6,padding:'8px 10px'}}>
+                      <div style={{fontSize:10,color:GD,marginBottom:6}}>{f.objetivo_clinico}</div>
+                      {f.criterios.map((c,i)=>(
+                        <div key={i} style={{display:'flex',gap:6,alignItems:'flex-start',fontSize:11,color:GD,padding:'3px 0'}}>
+                          <span style={{color:f.color,fontWeight:700,flexShrink:0}}>→</span>{c}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  <div style={{fontSize:9,color:GM,marginTop:8}}>Sugerencia de fase de negocio equivalente: <strong>{FASES_BASE[mapearFaseRehabANegocio(faseActualRehab)]?.badge}</strong> — se puede aceptar o cambiar manualmente en "Fase del método asignada" abajo.</div>
+                </div>
+              );
+            })()}
             {/* Criterios personalizados generados a partir del objetivo */}
             {ev.objetivo&&(
               <div style={{...fs.card,borderLeft:`4px solid ${FASES_BASE[ev.fase]?.color||NV}`,background:'#EFF6FF'}}>
@@ -1562,30 +1720,37 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
       }
     };
 
+    // Pasos avanzados ocultos salvo evaluación de alta o toggle manual del evaluador
+    const mostrarAvanzado=ev.tipo==='alta'||ev.avanzadoManual;
+    const stepsVisibles=EVAL_STEPS.map((st,i)=>({...st,i})).filter(st=>!st.avanzado||mostrarAvanzado);
+    const posActual=stepsVisibles.findIndex(st=>st.i===evalStep);
+    const irA=(pos)=>{if(pos>=0&&pos<stepsVisibles.length)setEvalStep(stepsVisibles[pos].i);};
+
     return(
       <div style={{padding:'12px 14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
           <button onClick={()=>setView('ver-paciente')} style={{...fs.btnG,fontSize:11}}>← Cancelar</button>
           <div style={{fontWeight:700,fontSize:12,color:GDK}}>{currentPac?.nombre} {currentPac?.apellido}</div>
-          <div style={{fontSize:10,color:GM}}>{evalStep+1}/{EVAL_STEPS.length}</div>
+          <div style={{fontSize:10,color:GM}}>{posActual+1}/{stepsVisibles.length}</div>
         </div>
         <div style={{display:'flex',gap:3,marginBottom:10,overflowX:'auto',paddingBottom:2}}>
-          {EVAL_STEPS.map((st,i)=>(
-            <div key={i} onClick={()=>i<evalStep&&setEvalStep(i)} style={{padding:'4px 7px',borderRadius:5,background:i===evalStep?NV:i<evalStep?GL:BG,color:i===evalStep?WH:GD,fontSize:9,fontWeight:i===evalStep?700:400,cursor:i<evalStep?'pointer':'default',flexShrink:0,border:`1px solid ${i===evalStep?NV:GL}`}}>
-              {i<evalStep?'✓ '+st.icon:st.icon}
+          {stepsVisibles.map((st,pos)=>(
+            <div key={st.i} onClick={()=>pos<posActual&&irA(pos)} style={{padding:'4px 7px',borderRadius:5,background:st.i===evalStep?NV:pos<posActual?GL:BG,color:st.i===evalStep?WH:GD,fontSize:9,fontWeight:st.i===evalStep?700:400,cursor:pos<posActual?'pointer':'default',flexShrink:0,border:`1px solid ${st.i===evalStep?NV:GL}`}}>
+              {pos<posActual?'✓ '+st.icon:st.icon}
             </div>
           ))}
         </div>
+        {!mostrarAvanzado&&<div style={{fontSize:9,color:GM,marginBottom:8}}>FMS, Y-Balance, screening multi-región y antropometría ocultos — tildá "incluir pasos avanzados" en el paso 1 si esta evaluación es de alta a POTENCIA o de un deportista.</div>}
         <div style={{background:NV,borderRadius:7,padding:'9px 12px',marginBottom:10,borderLeft:`3px solid ${TL}`}}>
           <div style={{color:WH,fontWeight:700,fontSize:12}}>{EVAL_STEPS[evalStep].icon} {EVAL_STEPS[evalStep].title}</div>
           {ev.objetivo&&evalStep>0&&<div style={{color:'#BAE6FD',fontSize:10,marginTop:2}}>🎯 Objetivo: "{ev.objetivo.slice(0,50)}{ev.objetivo.length>50?'...':''}"</div>}
         </div>
         <div style={{maxHeight:'52vh',overflowY:'auto',paddingRight:2}}>{renderStep()}</div>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,paddingTop:8,borderTop:`1px solid ${GL}`}}>
-          <button onClick={()=>setEvalStep(p=>p-1)} disabled={evalStep===0} style={{...fs.btnG,opacity:evalStep===0?.3:1}}>← Anterior</button>
-          {evalStep===EVAL_STEPS.length-1
+          <button onClick={()=>irA(posActual-1)} disabled={posActual===0} style={{...fs.btnG,opacity:posActual===0?.3:1}}>← Anterior</button>
+          {posActual===stepsVisibles.length-1
             ?<button onClick={saveEval} style={{...fs.btnTL,padding:'9px 20px'}}>✓ Guardar evaluación</button>
-            :<button onClick={()=>setEvalStep(p=>p+1)} style={fs.btnNV}>Siguiente →</button>
+            :<button onClick={()=>irA(posActual+1)} style={fs.btnNV}>Siguiente →</button>
           }
         </div>
       </div>
@@ -1851,7 +2016,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         ${[['EVA Reposo',ev.eva_reposo||'—',ei?.color||'#999'],['ROM %',rp?rp+'%':'—',rp?(rp>90?GN:rp>70?AM:RJ):'#999'],['Fase',FASES_BASE[ev.fase]?.badge||'—',FASES_BASE[ev.fase]?.color||'#999']].map(([l,v,c])=>`<div style="background:#f9f9f9;padding:8px;border-radius:5px;text-align:center"><div style="font-size:9px;color:#999;text-transform:uppercase">${l}</div><div style="font-size:18px;font-weight:800;color:${c}">${v}</div></div>`).join('')}
       </div>
       ${ev.motivo?`<div class="sec"><div class="sec-title">Anamnesis</div><div class="sec-body"><strong>Motivo:</strong> ${ev.motivo}${ev.evolucion?'<br/><strong>Evolución:</strong> '+ev.evolucion:''}</div></div>`:''}
-      ${Object.keys(ev.rom||{}).length>0?`<div class="sec"><div class="sec-title">ROM Goniometría</div><div class="sec-body" style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${(ROM_NORMS[ev.region]||ROM_NORMS.lumbar).filter(n=>ev.rom[n.mov]).map(n=>{const v=ev.rom[n.mov];const p=n.normal>0?Math.round(parseFloat(v)/n.normal*100):0;return`<div>${n.mov}: <strong>${v}°</strong> / ${n.normal}° (${p}%)</div>`}).join('')}</div></div>`:''}
+      ${Object.keys(ev.rom||{}).length>0?`<div class="sec"><div class="sec-title">ROM Goniometría</div><div class="sec-body" style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${(ROM_NORMS[ev.region]||ROM_NORMS.lumbar).filter(n=>romGrados(ev.rom,n.mov)).map(n=>{const v=romGrados(ev.rom,n.mov);const romObj=(typeof ev.rom[n.mov]==='object'&&ev.rom[n.mov])||{};const p=n.normal>0?Math.round(parseFloat(v)/n.normal*100):0;const extra=[romObj.funcional===true?'funcional':romObj.funcional===false?'disfuncional':'',romObj.eva!==undefined&&romObj.eva!==''?`EVA ${romObj.eva}/10`:''].filter(Boolean).join(' · ');return`<div>${n.mov}: <strong>${v}°</strong> / ${n.normal}° (${p}%)${extra?` — ${extra}`:''}</div>`}).join('')}</div></div>`:''}
       ${ev.diagnosticoPT?`<div class="sec"><div class="sec-title">Diagnóstico y Plan</div><div class="sec-body">${ev.diagnosticoPT?'<strong>DX PT:</strong> '+ev.diagnosticoPT+'<br/>':''}${ev.plan?'<strong>Plan:</strong> '+ev.plan:''}</div></div>`:''}
       ${ev.criterios_personalizados?.length>0?`<div class="sec"><div class="sec-title">Criterios de Evolución Personalizados</div><div class="sec-body">${ev.criterios_personalizados.map(c=>`<div>→ ${c}</div>`).join('')}</div></div>`:''}
       <div class="footer">FisioActiva Colonia · Método Activa Integra · ${new Date().toLocaleDateString('es-ES')}</div>
@@ -1878,7 +2043,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
           ))}
         </div>
         {ev.motivo&&<div style={fs.card}><div style={{fontSize:11,fontWeight:700,marginBottom:4}}>Anamnesis</div><div style={{fontSize:12,color:GD}}>{ev.motivo}</div></div>}
-        {Object.keys(ev.rom||{}).length>0&&<div style={fs.card}><div style={{fontSize:11,fontWeight:700,marginBottom:8}}>ROM</div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>{(ROM_NORMS[ev.region]||ROM_NORMS.lumbar).filter(n=>ev.rom[n.mov]).map(n=>{const v=ev.rom[n.mov];const p=n.normal>0?Math.round(parseFloat(v)/n.normal*100):0;return<div key={n.mov} style={{display:'flex',justifyContent:'space-between',padding:'4px 7px',background:BG,borderRadius:4,fontSize:11}}><span>{n.mov}</span><span style={{fontWeight:700,color:p>90?GN:p>70?AM:RJ}}>{v}° ({p}%)</span></div>})}</div></div>}
+        {Object.keys(ev.rom||{}).length>0&&<div style={fs.card}><div style={{fontSize:11,fontWeight:700,marginBottom:8}}>ROM</div><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>{(ROM_NORMS[ev.region]||ROM_NORMS.lumbar).filter(n=>romGrados(ev.rom,n.mov)).map(n=>{const v=romGrados(ev.rom,n.mov);const romObj=(typeof ev.rom[n.mov]==='object'&&ev.rom[n.mov])||{};const p=n.normal>0?Math.round(parseFloat(v)/n.normal*100):0;return<div key={n.mov} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 7px',background:BG,borderRadius:4,fontSize:11}}><span>{n.mov}{romObj.funcional===false&&<span style={{...fs.tag(RJ),marginLeft:5,fontSize:8}}>disfuncional</span>}</span><span style={{fontWeight:700,color:p>90?GN:p>70?AM:RJ}}>{v}° ({p}%)</span></div>})}</div></div>}
         {ev.diagnosticoPT&&<div style={{...fs.card,borderLeft:`3px solid ${TL}`}}><div style={{fontSize:11,fontWeight:700,marginBottom:4}}>Diagnóstico PT</div><div style={{fontSize:12,color:GD}}>{ev.diagnosticoPT}</div></div>}
 
         {(ev.imagenes_antrop||[]).length>0&&(

@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
+import PoseROM from "./PoseROM.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
@@ -1937,14 +1938,14 @@ export default function App(){
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
             </div>
             {[
-              ['mov_tobillo','Dorsiflexión tobillo','Normal ≥20° · Disfunc <10°'],
-              ['mov_cad_rot','Rotación interna cadera','Normal 40-45° · Disfunc <30°'],
-              ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°'],
-              ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°'],
-              ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°'],
-              ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°'],
-              ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°'],
-            ].map(([k,lbl,ref])=>(
+              ['mov_tobillo','Dorsiflexión tobillo','Normal ≥20° · Disfunc <10°',{region:'tobillo',mov:'Dorsiflexión'}],
+              ['mov_cad_rot','Rotación interna cadera','Normal 40-45° · Disfunc <30°',null],
+              ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°',{region:'cadera',mov:'Flexión'}],
+              ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°',null],
+              ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°',{region:'hombro',mov:'Flexión'}],
+              ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°',null],
+              ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°',null],
+            ].map(([k,lbl,ref,poseDef])=>(
               <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
                   <div>
@@ -1961,7 +1962,16 @@ export default function App(){
                     </select>
                   ))}
                 </div>
-                <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,marginTop:4,padding:'4px 8px'}}/>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 70px',gap:6,marginTop:4,alignItems:'start'}}>
+                  <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,padding:'4px 8px'}}/>
+                  {poseDef
+                    ?<PoseROM movimiento={poseDef.mov} region={poseDef.region} onMedido={(grados,ladoM)=>{
+                        const label=ladoM==='right'?'Der':'Izq';
+                        setSCK(k+'_grados',(sc[k+'_grados']?sc[k+'_grados']+' / ':'')+`${label} ${grados}°`);
+                      }}/>
+                    :<div title="Rotación: no medible con confianza desde una sola foto 2D. Medición manual con goniómetro." style={{fontSize:9,color:'#94A3B8',textAlign:'center',padding:'6px 2px',border:'1px dashed #E2E8F0',borderRadius:6}}>Manual</div>
+                  }
+                </div>
               </div>
             ))}
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
