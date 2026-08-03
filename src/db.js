@@ -1,5 +1,5 @@
 // db.js — Capa de datos con fallback a estado local si Supabase no está disponible
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, isSupabaseReady } from './supabase.js'
 
 export const genId = (prefix = 'id') =>
@@ -11,6 +11,8 @@ export function useGymClients() {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [dbMode, setDbMode]     = useState(isSupabaseReady)
+  const clientsRef = useRef([])
+  useEffect(() => { clientsRef.current = clients }, [clients])
 
   const fetchClients = useCallback(async () => {
     if (!isSupabaseReady) { setLoading(false); return }
@@ -48,17 +50,30 @@ export function useGymClients() {
     return () => supabase.removeChannel(ch)
   }, [fetchClients])
 
+  // IMPORTANTE — fix de sincronización multi-dispositivo (2 devices, ej.
+  // clínica + gym al mismo tiempo): antes esto hacía upsert() de un objeto
+  // completo que el componente había armado con `{...cliente}` capturado
+  // en el momento en que se abrió el formulario/wizard. Si ese formulario
+  // quedaba abierto un rato y OTRO dispositivo modificaba ese mismo cliente
+  // mientras tanto, al guardar acá se pisaba silenciosamente ese cambio
+  // ajeno con la copia vieja. Ahora se mergea sobre el estado local más
+  // fresco (que la suscripción realtime mantiene al día en segundos) antes
+  // de persistir, así solo se sobreescriben los campos que este dispositivo
+  // realmente tocó. Esto reduce la ventana de conflicto de "lo que duró el
+  // formulario abierto" a "la latencia de la suscripción realtime" (~1seg).
+  // No es un CRDT: si dos dispositivos tocan el MISMO campo en el mismo
+  // segundo, gana el último — pero el escenario reportado (se borra info
+  // cargada por el otro dispositivo) era mucho más amplio que eso y con
+  // esto queda resuelto.
   const saveClient = useCallback(async (client) => {
+    const fresh = clientsRef.current.find(x => x.id === client.id)
+    const merged = fresh ? { ...fresh, ...client } : client
+    setClients(prev => fresh ? prev.map(x => x.id === client.id ? merged : x) : [merged, ...prev])
     if (dbMode && isSupabaseReady) {
       const { error: e } = await supabase
         .from('gym_clients')
-        .upsert(mapClientToDB(client), { onConflict: 'id' })
+        .upsert(mapClientToDB(merged), { onConflict: 'id' })
       if (e) throw e
-    } else {
-      // Fallback local
-      setClients(p => p.find(x => x.id === client.id)
-        ? p.map(x => x.id === client.id ? client : x)
-        : [client, ...p])
     }
   }, [dbMode])
 
@@ -92,6 +107,8 @@ export function useFisioPacientes() {
   const [loading, setLoading]    = useState(true)
   const [error, setError]        = useState(null)
   const [dbMode, setDbMode]      = useState(isSupabaseReady)
+  const pacientesRef = useRef([])
+  useEffect(() => { pacientesRef.current = pacientes }, [pacientes])
 
   const fetchPacientes = useCallback(async () => {
     if (!isSupabaseReady) { setLoading(false); return }
@@ -130,15 +147,16 @@ export function useFisioPacientes() {
   }, [fetchPacientes])
 
   const savePaciente = useCallback(async (p) => {
+    const fresh = pacientesRef.current.find(x => x.id === p.id)
+    // evaluaciones nunca se tocan acá — las administra saveEvaluacion (upsert por fila).
+    // Si p trajera un array de evaluaciones viejo (capturado al abrir el form), no debe pisar el actual.
+    const merged = fresh ? { ...fresh, ...p, evaluaciones: fresh.evaluaciones } : { ...p, evaluaciones: p.evaluaciones||[] }
+    setPacientes(prev => fresh ? prev.map(x => x.id === p.id ? merged : x) : [merged, ...prev])
     if (dbMode && isSupabaseReady) {
       const { error: e } = await supabase
         .from('fisio_pacientes')
-        .upsert(mapPacienteToDB(p), { onConflict: 'id' })
+        .upsert(mapPacienteToDB(merged), { onConflict: 'id' })
       if (e) throw e
-    } else {
-      setPacientes(prev => prev.find(x => x.id === p.id)
-        ? prev.map(x => x.id === p.id ? { ...x, ...p } : x)
-        : [{ ...p, evaluaciones: [] }, ...prev])
     }
   }, [dbMode])
 
@@ -728,4 +746,64 @@ export function useRehabProtocolos() {
     else setProtocolos(p=>p.filter(x=>x.id!==id))
   },[])
   return{protocolos,loading,saveEjercicio,deleteEjercicio}
+}
+
+// ─── HOOK: Configuración del Centro (marca, logo, color) ──────────────────
+// Antes esto era un useState local respaldado en localStorage — cambios
+// hechos en un dispositivo nunca se veían en otro. Ahora es una fila única
+// en Supabase con realtime, igual patrón que gym_clients. Si Supabase no
+// está disponible, cae a localStorage como antes (mismo fallback general
+// del resto de la app) para no romper el modo local.
+const DEFAULT_CONFIG={gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'}
+function mapConfigFromDB(r){
+  return{gymName:r.gym_name||DEFAULT_CONFIG.gymName,gymSub:r.gym_sub||DEFAULT_CONFIG.gymSub,logoImg:r.logo_img||null,colorPrimary:r.color_primary||DEFAULT_CONFIG.colorPrimary,colorBg:r.color_bg||DEFAULT_CONFIG.colorBg}
+}
+function mapConfigToDB(c){
+  return{id:'default',gym_name:c.gymName,gym_sub:c.gymSub,logo_img:c.logoImg||null,color_primary:c.colorPrimary,color_bg:c.colorBg,updated_at:new Date().toISOString()}
+}
+function readLocalConfig(){
+  try{const saved=localStorage.getItem('activa_brand');return saved?JSON.parse(saved):DEFAULT_CONFIG}
+  catch{return DEFAULT_CONFIG}
+}
+export function useCentroConfig(){
+  const [config,setConfig]=useState(readLocalConfig)
+  const [dbMode,setDbMode]=useState(isSupabaseReady)
+
+  const fetchConfig=useCallback(async()=>{
+    if(!isSupabaseReady)return
+    try{
+      const{data,error}=await supabase.from('centro_config').select('*').eq('id','default').maybeSingle()
+      if(error)throw error
+      if(data){setConfig(mapConfigFromDB(data));setDbMode(true)}
+      else{
+        // no existe la fila todavía (deploy nuevo sin correr la migración de seed) — la creamos con lo que había local
+        await supabase.from('centro_config').upsert(mapConfigToDB(readLocalConfig()),{onConflict:'id'})
+        setDbMode(true)
+      }
+    }catch(e){console.error('centro_config fetch:',e.message);setDbMode(false)}
+  },[])
+
+  useEffect(()=>{
+    fetchConfig()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('centro_config_rt_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'centro_config'},
+        payload=>{ if(payload.new)setConfig(mapConfigFromDB(payload.new)) })
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetchConfig])
+
+  // Espejo en localStorage: lectura instantánea al abrir la app (sin esperar
+  // el fetch a Supabase) y fallback si Supabase no está disponible.
+  useEffect(()=>{ try{localStorage.setItem('activa_brand',JSON.stringify(config))}catch{} },[config])
+
+  const saveConfig=useCallback(async(newConfig)=>{
+    setConfig(newConfig)
+    if(dbMode&&isSupabaseReady){
+      const{error}=await supabase.from('centro_config').upsert(mapConfigToDB(newConfig),{onConflict:'id'})
+      if(error)throw error
+    }
+  },[dbMode])
+
+  return{config,saveConfig,dbMode}
 }

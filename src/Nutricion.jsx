@@ -7,6 +7,7 @@ import {
   calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
 } from "./alimentos.js";
 import { AIGeneradorNutricion } from "./AIActiva.jsx";
+import { getPrintCSS } from "./printStyles.js";
 import { useNutricionPlanes, useGymPlanes, useAlimentosCustom } from "./db.js";
 
 // ─── PALETA ──────────────────────────────────────────────────────────────────
@@ -271,22 +272,22 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       const semDia = calcSemaforo(totDia.calorias, objetivoNut?.kcal);
       const comidasHtml = COMIDAS.map(com => {
         const items = diaData[com.id] || [];
-        if (items.length === 0) return `<tr><td style="padding:5px 10px;color:#aaa;font-style:italic;font-size:10px;" colspan="5">${com.emoji} ${com.label} — sin alimentos</td></tr>`;
+        if (items.length === 0) return `<tr><td style="padding:6px 10px;color:#aaa;font-style:italic;font-size:10px;border-bottom:1px solid #e5e5e5;" colspan="5">${com.emoji} ${com.label} — sin alimentos</td></tr>`;
         // Resolver TODOS los items primero (con placeholder si falta) para que el rowspan nunca se desalinee
         const resueltos = items.map(item => ({ item, al: getAlimentoById(item.alimentoId, customAlimentos) }));
         const itemsHtml = resueltos.map(({item, al}, idx) => {
-          const comidaCel = idx===0?`<td rowspan="${resueltos.length}" style="padding:5px 8px;font-size:10px;font-weight:700;background:#f0f4f8;vertical-align:middle;border-right:1px solid #e0e0e0;">${com.emoji} ${com.label}<br/><span style="font-size:8px;color:#888;">${com.hora}</span></td>`:'';
+          const comidaCel = idx===0?`<td rowspan="${resueltos.length}" style="padding:6px 8px;font-size:10px;font-weight:700;background:#f0f4f8;vertical-align:middle;border-right:1px solid #e0e0e0;border-bottom:1px solid #e5e5e5;">${com.emoji} ${com.label}<br/><span style="font-size:8px;color:#888;">${com.hora}</span></td>`:'';
           if (!al) {
-            return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">${comidaCel}<td colspan="4" style="padding:4px 8px;font-size:10px;color:#CC0000;font-style:italic;">⚠ Alimento no encontrado (fue eliminado de la base) — revisar este plan</td></tr>`;
+            return `<tr style="background:${idx%2===0?'#fff':'#FAFAFA'}">${comidaCel}<td colspan="4" style="padding:6px 8px;font-size:10px;color:#CC0000;font-style:italic;border-bottom:1px solid #e5e5e5;">⚠ Alimento no encontrado (fue eliminado de la base) — revisar este plan</td></tr>`;
           }
           const m = calcularMacros(al, item.gramos);
           const unidadTxt = al.tiene_unidad && al.gramos_por_unidad ? ` <span style="color:#888;">(≈${(item.gramos/al.gramos_por_unidad).toFixed(1)} ${al.nombre_unidad})</span>` : '';
-          return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">
+          return `<tr style="background:${idx%2===0?'#fff':'#FAFAFA'}">
             ${comidaCel}
-            <td style="padding:4px 8px;font-size:11px;">${al.nombre}</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;white-space:nowrap;">${item.gramos}g${unidadTxt}</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;">${m.proteinas}g P / ${m.carbos}g C / ${m.grasas}g G</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;">${m.calorias} kcal</td>
+            <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e5e5e5;">${al.nombre}</td>
+            <td style="padding:6px 8px;font-size:10px;text-align:center;white-space:nowrap;border-bottom:1px solid #e5e5e5;">${item.gramos}g${unidadTxt}</td>
+            <td style="padding:6px 8px;font-size:10px;text-align:center;border-bottom:1px solid #e5e5e5;">${m.proteinas}g P / ${m.carbos}g C / ${m.grasas}g G</td>
+            <td style="padding:6px 8px;font-size:10px;text-align:center;font-weight:700;border-bottom:1px solid #e5e5e5;">${m.calorias} kcal</td>
           </tr>`;
         }).join('');
         return itemsHtml;
@@ -322,8 +323,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
       <title>Plan Nutricional — ${planActivo.nombre}</title>
-      <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:20px}
-      @media print{body{padding:10px}@page{size:A4;margin:15mm}}</style>
+      <style>${getPrintCSS(brandColor)}table tr:nth-child(even){background:#FAFAFA}</style>
     </head><body>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brandColor};padding-bottom:12px;margin-bottom:16px">
         <div><div style="font-size:22px;font-weight:900;color:${brandColor};letter-spacing:2px">${gymName}</div>

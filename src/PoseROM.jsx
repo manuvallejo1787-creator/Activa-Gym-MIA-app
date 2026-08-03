@@ -38,24 +38,65 @@ const ANGLE_DEFS = {
 
 const getDef=(region,mov)=>ANGLE_DEFS[region]?.[mov]||null;
 
-// ─── Carga perezosa y única del modelo (se comparte entre todas las filas) ─
-let landmarkerPromise=null;
-async function getLandmarker(){
-  if(!landmarkerPromise){
-    landmarkerPromise=(async()=>{
+// ─── Carga perezosa del modelo, con fallback GPU→CPU y lite→full ──────────
+// El delegate GPU falla silenciosamente en bastantes navegadores/dispositivos
+// (sobre todo Android gama media/baja y Safari viejo) — antes esto hacía que
+// la detección fallara siempre sin avisar por qué. Ahora: intenta GPU+lite
+// primero (rápido); si no hay detección, reintenta con CPU+full (más lento,
+// más robusto) antes de darse por vencido.
+let landmarkerCache={};
+async function getLandmarker(delegate,modelo){
+  const key=delegate+'_'+modelo;
+  if(!landmarkerCache[key]){
+    landmarkerCache[key]=(async()=>{
       const {PoseLandmarker,FilesetResolver}=await import("@mediapipe/tasks-vision");
       const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm");
       return PoseLandmarker.createFromOptions(vision,{
         baseOptions:{
-          modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-          delegate:"GPU",
+          modelAssetPath:`https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${modelo}/float16/1/pose_landmarker_${modelo}.task`,
+          delegate,
         },
         runningMode:"IMAGE",
         numPoses:1,
+        minPoseDetectionConfidence:0.3,
+        minPosePresenceConfidence:0.3,
       });
     })();
   }
-  return landmarkerPromise;
+  return landmarkerCache[key];
+}
+
+// Detecta con reintentos: GPU/lite → CPU/lite → CPU/full.
+// Cada intento es más lento pero más tolerante; solo se pasa al siguiente
+// si el anterior no encontró ninguna persona.
+async function detectarConReintentos(img){
+  const intentos=[['GPU','lite'],['CPU','lite'],['CPU','full']];
+  let ultimoError=null;
+  for(const [delegate,modelo] of intentos){
+    try{
+      const landmarker=await getLandmarker(delegate,modelo);
+      const res=landmarker.detect(img);
+      if(res?.landmarks?.[0])return res.landmarks[0];
+    }catch(e){ultimoError=e;} // delegate no soportado en este dispositivo, probar el siguiente
+  }
+  if(ultimoError)throw ultimoError;
+  return null;
+}
+
+// Carga la imagen respetando la orientación EXIF (fotos de celular en
+// vertical suelen venir con metadata de rotación que <img>+drawImage no
+// siempre respeta igual en todos los navegadores — esto causaba que el
+// modelo recibiera la persona "acostada" y no detectara nada).
+async function cargarImagenOrientada(file){
+  if('createImageBitmap' in window){
+    try{
+      return await createImageBitmap(file,{imageOrientation:'from-image'});
+    }catch(e){/* fallback abajo */}
+  }
+  const url=URL.createObjectURL(file);
+  const img=new Image();
+  await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url;});
+  return img;
 }
 
 const angleAt=(A,V,C)=>{
@@ -67,17 +108,25 @@ const angleAt=(A,V,C)=>{
   return Math.acos(cos)*180/Math.PI;
 };
 
+const NOMBRE_LEGIBLE={shoulder:'hombro',elbow:'codo',wrist:'muñeca',hip:'cadera',knee:'rodilla',ankle:'tobillo',foot_index:'pie'};
+
+// Devuelve {angulo} o {error, faltantes} — diagnóstico específico en vez de
+// un genérico "no se detectó nada", para que el evaluador sepa QUÉ tapar
+// menos o encuadrar mejor en la próxima foto.
 const calcAngulo=(landmarks,def,lado)=>{
   const IDX={shoulder:11,elbow:13,wrist:15,hip:23,knee:25,ankle:27,foot_index:31}; // lado izquierdo base
   const off=lado==='right'?1:0; // en BlazePose, índice del lado derecho = izquierdo+1
-  const pts=def.t.map(name=>landmarks[IDX[name]+off]);
-  if(pts.some(p=>!p||p.visibility<0.4))return null;
-  const raw=angleAt(pts[0],pts[1],pts[2]);
-  if(raw==null)return null;
-  if(def.type==='180-angle')return Math.round(180-raw);
-  if(def.type==='above90')return Math.max(0,Math.round(raw-90));
-  if(def.type==='below90')return Math.max(0,Math.round(90-raw));
-  return Math.round(raw);
+  const pts=def.t.map(name=>({name,p:landmarks[IDX[name]+off]}));
+  const faltantes=pts.filter(({p})=>!p||(p.visibility??1)<0.3).map(({name})=>NOMBRE_LEGIBLE[name]||name);
+  if(faltantes.length>0)return{angulo:null,faltantes};
+  const raw=angleAt(pts[0].p,pts[1].p,pts[2].p);
+  if(raw==null)return{angulo:null,faltantes:['puntos degenerados']};
+  let angulo;
+  if(def.type==='180-angle')angulo=Math.round(180-raw);
+  else if(def.type==='above90')angulo=Math.max(0,Math.round(raw-90));
+  else if(def.type==='below90')angulo=Math.max(0,Math.round(90-raw));
+  else angulo=Math.round(raw);
+  return{angulo,faltantes:[]};
 };
 
 export default function PoseROM({movimiento,region,onMedido}){
@@ -93,28 +142,25 @@ export default function PoseROM({movimiento,region,onMedido}){
   const procesar=useCallback(async(file,ladoElegido)=>{
     setLoading(true);setError('');setResultado(null);
     try{
-      const url=URL.createObjectURL(file);
-      setImgUrl(url);
-      const img=new Image();
-      await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url;});
-      const landmarker=await getLandmarker();
-      const res=landmarker.detect(img);
-      const landmarks=res?.landmarks?.[0];
-      if(!landmarks){setError('No se detectó una persona en la foto. Probá con más luz o de cuerpo más completo.');setLoading(false);return;}
-      const angulo=calcAngulo(landmarks,def,ladoElegido);
-      if(angulo==null){setError('No se pudieron ubicar con confianza los puntos necesarios (¿la articulación está tapada u oculta en la foto?).');setLoading(false);return;}
+      setImgUrl(URL.createObjectURL(file));
+      const img=await cargarImagenOrientada(file);
+      const landmarks=await detectarConReintentos(img);
+      if(!landmarks){setError('No se detectó una persona en la foto. Encuadrá el cuerpo completo o al menos el segmento con las dos articulaciones vecinas visibles (no solo el detalle de la articulación) — el modelo necesita esas referencias para orientarse.');setLoading(false);return;}
+      const {angulo,faltantes}=calcAngulo(landmarks,def,ladoElegido);
+      if(angulo==null){setError(`No se pudo ubicar con confianza: ${faltantes.join(', ')}. ¿Está tapado por ropa, otra persona o el encuadre? Probá una foto con mejor luz y esos puntos visibles.`);setLoading(false);return;}
       setResultado(angulo);
       // dibujar overlay simple para que el evaluador confirme visualmente
       const canvas=canvasRef.current;
       if(canvas){
         const ctx=canvas.getContext('2d');
-        canvas.width=img.width;canvas.height=img.height;
-        ctx.drawImage(img,0,0);
+        const w=img.width||img.naturalWidth, h=img.height||img.naturalHeight;
+        canvas.width=w;canvas.height=h;
+        ctx.drawImage(img,0,0,w,h);
         ctx.fillStyle='#1BAA86';
-        landmarks.forEach(p=>{ctx.beginPath();ctx.arc(p.x*canvas.width,p.y*canvas.height,5,0,7);ctx.fill();});
+        landmarks.forEach(p=>{ctx.beginPath();ctx.arc(p.x*w,p.y*h,5,0,7);ctx.fill();});
       }
     }catch(e){
-      setError('Error al procesar la imagen: '+(e?.message||'desconocido'));
+      setError('Error al procesar la imagen: '+(e?.message||'desconocido')+'. Si persiste, probá con otro navegador (Chrome recomendado) o una foto más liviana.');
     }
     setLoading(false);
   },[def]);
@@ -139,6 +185,7 @@ export default function PoseROM({movimiento,region,onMedido}){
         <button onClick={()=>setOpen(false)} style={{fontSize:10,color:'#94A3B8',background:'none',border:'none',cursor:'pointer'}}>✕ cerrar</button>
       </div>
       {def.aprox&&<div style={{fontSize:9,color:'#D97706',marginBottom:6}}>Este ángulo combina el aporte de cadera y columna — es un proxy visual, no reemplaza la goniometría segmentaria si necesitás precisión clínica.</div>}
+      <div style={{fontSize:9,color:'#64748B',background:'#F1F5F9',borderRadius:5,padding:'5px 8px',marginBottom:8}}>💡 Encuadrá el cuerpo completo o al menos el segmento con las dos articulaciones vecinas visibles, de perfil, con buena luz y fondo simple. Una foto muy cerrada solo sobre la articulación no funciona — el modelo necesita esas referencias.</div>
       <div style={{display:'flex',gap:6,marginBottom:8}}>
         {['right','left'].map(l=>(
           <button key={l} onClick={()=>setLado(l)} style={{fontSize:9,fontWeight:700,padding:'4px 10px',borderRadius:99,border:`1px solid ${lado===l?'#1BAA86':'#E2E8F0'}`,background:lado===l?'#1BAA8620':'white',color:lado===l?'#1BAA86':'#475569',cursor:'pointer'}}>{l==='right'?'Lado Derecho':'Lado Izquierdo'}</button>

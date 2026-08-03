@@ -1,8 +1,9 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import PoseROM from "./PoseROM.jsx";
+import { getPrintCSS } from "./printStyles.js";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI } from "./planificacion.js";
@@ -942,17 +943,9 @@ export default function App(){
   const [overrideState,setOverrideState]=useState(null);
   const [addBType,setAddBType]=useState('');
   const [addBPos,setAddBPos]=useState('');
-  // brand persiste en localStorage — no se pierde al cambiar de pestaña
-  const [brand,setBrand]=useState(()=>{
-    try {
-      const saved=localStorage.getItem('activa_brand');
-      return saved ? JSON.parse(saved) : {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'};
-    } catch { return {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'}; }
-  });
-  // Guardar brand en localStorage cada vez que cambia
-  useEffect(()=>{
-    try { localStorage.setItem('activa_brand', JSON.stringify(brand)); } catch {}
-  },[brand]);
+  // brand ahora sincroniza entre dispositivos vía Supabase realtime (antes
+  // vivía solo en localStorage — ver useCentroConfig en db.js).
+  const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const [clientWizard,setClientWizard]=useState(null);
   const [informeCliente,setInformeCliente]=useState(null);
 
@@ -1557,9 +1550,9 @@ export default function App(){
 
     const exportInformePDF=()=>{
       const bc=brand.colorPrimary;
-      const row=(lbl,val)=>val?`<tr><td style="padding:4px 10px;font-size:11px;color:#666;width:170px">${lbl}</td><td style="padding:4px 10px;font-size:11px;font-weight:600">${val}</td></tr>`:'';
+      const row=(lbl,val)=>val?`<tr><td style="padding:7px 10px;font-size:11px;color:#666;width:170px;border-bottom:1px solid #eee">${lbl}</td><td style="padding:7px 10px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">${val}</td></tr>`:'';
       const testsRows=clientTests.map(t=>`<tr style="border-bottom:1px solid #eee"><td style="padding:4px 8px;font-size:10px">${t.test_nombre||t.test_id}</td><td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700">${t.rm1_real||t.rm1_calculado||'—'} kg</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.nivel_resultado||'—'}</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.fecha||''}</td></tr>`).join('');
-      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:28px;color:#111}table{width:100%;border-collapse:collapse}@media print{body{padding:14px}@page{size:A4;margin:14mm}}</style></head><body>
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>${getPrintCSS(bc)}table{width:100%;border-collapse:collapse}table tr:nth-child(even){background:#FAFAFA}h3{page-break-after:avoid}</style></head><body>
         <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${bc};padding-bottom:12px;margin-bottom:16px">
           <div><div style="font-size:22px;font-weight:900;color:${bc};letter-spacing:2px">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
           <div style="text-align:right"><div style="font-size:16px;font-weight:800">Informe de Evaluación</div><div style="font-size:11px;color:#555;margin-top:2px">${cliente.nombre} ${cliente.apellido}</div><div style="font-size:10px;color:#999">${cliente.documento?'CI '+cliente.documento+' · ':''}${new Date().toLocaleDateString('es-ES')}</div></div>
@@ -3368,8 +3361,8 @@ export default function App(){
       if(!rehabSession.length)return;
       const region=rehabRegion?REGIONES[rehabRegion]:{label:'General',color:'#374151'};
       const fase=FASES_REHAB[rehabFase];
-      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:7px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#f9f9f9'}">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:7px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#f9f9f9'}">${e.desc}</td><td style="padding:7px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#f9f9f9'}">${e.reps}</td><td style="padding:7px 10px;font-size:11px;background:${i%2===0?'#fff':'#f9f9f9'}">${e.notas||''}</td></tr>`).join('');
-      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:28px;color:#111}@media print{body{padding:16px}}</style></head><body>
+      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:8px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:8px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.desc}</td><td style="padding:8px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.reps}</td><td style="padding:8px 10px;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.notas||''}</td></tr>`).join('');
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>${getPrintCSS(brand.colorPrimary)}</style></head><body>
         <div style="display:flex;justify-content:space-between;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:16px">
           <div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary}">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
           <div style="text-align:right"><div style="font-size:15px;font-weight:800">Protocolo de Rehabilitación</div>
