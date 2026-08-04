@@ -206,6 +206,7 @@ function mapClientFromDB(r) {
     screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
     periodizacion: r.periodizacion||'',
     portal_token: r.portal_token||'',
+    criterios_avance_estado: r.criterios_avance_estado||{},
   }
 }
 function mapClientToDB(c) {
@@ -220,6 +221,7 @@ function mapClientToDB(c) {
     notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
     screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
     periodizacion: c.periodizacion||'',
+    criterios_avance_estado: c.criterios_avance_estado||{},
     ...(c.portal_token?{portal_token:c.portal_token}:{}),
   }
 }
@@ -806,4 +808,53 @@ export function useCentroConfig(){
   },[dbMode])
 
   return{config,saveConfig,dbMode}
+}
+
+// ─── HOOK: Plantilla editable de criterios de avance por fase ─────────────
+// Antes: FASES_METODO.criterios_avance era texto fijo en el código, y
+// checkCriteriosAvance() existía pero nunca se llamaba — no trababa nada.
+// Ahora: plantilla editable en Supabase (una fila por fase), sincronizada
+// entre dispositivos igual que el resto.
+const SEED_CRITERIOS={
+  restaura:[{id:'r1',texto:'EVA ≤ 3/10 en movimiento'},{id:'r2',texto:'ROM > 70% del normal'},{id:'r3',texto:'Fuerza ≥ 3/5 MRC'},{id:'r4',texto:'Control motor básico presente'},{id:'r5',texto:'Sin signos inflamatorios activos'}],
+  activa:[{id:'a1',texto:'EVA ≤ 2/10'},{id:'a2',texto:'ROM > 85% del normal'},{id:'a3',texto:'Fuerza ≥ 4/5 MRC'},{id:'a4',texto:'Control motor funcional establecido'},{id:'a5',texto:'Y-Balance: asimetría < 6 cm'}],
+  potencia:[{id:'p1',texto:'EVA ≤ 2/10'},{id:'p2',texto:'ROM > 90% del normal'},{id:'p3',texto:'Y-Balance: asimetría < 4 cm'},{id:'p4',texto:'FMS ≥ 14/21'},{id:'p5',texto:'Fuerza bilateral: asimetría < 10%'}],
+}
+export function useCriteriosAvanceTemplate(){
+  const [template,setTemplate]=useState(SEED_CRITERIOS)
+  const [loading,setLoading]=useState(true)
+
+  const fetchTemplate=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('criterios_avance_template').select('*')
+      if(error)throw error
+      if(data&&data.length>0){
+        const t={}
+        data.forEach(r=>{t[r.fase]=r.criterios||[]})
+        setTemplate(prev=>({...prev,...t}))
+      }
+    }catch(e){console.error('criterios_avance_template fetch:',e.message)}
+    finally{setLoading(false)}
+  },[])
+
+  useEffect(()=>{
+    fetchTemplate()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('crit_avance_rt_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'criterios_avance_template'},
+        payload=>{ if(payload.new)setTemplate(prev=>({...prev,[payload.new.fase]:payload.new.criterios||[]})) })
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetchTemplate])
+
+  const saveFase=useCallback(async(fase,criterios)=>{
+    setTemplate(prev=>({...prev,[fase]:criterios}))
+    if(isSupabaseReady){
+      const{error}=await supabase.from('criterios_avance_template').upsert({fase,criterios,updated_at:new Date().toISOString()},{onConflict:'fase'})
+      if(error)throw error
+    }
+  },[])
+
+  return{template,loading,saveFase}
 }

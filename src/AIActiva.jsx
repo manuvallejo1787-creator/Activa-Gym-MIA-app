@@ -3,6 +3,7 @@
 // Contexto: Manu Vallejo, entrenador y fisioterapeuta, Colonia del Sacramento, Uruguay
 
 import { useState } from "react";
+import { PERIODIZACIONES, periodizacionesPorFase } from "./planificacion.js";
 
 // ─── IDENTIDAD DEL ASISTENTE ─────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Sos el asistente de IA integrado en el sistema de gestión de ACTIVA Fitness Club y FisioActiva Colonia, el primer centro de rehabilitación y entrenamiento integrado de Colonia del Sacramento, Uruguay. 
@@ -545,14 +546,20 @@ Cliente: ${datos.nombre || ""} ${datos.apellido || ""}
         ? "RESTAURA (rehabilitación aguda), ACTIVA (reintegración), POTENCIA (desarrollo de capacidad), RINDE (mantenimiento/rendimiento)"
         : "RESTAURA (rehab/dolor presente), ACTIVA (reacondicionamiento base), POTENCIA (desarrollo de fuerza/hipertrofia), RINDE (rendimiento/mantenimiento)";
 
-      const metodologias = "Lineal Clásica (Bompa), DUP Ondulante Diaria, Bloques (Verkhoshansky), ATR (Issurin), Conjugado (Westside), HST (Hypertrophy Specific Training), Trifásico (Cal Dietz), Fitness General ACTIVA, Pérdida de Grasa";
+      const metodologiasPorFase = ['restaura','activa','potencia','rinde'].map(fase=>{
+        const compatibles=periodizacionesPorFase(fase);
+        const lista=compatibles.length>0?compatibles.map(p=>p.nombre).join(', '):'(ninguna — en RESTAURA no se asigna periodización de fuerza, el plan es el protocolo clínico de rehab)';
+        return `- ${fase}: ${lista}`;
+      }).join('\n');
 
       const prompt = `Analizá esta evaluación y sugerí dónde ubicar a la persona dentro del Método Activa Integra.
 
 ${contexto}
 
 Fases disponibles: ${fases}
-Metodologías de planificación: ${metodologias}
+
+Metodologías de planificación válidas POR FASE (la metodología sugerida DEBE pertenecer a la lista de la fase que elijas — nunca mezcles una metodología de otra fase):
+${metodologiasPorFase}
 ${ctxReglas(reglas,'evaluacion')}
 Respondé ÚNICAMENTE con este JSON:
 {
@@ -564,7 +571,7 @@ Respondé ÚNICAMENTE con este JSON:
   "deficiencias_fuerza": ["déficit de fuerza concreto: grupo/patrón débil según tests 1RM, ratios o PVFI, con referencia al valor"],
   "fase_sugerida": "restaura|activa|potencia|rinde",
   "fase_justificacion": "por qué esta fase, citando los datos que la fundamentan (2 líneas)",
-  "metodologia_sugerida": "nombre exacto de una de las metodologías listadas",
+  "metodologia_sugerida": "nombre exacto de una metodología de la lista correspondiente a fase_sugerida (si fase_sugerida es restaura, dejá este campo vacío)",
   "metodologia_justificacion": "por qué este sistema para este caso (2 líneas)",
   "prioridades": ["en orden, qué atacar primero según lo que más limita hoy"],
   "ejercicios_base": [

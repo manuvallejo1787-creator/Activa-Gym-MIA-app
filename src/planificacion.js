@@ -296,6 +296,69 @@ export const PERIODIZACIONES = {
   },
 };
 
+// ════════════════════════════════════════════════════════════════════════
+// MACRO-PLAN SUGERIDO: qué periodización corresponde a cada fase del
+// Método Activa Integra, y en qué orden se van encadenando a lo largo del
+// tiempo. Usa el campo compatible_fases que ya tenía cada periodización
+// (existía pero no se aplicaba en ningún lado — ahora es la fuente única
+// de verdad tanto para el selector de la ficha del cliente como para la IA).
+// ════════════════════════════════════════════════════════════════════════
+
+// Periodizaciones válidas para una fase dada (deriva de compatible_fases,
+// no hay lista separada que se pueda desincronizar).
+export const periodizacionesPorFase = (fase) =>
+  Object.values(PERIODIZACIONES).filter(p => p.compatible_fases.includes(fase));
+
+// Default sugerido + alternativas por fase. RESTAURA no tiene periodización
+// de fuerza propia a propósito: en esa fase el plan lo define el protocolo
+// clínico de rehab (fases R0-R2 de FASES_REHAB en criterios.js), no un
+// sistema de periodización de gimnasio.
+export const MACRO_PLAN_METODO = {
+  restaura: {
+    label: 'RESTAURA · N0', periodizacion: null, alternativas: [],
+    duracion: 'variable — la define el alta clínica',
+    objetivo: 'Sin periodización de fuerza. El plan de esta fase es el protocolo de rehab (FASES_REHAB), orientado a criterios clínicos de avance, no a un sistema de periodización de gimnasio.',
+  },
+  activa: {
+    label: 'ACTIVA · N1', periodizacion: 'lineal', alternativas: ['hst', 'fitness_general', 'perdida_grasa'],
+    duracion: '12–16 semanas',
+    objetivo: 'Construir base de fuerza y técnica antes de introducir variabilidad. Lineal Clásica por defecto — es la periodización pensada explícitamente para "primer ciclo de fuerza / post-rehabilitación".',
+  },
+  potencia: {
+    label: 'POTENCIA · N2', periodizacion: 'dup', alternativas: ['bloque', 'atr', 'hst', 'fitness_general', 'perdida_grasa'],
+    duracion: '8–16 semanas (cíclico)',
+    objetivo: 'Con la base ya construida, aumentar frecuencia y variabilidad de estímulo. DUP por defecto. Si el objetivo es explícitamente deportivo, Bloques o ATR son mejor punto de entrada a la especificidad que viene en RINDE.',
+  },
+  rinde: {
+    label: 'RINDE · N3', periodizacion: 'atr', alternativas: ['bloque', 'conjugado', 'triphasic'],
+    duracion: 'continuo / por temporada',
+    objetivo: 'Máxima especificidad deportiva. ATR por defecto (ciclos cortos, aptos para deportes de equipo). Conjugado y Trifásico quedan para levantadores/deportistas de fuerza avanzados con base técnica sólida.',
+  },
+};
+
+// Secuencia completa del macro-plan a largo plazo, ajustada según si el
+// objetivo del cliente es deportivo o no (un objetivo de estética/salud
+// nunca "necesita" llegar a RINDE — ese nivel es específicamente para
+// rendimiento deportivo, no una meta en sí misma para todo cliente).
+export const getMacroPlanSugerido = (objetivo = '') => {
+  const obj = (objetivo || '').toLowerCase();
+  const esDeportivo = obj.includes('deport') || obj.includes('jugar') || obj.includes('correr') ||
+    obj.includes('entrenar') || obj.includes('competir') || obj.includes('rendimiento');
+
+  const pasos = [
+    { ...MACRO_PLAN_METODO.restaura, fase: 'restaura' },
+    { ...MACRO_PLAN_METODO.activa, fase: 'activa' },
+  ];
+
+  if (esDeportivo) {
+    pasos.push({ ...MACRO_PLAN_METODO.potencia, fase: 'potencia', periodizacion: 'bloque', nota: 'Con objetivo deportivo, se prioriza Bloques sobre DUP como puente directo a la especificidad de RINDE.' });
+    pasos.push({ ...MACRO_PLAN_METODO.rinde, fase: 'rinde' });
+  } else {
+    pasos.push({ ...MACRO_PLAN_METODO.potencia, fase: 'potencia', nota: 'Sin objetivo deportivo explícito, el ciclo natural es rotar entre POTENCIA y ACTIVA (DUP / Fitness General / Pérdida de Grasa según composición corporal) — RINDE no es una meta necesaria.' });
+  }
+  return pasos;
+};
+
 // ─── CALCULADORA DE DURACIÓN DE SESIÓN ──────────────────────────────────
 // Calcula el tiempo total estimado de una sesión basado en:
 // sets × reps × tempo + descansos + transiciones
