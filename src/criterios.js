@@ -170,7 +170,50 @@ export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_i
   return todos;
 };
 
-// ─── CHEQUEO AUTOMÁTICO DE CRITERIOS ─────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+// CRITERIOS DE AVANCE PERSONALIZADOS POR CLIENTE
+// ────────────────────────────────────────────────────────────────────────
+// Combina tres fuentes para armar el checklist real de un cliente puntual,
+// en vez de aplicar la misma plantilla genérica a todos los que están en
+// la misma fase:
+//   1. Plantilla base editable (criteriosAvanceTemplate) — el piso mínimo
+//      objetivo/medible de la fase. Siempre CRÍTICOS (bloquean el avance).
+//   2. Objetivo declarado del cliente — vía generarCriteriosPersonalizados.
+//      Son señales de contexto (tolerancia a tal actividad, etc.), más
+//      cualitativas y difíciles de verificar con un check binario duro →
+//      quedan como SECUNDARIOS (informan, no bloquean).
+//   3. Determinaciones de la evaluación/IA (déficits funcionales y de
+//      fuerza detectados) — son hallazgos puntuales de ESTE cliente, así
+//      que si se detectaron, son justamente lo que hay que resolver antes
+//      de avanzar → CRÍTICOS.
+// El resultado es {criticos, secundarios} — solo criticos determinan si el
+// botón de avance se habilita.
+// ════════════════════════════════════════════════════════════════════════
+export const generarCriteriosAvancePersonalizados=({
+  objetivo='', fase='activa', eva_inicial='', rom_inicial_pct=null,
+  criteriosBase=[], deficienciasFuncionales=[], deficienciasFuerza=[],
+  banderaActiva=false,
+}={})=>{
+  const criticos=[];
+  const secundarios=[];
+
+  // 1) Plantilla base editable — piso mínimo objetivo de la fase
+  criteriosBase.forEach(c=>criticos.push({id:'base_'+c.id,texto:c.texto,origen:'base'}));
+
+  // 2) Bandera clínica activa: siempre crítico, siempre primero
+  if(banderaActiva)criticos.unshift({id:'bandera',texto:'Bandera clínica activa descartada / resuelta',origen:'bandera'});
+
+  // 3) Déficits detectados en la evaluación/IA — específicos de este cliente
+  deficienciasFuncionales.forEach((d,i)=>criticos.push({id:'deffunc_'+i,texto:`Resolver déficit funcional detectado: ${d}`,origen:'evaluacion'}));
+  deficienciasFuerza.forEach((d,i)=>criticos.push({id:'deffza_'+i,texto:`Resolver déficit de fuerza detectado: ${d}`,origen:'evaluacion'}));
+
+  // 4) Señales derivadas del objetivo declarado — contextuales, no bloquean
+  const extrasObjetivo=generarCriteriosPersonalizados(objetivo,fase,eva_inicial,rom_inicial_pct)
+    .filter(txt=>!criteriosBase.some(c=>c.texto===txt)); // no duplicar lo que ya está en la base
+  extrasObjetivo.forEach((txt,i)=>secundarios.push({id:'obj_'+i,texto:txt,origen:'objetivo'}));
+
+  return{criticos,secundarios};
+};
 // Dado un set de métricas, determina cuántos criterios se cumplen
 export const checkCriteriosAvance=(fase, metricas={})=>{
   const { eva, romPct, ybDiff, fmsTotal, fuerzaAsimetria } = metricas;

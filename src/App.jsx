@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS } from "./printStyles.js";
-import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
+import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
@@ -1556,6 +1556,16 @@ export default function App(){
         }
       }
       if(ai.objetivos_sugeridos?.length)upd.objetivo=ai.objetivos_sugeridos[0];
+      // Persistir las determinaciones ESTRUCTURADAS del análisis dentro de
+      // screening (que sí se guarda en Supabase — un campo suelto como
+      // cliente._ultimoAnalisisIA se perdería al recargar, igual que ya le
+      // pasa a _informeIA). Antes solo quedaba el texto narrativo del PDF,
+      // no se podían generar criterios de avance personalizados con eso.
+      upd.screening={...cliente.screening,_ultimoAnalisisIA:{
+        deficiencias_funcionales:ai.deficiencias_funcionales||[],
+        deficiencias_fuerza:ai.deficiencias_fuerza||[],
+        fecha:new Date().toISOString().split('T')[0],
+      }};
       upd._informeIA=composeInformeIA(ai)+(faseBloqueada?`<br><br><strong style="color:#DC2626">⚠ La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero el avance de fase se confirma desde el checklist "📈 Avance de fase" en el directorio de clientes — no se aplicó automáticamente.</strong>`:'');
       // mapear metodología sugerida a key de periodización
       const metaMap={'Lineal Clásica':'lineal','Ondulante Diaria':'dup','Bloques':'bloque','Sistema ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'triphasic','Fitness General':'fitness_general','Pérdida de Grasa':'perdida_grasa'};
@@ -2552,10 +2562,19 @@ export default function App(){
               </div>
               {avanceAbierto===c.id&&(()=>{
                 const sig=siguienteFase(c.nivel);
-                const items=criteriosAvanceTemplate[c.nivel]||[];
+                const sc=c.screening||{};
+                const ultimoAnalisis=sc._ultimoAnalisisIA||{};
+                const banderaActiva=sc.banderaRoja==='si'||sc.banderaNaranja==='si';
+                const {criticos,secundarios}=generarCriteriosAvancePersonalizados({
+                  objetivo:c.objetivo, fase:c.nivel,
+                  criteriosBase:criteriosAvanceTemplate[c.nivel]||[],
+                  deficienciasFuncionales:ultimoAnalisis.deficiencias_funcionales||[],
+                  deficienciasFuerza:ultimoAnalisis.deficiencias_fuerza||[],
+                  banderaActiva,
+                });
                 const estado=c.criterios_avance_estado||{};
-                const cumplidos=items.filter(it=>estado[it.id]).length;
-                const todosCumplidos=items.length>0&&cumplidos===items.length;
+                const cumplidos=criticos.filter(it=>estado[it.id]).length;
+                const todosCumplidos=criticos.length>0&&cumplidos===criticos.length;
                 const toggleItem=(itId)=>{
                   const nuevoEstado={...estado,[itId]:!estado[itId]};
                   saveClient({...c,criterios_avance_estado:nuevoEstado});
@@ -2570,25 +2589,38 @@ export default function App(){
                   <div style={{marginTop:8,paddingTop:10,borderTop:`1px dashed ${G2}`}}>
                     {!sig
                       ? <div style={{fontSize:11,color:G3,fontStyle:'italic'}}>RINDE es la última fase del método — no hay avance formal más allá de esto.</div>
-                      : items.length===0
+                      : criticos.length===0
                         ? <div style={{fontSize:11,color:G3}}>No hay criterios cargados para {NIVEL[c.nivel]?.label}. Cargalos con "✎ Editar plantilla" abajo.</div>
                         : <>
-                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
                               <span style={{fontSize:11,fontWeight:700,color:G4}}>Requisitos para avanzar de {NIVEL[c.nivel]?.label} → {NIVEL[sig]?.label}</span>
-                              <span style={{fontSize:10,fontWeight:700,color:todosCumplidos?'#16A34A':G3}}>{cumplidos}/{items.length}</span>
+                              <span style={{fontSize:10,fontWeight:700,color:todosCumplidos?'#16A34A':G3}}>{cumplidos}/{criticos.length}</span>
                             </div>
-                            {items.map(it=>(
-                              <label key={it.id} style={{display:'flex',gap:7,alignItems:'center',padding:'4px 2px',cursor:'pointer',fontSize:11,color:G4}}>
-                                <input type="checkbox" checked={!!estado[it.id]} onChange={()=>toggleItem(it.id)}/>
-                                <span style={{textDecoration:estado[it.id]?'line-through':'none',color:estado[it.id]?'#16A34A':G4}}>{it.texto}</span>
+                            <div style={{fontSize:9,color:'#94A3B8',marginBottom:6}}>Generados a partir del objetivo declarado y los hallazgos de la última evaluación de {c.nombre} — no es la misma lista para todos los clientes de esta fase.</div>
+                            {criticos.map(it=>(
+                              <label key={it.id} style={{display:'flex',gap:7,alignItems:'flex-start',padding:'4px 2px',cursor:'pointer',fontSize:11,color:G4}}>
+                                <input type="checkbox" checked={!!estado[it.id]} onChange={()=>toggleItem(it.id)} style={{marginTop:2}}/>
+                                <span style={{textDecoration:estado[it.id]?'line-through':'none',color:estado[it.id]?'#16A34A':G4}}>
+                                  {it.origen==='evaluacion'&&<span style={{background:'#FEF2F2',color:RJ,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:99,marginRight:5}}>DETECTADO</span>}
+                                  {it.origen==='bandera'&&<span style={{background:'#FEF2F2',color:RJ,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:99,marginRight:5}}>🚩</span>}
+                                  {it.texto}
+                                </span>
                               </label>
                             ))}
+                            {secundarios.length>0&&(
+                              <div style={{marginTop:8,background:'#F8FAFC',borderRadius:6,padding:'6px 8px'}}>
+                                <div style={{fontSize:9,fontWeight:700,color:'#94A3B8',marginBottom:3}}>CONTEXTO SEGÚN OBJETIVO (no bloquean, orientan)</div>
+                                {secundarios.map(it=>(
+                                  <div key={it.id} style={{fontSize:10,color:'#64748B',padding:'2px 0'}}>→ {it.texto}</div>
+                                ))}
+                              </div>
+                            )}
                             <button onClick={confirmarAvance} disabled={!todosCumplidos} style={{...s.btnGreen,width:'100%',marginTop:8,padding:'8px',opacity:todosCumplidos?1:.4,cursor:todosCumplidos?'pointer':'not-allowed'}}>
-                              {todosCumplidos?`✓ Confirmar avance a ${NIVEL[sig].label}`:`Faltan ${items.length-cumplidos} requisito/s para avanzar`}
+                              {todosCumplidos?`✓ Confirmar avance a ${NIVEL[sig].label}`:`Faltan ${criticos.length-cumplidos} requisito/s para avanzar`}
                             </button>
                           </>
                     }
-                    <button onClick={()=>setEditandoCriterios(editandoCriterios===c.nivel?null:c.nivel)} style={{fontSize:9,color:'#7C3AED',background:'none',border:'none',cursor:'pointer',marginTop:8,padding:0}}>✎ {editandoCriterios===c.nivel?'Cerrar edición':'Editar plantilla de '+NIVEL[c.nivel]?.label}</button>
+                    <button onClick={()=>setEditandoCriterios(editandoCriterios===c.nivel?null:c.nivel)} style={{fontSize:9,color:'#7C3AED',background:'none',border:'none',cursor:'pointer',marginTop:8,padding:0}}>✎ {editandoCriterios===c.nivel?'Cerrar edición':'Editar plantilla base de '+NIVEL[c.nivel]?.label}</button>
                     {editandoCriterios===c.nivel&&<EditorCriteriosFase fase={c.nivel}/>}
                   </div>
                 );
