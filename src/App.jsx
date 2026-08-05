@@ -2578,9 +2578,9 @@ export default function App(){
                               <span style={{fontSize:10,fontWeight:700,color:todosCumplidos?'#16A34A':G3}}>{cumplidos}/{items.length}</span>
                             </div>
                             {items.map(it=>(
-                              <label key={it.id} style={{display:'flex',gap:7,alignItems:'center',padding:'4px 2px',cursor:'pointer',fontSize:11,color:GD}}>
+                              <label key={it.id} style={{display:'flex',gap:7,alignItems:'center',padding:'4px 2px',cursor:'pointer',fontSize:11,color:G4}}>
                                 <input type="checkbox" checked={!!estado[it.id]} onChange={()=>toggleItem(it.id)}/>
-                                <span style={{textDecoration:estado[it.id]?'line-through':'none',color:estado[it.id]?'#16A34A':GD}}>{it.texto}</span>
+                                <span style={{textDecoration:estado[it.id]?'line-through':'none',color:estado[it.id]?'#16A34A':G4}}>{it.texto}</span>
                               </label>
                             ))}
                             <button onClick={confirmarAvance} disabled={!todosCumplidos} style={{...s.btnGreen,width:'100%',marginTop:8,padding:'8px',opacity:todosCumplidos?1:.4,cursor:todosCumplidos?'pointer':'not-allowed'}}>

@@ -211,7 +211,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       setPlanes(ps => ps.map(pl => pl.id === p.id ? newPlan : pl));
       return newPlan;
     });
-    onClose();
+    setShowPicker(false);
   }, [planActivo, diaActivo, comidaActiva]);
 
   // ── Eliminar alimento ─────────────────────────────────────────────────────
