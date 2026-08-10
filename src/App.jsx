@@ -932,6 +932,7 @@ export default function App(){
   const [session,setSession]=useState({
     cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
     planNombre:'', dias:[blankDia(1)], activeDia:0,
+    faseIdx:0, // qué fase de la periodización se está armando (no siempre la inicial — se puede adelantar trabajo)
   });
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
   const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
@@ -2824,7 +2825,22 @@ export default function App(){
             </div>
           </div>
           <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
+          {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+            const per=PERIODIZACIONES[activeClient.periodizacion];
+            const faseIdx=Math.min(session.faseIdx||0,per.fases.length-1);
+            return(
+              <div style={{marginTop:10,background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:7,padding:'8px 10px'}}>
+                <span style={s.lbl}>📅 Fase de "{per.nombre}" que estás armando ahora — por defecto la IA asumía siempre la inicial, acá elegís cuál</span>
+                <select value={faseIdx} onChange={e=>setSession(p=>({...p,faseIdx:parseInt(e.target.value)}))} style={{...s.sel,width:'100%',marginTop:3}}>
+                  {per.fases.map((f,i)=>(
+                    <option key={i} value={i}>Fase {i+1}/{per.fases.length} — {f.nombre} ({f.semanas}) · {f.reps} reps, RIR {f.rir}</option>
+                  ))}
+                </select>
+                <div style={{fontSize:10,color:'#6D28D9',marginTop:3}}>{per.fases[faseIdx]?.objetivo}</div>
+              </div>
+            );
+          })()}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={session.faseIdx||0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>

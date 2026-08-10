@@ -81,7 +81,7 @@ const Spinner = ({ msg = "Generando..." }) => (
 );
 
 // ─── MÓDULO 1: GENERADOR DE SESIONES DE ENTRENAMIENTO ───────────────────────
-export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historial = [], reglas = [], ejecucion = [], onApply }) {
+export function AIGeneradorSesion({ cliente, periodizacion, faseIndex=0, tests, exs, historial = [], reglas = [], ejecucion = [], onApply }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);
@@ -91,7 +91,13 @@ export function AIGeneradorSesion({ cliente, periodizacion, tests, exs, historia
   const generar = async () => {
     setLoading(true); setError(null); setResult(null);
     try {
-      const faseActiva = periodizacion?.fases?.[0];
+      // Antes esto era siempre periodizacion?.fases?.[0] — la IA asumía que
+      // toda sesión pertenecía a la fase inicial del plan, aunque el
+      // profesional esté adelantando trabajo y armando fases posteriores.
+      const totalFases = periodizacion?.fases?.length || 0;
+      const idx = Math.min(Math.max(faseIndex, 0), Math.max(totalFases - 1, 0));
+      const faseActiva = periodizacion?.fases?.[idx];
+      const esAdelanto = idx > 0;
       const rm1s = tests?.map(t => `${t.test_nombre}: ${t.rm1_real||t.rm1_calculado||'sin dato'} kg`).join(", ") || "sin tests registrados";
 
       // Contexto de aprendizaje: reglas del profesional + historial de planes del cliente
@@ -120,12 +126,12 @@ Semáforo: ${cliente?.semaforo}
 Peso corporal: ${cliente?.screening?.peso || "no registrado"} kg
 Restricciones: ${cliente?.restricciones || "ninguna"}
 Periodización activa: ${periodizacion?.nombre || "sin plan"}
-Fase actual: ${faseActiva ? `${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : "no definida"}
-Tests de fuerza 1RM: ${rm1s}
+Fase actual: ${faseActiva ? `Fase ${idx+1}/${totalFases} — ${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : "no definida"}
+${esAdelanto?`⚠ El profesional está ADELANTANDO trabajo: esta sesión NO es de la fase inicial del plan, es la fase ${idx+1} de ${totalFases}. Prescribí acorde a los parámetros de ESA fase específica (reps/intensidad/RIR de arriba), no a los de una fase de adaptación inicial.\n`:''}Tests de fuerza 1RM: ${rm1s}
 Instrucciones adicionales: ${instrucciones || "ninguna"}
 ${reglasTxt}${histTxt}${ejecTxt}
 ESTRUCTURA OBLIGATORIA DE LA SESIÓN (orden fijo de bloques):
-1. movilidad → 2. activacion → 3. fuerza/potencia (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
+1. movilidad → 2. activacion → 3. fuerza/potencia/pliometria (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
 El orden NO se altera. Una sesión típica usa 4-6 bloques siguiendo ese flujo.
 
 EJERCICIOS DISPONIBLES — AGRUPADOS POR BLOQUE.
@@ -140,7 +146,7 @@ ${(() => {
 })()}
 
 REGLAS ESTRICTAS:
-- El "type" de cada bloque DEBE ser uno de: movilidad, activacion, zona_media, prev_rehab, potencia, fuerza, accesorios, cardio, flex_recovery, propiocepcion, funcional.
+- El "type" de cada bloque DEBE ser uno de: movilidad, activacion, zona_media, prev_rehab, potencia, pliometria, fuerza, accesorios, cardio, flex_recovery, propiocepcion, funcional.
 - Cada "exId" dentro de un bloque DEBE pertenecer al grupo de ese bloque (mismo tipo). Si el ejercicio "sentadilla" está listado bajo BLOQUE "fuerza", solo puede ir en un bloque type="fuerza".
 - Usá ÚNICAMENTE los IDs exactos listados arriba. No inventes IDs.
 - Respetá el orden: movilidad y activación al inicio, fuerza/potencia en el medio, cardio/recovery al final.
