@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase, FASES_REHAB, generarProtocoloRehab, mapearFaseRehabANegocio } from "./criterios.js";
 import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS } from "./printStyles.js";
+import DateInput from "./DateInput.jsx";
 import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
@@ -431,7 +432,7 @@ function SesionClienteComp({ paciente, reglas=[] }) {
 
           {/* Fecha, fase, objetivo */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:8,marginBottom:10}}>
-            <div><span style={s2.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s2.inp}/></div>
+            <div><span style={s2.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s2.inp}/></div>
             <div><span style={s2.lbl}>N° de sesión</span><input type="number" value={form.numero_sesion} onChange={e=>set('numero_sesion',parseInt(e.target.value)||1)} style={s2.inp}/></div>
             <div><span style={s2.lbl}>Objetivo de la sesión</span><input value={form.objetivo_sesion} onChange={e=>set('objetivo_sesion',e.target.value)} placeholder="Ej: reducir EVA, mejorar ROM..." style={s2.inp}/></div>
           </div>
@@ -1036,7 +1037,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                   </div>
                 </div>
               )}
-              <div><span style={fs.lbl}>Fecha</span><input type="date" value={ev.fecha} onChange={e=>set('fecha',e.target.value)} style={fs.inp}/></div>
+              <div><span style={fs.lbl}>Fecha</span><DateInput value={ev.fecha} onChange={v=>set('fecha',v)} style={fs.inp}/></div>
               <div><span style={fs.lbl}>Evaluador/a</span><input value={ev.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={fs.inp} placeholder="Nombre del profesional"/></div>
               <div style={{gridColumn:'1/-1'}}>
                 <label style={{display:'flex',gap:8,alignItems:'center',cursor:'pointer',fontSize:11,color:GD}}>
@@ -1989,7 +1990,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             <div><span style={fs.lbl}>Apellido *</span><input value={form.apellido} onChange={e=>set('apellido',e.target.value)} style={fs.inp}/></div>
             <div><span style={fs.lbl}>N° Documento *</span><input value={form.documento} onChange={e=>set('documento',e.target.value)} style={fs.inp} placeholder="CI / Pasaporte"/></div>
             <div><span style={fs.lbl}>Celular</span><input value={form.celular||''} onChange={e=>set('celular',e.target.value)} style={fs.inp}/></div>
-            <div><span style={fs.lbl}>Fecha de nacimiento</span><input type="date" value={form.fechaNac||''} onChange={e=>set('fechaNac',e.target.value)} style={fs.inp}/></div>
+            <div><span style={fs.lbl}>Fecha de nacimiento</span><DateInput value={form.fechaNac||''} onChange={v=>set('fechaNac',v)} style={fs.inp}/></div>
             <div><span style={fs.lbl}>Género</span><select value={form.genero||''} onChange={e=>set('genero',e.target.value)} style={{...fs.sel,width:'100%'}}><option value=''>Seleccionar</option><option value='masculino'>Masculino</option><option value='femenino'>Femenino</option></select></div>
             <div><span style={fs.lbl}>Región principal</span><select value={form.region} onChange={e=>set('region',e.target.value)} style={{...fs.sel,width:'100%'}}>{REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}</select></div>
             <div><span style={fs.lbl}>Derivado por</span><input value={form.derivadoPor||''} onChange={e=>set('derivadoPor',e.target.value)} style={fs.inp} placeholder="Médico, especialidad..."/></div>

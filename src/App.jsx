@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS } from "./printStyles.js";
+import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
@@ -1860,10 +1861,10 @@ export default function App(){
               </div>
               <div><span style={s.lbl}>N° de documento *</span><input value={form.documento} onChange={e=>set('documento',e.target.value)} style={s.inp} placeholder="CI / Pasaporte"/></div>
               <div><span style={s.lbl}>Celular *</span><input value={form.celular} onChange={e=>set('celular',e.target.value)} style={s.inp} placeholder="+598 9x xxx xxx"/></div>
-              <div><span style={s.lbl}>Fecha de nacimiento</span><input type="date" value={sc.fechaNac} onChange={e=>setSCK('fechaNac',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Fecha de nacimiento</span><DateInput value={sc.fechaNac} onChange={v=>setSCK('fechaNac',v)} style={s.inp}/></div>
               <div><span style={s.lbl}>Género</span>{sel2('genero',[['','Seleccionar'],['masculino','Masculino'],['femenino','Femenino']])}</div>
               <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Ocupación</span><input value={sc.ocupacion} onChange={e=>setSCK('ocupacion',e.target.value)} style={s.inp} placeholder="Trabajo / actividad principal"/></div>
-              <div><span style={s.lbl}>Fecha de ingreso</span><input type="date" value={form.fechaIngreso} onChange={e=>set('fechaIngreso',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Fecha de ingreso</span><DateInput value={form.fechaIngreso} onChange={v=>set('fechaIngreso',v)} style={s.inp}/></div>
               {/* ── POLÍTICA DE REFERIDOS ── */}
               <div style={{gridColumn:'1/-1',background:'#FFF9EC',border:'1px solid #FCD34D',borderRadius:7,padding:'10px 12px',marginTop:4}}>
                 <div style={{fontSize:11,fontWeight:700,color:'#92400E',marginBottom:6}}>🎁 Política de referidos</div>
@@ -1950,7 +1951,7 @@ export default function App(){
           <div>
             <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2 — Evaluación profesional.</strong> Completado por el equipo del centro.</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-              <div><span style={s.lbl}>Fecha de evaluación</span><input type="date" value={sc.fechaEvaluacion||''} onChange={e=>setSCK('fechaEvaluacion',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Fecha de evaluación</span><DateInput value={sc.fechaEvaluacion||''} onChange={v=>setSCK('fechaEvaluacion',v)} style={s.inp}/></div>
               <div><span style={s.lbl}>Evaluador/es</span><input value={sc.evaluador||''} onChange={e=>setSCK('evaluador',e.target.value)} style={s.inp} placeholder="Nombre y cargo"/></div>
               <div><span style={s.lbl}>Derivado a</span>{sel2('derivadoA',[['','Seleccionar'],['clinica','Clínica'],['entrenamiento','Entrenamiento'],['ambos','Ambos']])}</div>
             </div>
@@ -2165,7 +2166,7 @@ export default function App(){
                 ))}
                 <div style={{marginTop:8}}><span style={s.lbl}>Notas del equipo (fisio/entrenador)</span><textarea value={sc.pvfi_notas||''} onChange={e=>setSCK('pvfi_notas',e.target.value)} rows={2} placeholder="Observaciones integradas del equipo..." style={{...s.inp,resize:'vertical'}}/></div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
-                  <div><span style={s.lbl}>Próxima evaluación</span><input type="date" value={sc.pvfi_proxima_eval||''} onChange={e=>setSCK('pvfi_proxima_eval',e.target.value)} style={s.inp}/></div>
+                  <div><span style={s.lbl}>Próxima evaluación</span><DateInput value={sc.pvfi_proxima_eval||''} onChange={v=>setSCK('pvfi_proxima_eval',v)} style={s.inp}/></div>
                   <div style={{display:'flex',alignItems:'flex-end'}}><div style={{fontSize:10,color:G3,lineHeight:1.5}}>Recomendado: 8–12 semanas desde la evaluación inicial.</div></div>
                 </div>
               </div>
@@ -2348,7 +2349,7 @@ export default function App(){
     const isLast=step===totalSteps-1;
 
     return(
-      <OverlayWrap wide>
+      OverlayWrap({wide:true,children:(<>
         {/* Header del wizard */}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
           <div>
@@ -2387,7 +2388,7 @@ export default function App(){
         {step===0&&(!form.nombre||!form.apellido||!form.documento||!form.celular)&&(
           <div style={{fontSize:10,color:'#D97706',textAlign:'center',marginTop:6}}>* Nombre, apellido, documento y celular son obligatorios para continuar</div>
         )}
-      </OverlayWrap>
+      </>)})
     );
   };
 
@@ -2622,7 +2623,7 @@ export default function App(){
                           </>
                     }
                     <button onClick={()=>setEditandoCriterios(editandoCriterios===c.nivel?null:c.nivel)} style={{fontSize:9,color:'#7C3AED',background:'none',border:'none',cursor:'pointer',marginTop:8,padding:0}}>✎ {editandoCriterios===c.nivel?'Cerrar edición':'Editar plantilla base de '+NIVEL[c.nivel]?.label}</button>
-                    {editandoCriterios===c.nivel&&<EditorCriteriosFase fase={c.nivel}/>}
+                    {editandoCriterios===c.nivel&&EditorCriteriosFase({fase:c.nivel})}
                   </div>
                 );
               })()}
@@ -2693,7 +2694,7 @@ export default function App(){
               <option value=''>Sin cliente vinculado</option>
               {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
             </select>
-            {activeClient&&<SemaforoBanner cliente={activeClient}/>}
+            {activeClient&&SemaforoBanner({cliente:activeClient})}
           </div>
         )}
         {clients.filter(c=>!c.screeningCompleto).length>0&&(
@@ -2809,7 +2810,7 @@ export default function App(){
         <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`}}>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
             <div><span style={s.lbl}>Nombre del plan</span><input value={session.planNombre} onChange={e=>setSession(p=>({...p,planNombre:e.target.value}))} placeholder="Ej: Plan pérdida de grasa 16 sem" style={s.inp}/></div>
-            <div><span style={s.lbl}>Fecha inicio del plan</span><input type="date" value={session.fecha} onChange={e=>setSession(p=>({...p,fecha:e.target.value}))} style={s.inp}/></div>
+            <div><span style={s.lbl}>Fecha inicio del plan</span><DateInput value={session.fecha} onChange={v=>setSession(p=>({...p,fecha:v}))} style={s.inp}/></div>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
             <div><span style={s.lbl}>Nombre del día {activeDiaIdx+1}</span><input value={dia.name} onChange={e=>setDia(d=>({...d,name:e.target.value}))} style={s.inp}/></div>
@@ -2857,10 +2858,10 @@ export default function App(){
             </div>
           </div>
         </div>
-        {activeClient&&<SemaforoBanner cliente={activeClient}/>}
+        {activeClient&&SemaforoBanner({cliente:activeClient})}
         {/* ── MODAL: HISTORIAL DE PLANES DEL CLIENTE ── */}
         {showHistorial&&(
-          <OverlayWrap wide>
+          OverlayWrap({wide:true,children:(<>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
               <div style={{fontSize:17,fontWeight:800}}>📂 Historial de planes — {activeClient?.nombre} {activeClient?.apellido}</div>
               <button onClick={()=>setShowHistorial(false)} style={s.btnG}>✕</button>
@@ -2902,13 +2903,13 @@ export default function App(){
               </div>
             }
             <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Los planes marcados como ⭐ ejemplo y el historial reciente se le pasan a la IA como contexto al generar nuevas sesiones.</div>
-          </OverlayWrap>
+          </>)})
         )}
         {/* ── MODAL: ENTRENAR IA (base de conocimiento) ── */}
         {showEntrenarIA&&(()=>{
           const AMB={entrenamiento:'Entrenamiento',rehab:'Rehabilitación',nutricion:'Nutrición',evaluacion:'Evaluaciones',general:'General'};
           return(
-            <OverlayWrap wide>
+            OverlayWrap({wide:true,children:(<>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                 <div style={{fontSize:17,fontWeight:800}}>🧠 Entrenar IA — Reglas y criterio</div>
                 <button onClick={()=>setShowEntrenarIA(false)} style={s.btnG}>✕</button>
@@ -2935,7 +2936,7 @@ export default function App(){
                 }
               </div>
               <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Las reglas activas de ámbito "Entrenamiento" y "General" se inyectan al generar sesiones. Las de Rehab/Nutrición/Evaluaciones se sumarán a esos generadores en la próxima fase.</div>
-            </OverlayWrap>
+            </>)})
           );
         })()}
         {verEjecucion&&<EjecucionModal plan={verEjecucion} exs={exs} onClose={()=>setVerEjecucion(null)}/>}
@@ -2948,7 +2949,7 @@ export default function App(){
           </div>
         )}
         {overrideState&&(
-          <OverlayWrap>
+          OverlayWrap({children:(<>
             <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:overrideState.isRestriction?R:'#92400E'}}>
               {overrideState.isRestriction?'⚠ Restricción clínica activa':'Confirmar Override de bloque'}
             </div>
@@ -2966,7 +2967,7 @@ export default function App(){
               <button onClick={confirmOverride} disabled={overrideState.isRestriction&&!overrideState.note} style={{...s.btnR,flex:1,opacity:overrideState.isRestriction&&!overrideState.note?.4:1}}>Confirmar con override</button>
               <button onClick={()=>setOverrideState(null)} style={{...s.btnG,flex:1}}>Cancelar</button>
             </div>
-          </OverlayWrap>
+          </>)})
         )}
         {/* CONTADOR DE DURACIÓN DE LA SESIÓN (por día, se recalcula y reinicia en cada sesión) */}
         {(()=>{
@@ -3297,7 +3298,7 @@ export default function App(){
       return m?`https://www.youtube.com/embed/${m[1]}`:null;
     };
     return(
-      <OverlayWrap wide>
+      OverlayWrap({wide:true,children:(<>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
           <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
           <button onClick={onClose} style={s.btnG}>✕</button>
@@ -3348,7 +3349,7 @@ export default function App(){
           </div>
         </div>
         <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
-      </OverlayWrap>
+      </>)})
     );
   };
 
@@ -3366,7 +3367,7 @@ export default function App(){
     };
     return(
       <div style={{padding:'12px 14px'}}>
-        {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
+        {showExFormLocal&&ExForm({ex:editingExLocal,onSave:saveExLocal,onClose:()=>{setShowExFormLocal(false);setEditingExLocal(null);},exs,s})}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
           <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
           <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
@@ -3602,7 +3603,7 @@ export default function App(){
 
     return(
       <div style={{padding:'12px 14px'}}>
-        {showAddEx&&<NuevoEjercicioRehabComp region={rehabRegion} fase={rehabFase} onSave={(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);}} onClose={()=>setShowAddEx(false)} s={s}/>}
+        {showAddEx&&NuevoEjercicioRehabComp({region:rehabRegion,fase:rehabFase,onSave:(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);},onClose:()=>setShowAddEx(false),s})}
 
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:`4px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:3}}>🩹 Constructor de Sesión — Rehabilitación</div>
@@ -3816,7 +3817,7 @@ export default function App(){
               </div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
               <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
               <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
               <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
@@ -3891,7 +3892,7 @@ export default function App(){
               </div>
             </div>)}
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha de inicio</span><input type="date" value={form.fecha_inicio} onChange={e=>set('fecha_inicio',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
               <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
             </div>
             <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
@@ -3988,11 +3989,11 @@ export default function App(){
 
     return(
       <div style={{padding:'12px 14px'}}>
-        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
-        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)}/>}
-        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} onSave={(tests)=>{
+        {showForm&&FuerzaFormComp({pac,editingTest,saveTest,allTests,onClose:()=>{setShowForm(false);setEditingTest(null);}})}
+        {showPlan&&PlanFormComp({selClientId,savePlan,saveClientFn,onClose:()=>setShowPlan(false)})}
+        {showCustomEdit&&CustomTestsModal({customTests,onClose:()=>setShowCustomEdit(false),onSave:(tests)=>{
           saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
-        }}/>}
+        }})}
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
           <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
@@ -4129,8 +4130,8 @@ export default function App(){
 
   return(
     <div style={s.page}>
-      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
-      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand}/>}
+      {clientWizard&&ClientWizardModal({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})}
+      {informeCliente&&InformeClienteModal({cliente:informeCliente,onClose:()=>setInformeCliente(null),saveClient,exs,s,brand})}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...
@@ -4184,9 +4185,9 @@ export default function App(){
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='clientes'&&ClientesTab()}
         {tab==='session'&&SessionTab()}
-        {tab==='fuerza'&&<FuerzaTab/>}
+        {tab==='fuerza'&&FuerzaTab()}
         {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}
-        {tab==='rehab'&&<RehabTab/>}
+        {tab==='rehab'&&RehabTab()}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
@@ -4197,8 +4198,8 @@ export default function App(){
           }}
         />}
         {tab==='export'&&ExportTab()}
-        {tab==='db'&&<DBTab/>}
-        {tab==='brand'&&<BrandingTab/>}
+        {tab==='db'&&DBTab()}
+        {tab==='brand'&&BrandingTab()}
       </div>
     </div>
   );

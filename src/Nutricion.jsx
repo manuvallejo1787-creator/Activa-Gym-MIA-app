@@ -660,7 +660,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
               <div style={{fontSize:9,color:G3,marginTop:4,fontStyle:'italic'}}>Los planes (sobre todo los ⭐ ejemplo) se le pasan a la IA como contexto al generar nuevos planes.</div>
             </div>
           )}
-          <NuevoPlanFormComp cliente={cliente} prefill={prefill} onCrear={crearPlan}/>
+          {NuevoPlanFormComp({cliente,prefill,onCrear:crearPlan})}
         </>
       )}
     </div>
@@ -854,8 +854,8 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   // ─── RENDER PRINCIPAL ─────────────────────────────────────────────────────
   return(
     <div style={{minHeight:'100vh',background:G1}}>
-      {showPicker && <PickerAlimentosComp onClose={()=>setShowPicker(false)} onAdd={agregarAlimento} comidaActiva={comidaActiva} todosAlimentos={todosAlimentos} onNuevoAlimento={()=>{setShowPicker(false);setShowNuevoAlimento(true);}}/>}
-      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{saveAlimentoCustom(al).catch(e=>alert('No se pudo guardar el alimento: '+e.message));setShowNuevoAlimento(false);}}/>}
+      {showPicker && PickerAlimentosComp({onClose:()=>setShowPicker(false),onAdd:agregarAlimento,comidaActiva,todosAlimentos,onNuevoAlimento:()=>{setShowPicker(false);setShowNuevoAlimento(true);}})}
+      {showNuevoAlimento && NuevoAlimentoFormComp({onClose:()=>setShowNuevoAlimento(false),onSave:al=>{saveAlimentoCustom(al).catch(e=>alert('No se pudo guardar el alimento: '+e.message));setShowNuevoAlimento(false);}})}
       {/* Sub-tabs */}
       <div style={{display:'flex',borderBottom:`2px solid ${G2}`,background:WH,overflowX:'auto'}}>
         {[['planes','📋 Planes'],['plan','🏗️ Constructor'],['alimentos','📚 Alimentos']].map(([v,lbl])=>(
@@ -866,7 +866,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       </div>
       {view==='planes'    && VistaPlanes()}
       {view==='plan'      && VistaConstructor()}
-      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)} onEliminar={id=>deleteAlimentoCustom(id).catch(e=>alert('No se pudo eliminar: '+e.message))}/>}
+      {view==='alimentos' && VistaAlimentosComp({todosAlimentos,onNuevoAlimento:()=>setShowNuevoAlimento(true),onEliminar:id=>deleteAlimentoCustom(id).catch(e=>alert('No se pudo eliminar: '+e.message))})}
     </div>
   );
 }
