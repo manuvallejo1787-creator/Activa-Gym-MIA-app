@@ -775,3 +775,101 @@ export const nivelLSI = (lsi) => {
   if (lsi >= 85) return { label: 'Asimetría leve', color: '#D97706' };
   return { label: 'Asimetría significativa', color: '#CC0000' };
 };
+
+// ════════════════════════════════════════════════════════════════════════
+// FIN DE PERIODIZACIÓN — clasificación y cálculo de fechas
+// ────────────────────────────────────────────────────────────────────────
+// cicloTipo:
+//  'semanal' → las fases rotan DENTRO de una semana (por día) o en un
+//              patrón que se genera todo de una vez (DUP, Conjugado,
+//              Fitness General). Acá solo importa la fecha de FIN de toda
+//              la periodización — no hay "fin de fase" intermedio que
+//              requiera volver a generar nada.
+//  'fases'   → las fases son bloques secuenciales de 1+ semanas (Lineal,
+//              Bloques, ATR, HST, Trifásico, Pérdida de Grasa). Acá lo que
+//              importa para el recordatorio es cuándo termina la FASE
+//              ACTUAL del cliente, no recién el final de todo el ciclo.
+export const CICLO_TIPO={
+  lineal:'fases', dup:'semanal', bloque:'fases', atr:'fases', conjugado:'semanal',
+  hst:'fases', triphasic:'fases', fitness_general:'semanal', perdida_grasa:'fases',
+};
+
+// Extrae semanas totales de un texto de duración tipo "12–16 semanas" o
+// "8–16 semanas (cíclico)" → toma el número más alto del rango. Para
+// duraciones sin número fijo (ej. "continuo / por temporada", Conjugado),
+// devuelve null — esas requieren que el profesional ponga la fecha a mano.
+export const parseDuracionSemanas=(duracion='')=>{
+  const nums=(duracion.match(/\d+/g)||[]).map(Number);
+  return nums.length?Math.max(...nums):null;
+};
+
+// Semanas por fase (para el tipo 'fases'), a partir del campo "semanas" de
+// cada fase (ej: "1–4" → 4, "2–3 sem" → 3, "2 sem" → 2). Si no se puede
+// parsear (ej. DUP con "Lunes"), devuelve null.
+const semanasDeFase=(fase)=>{
+  const txt=fase.semanas||'';
+  const rango=txt.match(/(\d+)\s*[–-]\s*(\d+)/);
+  if(rango)return parseInt(rango[2],10)-parseInt(rango[1],10)+1;
+  const un=txt.match(/(\d+)/);
+  return un?parseInt(un[1],10):null;
+};
+
+const sumarDias=(iso,dias)=>{
+  const d=new Date(iso+'T00:00:00');
+  d.setDate(d.getDate()+dias);
+  return d.toISOString().split('T')[0];
+};
+
+// Devuelve {tipo, fechaFin, faseActual, faseActualFin} usando la fecha de
+// inicio real del cliente. Si la periodización no tiene fases parseables
+// (ej. DUP) o duración fija, fechaFin puede ser null — en ese caso el
+// profesional pone la fecha a mano en periodizacionFin.
+export const calcularCronogramaPeriodizacion=(inicioISO,periodizacionId)=>{
+  const per=PERIODIZACIONES[periodizacionId];
+  if(!per||!inicioISO)return null;
+  const tipo=CICLO_TIPO[periodizacionId]||'fases';
+  const semanasTotal=parseDuracionSemanas(per.duracion);
+  const fechaFinTotal=semanasTotal?sumarDias(inicioISO,semanasTotal*7):null;
+
+  if(tipo==='semanal'){
+    return{tipo,fechaFin:fechaFinTotal,faseActual:null,faseActualFin:null};
+  }
+  // tipo 'fases': primera fase cuyo fin acumulado es >= hoy
+  let acumSemanas=0,faseActual=null,faseActualFin=null;
+  for(const f of per.fases){
+    const sem=semanasDeFase(f);
+    if(sem==null){faseActual=null;faseActualFin=null;break;}
+    acumSemanas+=sem;
+    const finFaseISO=sumarDias(inicioISO,acumSemanas*7);
+    if(new Date(finFaseISO+'T23:59:59')>=new Date()){
+      faseActual=f.nombre;faseActualFin=finFaseISO;
+      break;
+    }
+  }
+  return{tipo,fechaFin:fechaFinTotal,faseActual,faseActualFin};
+};
+
+// Alerta lista para mostrar en el dashboard: null si no hay periodización
+// activa o no hay fecha de referencia calculable.
+export const calcularAlertaPeriodizacion=(cliente)=>{
+  if(!cliente.periodizacion||!cliente.periodizacionInicio)return null;
+  const per=PERIODIZACIONES[cliente.periodizacion];
+  if(!per)return null;
+  const cron=calcularCronogramaPeriodizacion(cliente.periodizacionInicio,cliente.periodizacion);
+  // Prioridad: fecha manual (periodizacionFin) si el profesional la puso/ajustó,
+  // si no, la fase actual (tipo 'fases') o el fin total (tipo 'semanal').
+  const fechaRef=cliente.periodizacionFin || (cron?.tipo==='fases'?cron.faseActualFin:cron?.fechaFin);
+  if(!fechaRef)return null;
+  const hoy=new Date();
+  const fin=new Date(fechaRef+'T00:00:00');
+  const diasRestantes=Math.round((fin-hoy)/(1000*60*60*24));
+  const esFaseIntermedia=cron?.tipo==='fases' && cron.faseActualFin && !cliente.periodizacionFin;
+  return{
+    fechaRef, diasRestantes,
+    vencida: diasRestantes<0,
+    proxima: diasRestantes>=0 && diasRestantes<=14,
+    mensaje: esFaseIntermedia
+      ? `Fase "${cron.faseActual}" de ${per.nombre} ${diasRestantes<0?'venció':'termina'}`
+      : `${per.nombre} ${diasRestantes<0?'venció':'termina'}`,
+  };
+};

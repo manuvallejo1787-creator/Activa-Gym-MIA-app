@@ -1,13 +1,13 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
 import PoseROM from "./PoseROM.jsx";
-import { getPrintCSS } from "./printStyles.js";
+import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -2087,12 +2087,38 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
                     );
                   }
                   return(<>
-                    <select value={form.periodizacion||''} onChange={e=>set('periodizacion',e.target.value)} style={{...s.sel,width:'100%',marginTop:2}}>
+                    <select value={form.periodizacion||''} onChange={e=>{
+                      const val=e.target.value;
+                      const hoy=new Date().toISOString().split('T')[0];
+                      set('periodizacion',val);
+                      if(val){
+                        const per=PERIODIZACIONES[val];
+                        const semanas=per?parseDuracionSemanas(per.duracion):null;
+                        let finCalc='';
+                        if(semanas){const d=new Date(hoy+'T00:00:00');d.setDate(d.getDate()+semanas*7);finCalc=d.toISOString().split('T')[0];}
+                        set('periodizacionInicio',hoy);
+                        set('periodizacionFin',finCalc);
+                        // Snapshot de métricas al momento de asignar — es el "inicio" contra
+                        // el que se va a comparar en la mini evaluación de cierre.
+                        set('periodizacionSnapshotInicio',{fecha:hoy,peso:sc.peso||'',pctGrasa:sc.pctGrasa||'',imc:sc.imc||''});
+                      }else{
+                        set('periodizacionInicio','');set('periodizacionFin','');set('periodizacionSnapshotInicio',null);
+                      }
+                    }} style={{...s.sel,width:'100%',marginTop:2}}>
                       <option value=''>— Sin sistema asignado —</option>
                       {compatibles.map(v=>(
                         <option key={v.id} value={v.id}>{v.id===macro?.periodizacion?'⭐ ':''}{v.nombre} · {v.duracion}</option>
                       ))}
                     </select>
+                    {form.periodizacion&&(
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:6}}>
+                        <div><span style={{...s.lbl,fontSize:9}}>Fecha de inicio</span><DateInput value={form.periodizacionInicio||''} onChange={v=>set('periodizacionInicio',v)} style={s.inp}/></div>
+                        <div>
+                          <span style={{...s.lbl,fontSize:9}}>Reevaluar / fin estimado</span>
+                          <DateInput value={form.periodizacionFin||''} onChange={v=>set('periodizacionFin',v)} style={s.inp}/>
+                        </div>
+                      </div>
+                    )}
                     {macro?.periodizacion&&!form.periodizacion&&(
                       <div style={{fontSize:10,color:G3,marginTop:3}}>⭐ Sugerida por defecto para esta fase: <strong>{PERIODIZACIONES[macro.periodizacion]?.nombre}</strong> — {macro.objetivo}</div>
                     )}
@@ -2655,6 +2681,96 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
 
   // ─── BANNER SEMÁFORO ─────────────────────────────────────────────────────
 
+// ── Mini evaluación de cierre de periodización ──────────────────────────
+// Corta, a propósito: solo lo necesario para comparar inicio vs. fin y
+// decidir si se cumplieron los requisitos de avance. Genera un PDF listo
+// para mostrarle al cliente y queda registrada en periodizacionesHistorial.
+const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
+  const per=PERIODIZACIONES[cliente.periodizacion];
+  const snap=cliente.periodizacionSnapshotInicio||{};
+  const [pesoFin,setPesoFin]=useState(cliente.screening?.peso||'');
+  const [pctGrasaFin,setPctGrasaFin]=useState(cliente.screening?.pctGrasa||'');
+  const [notas,setNotas]=useState('');
+  const [cumplioObjetivo,setCumplioObjetivo]=useState(null); // true/false/null
+
+  const diff=(ini,fin)=>{
+    const a=parseFloat(ini),b=parseFloat(fin);
+    if(isNaN(a)||isNaN(b))return null;
+    const d=b-a;
+    return {valor:d,txt:(d>0?'+':'')+d.toFixed(1)};
+  };
+  const diffPeso=diff(snap.peso,pesoFin);
+  const diffGrasa=diff(snap.pctGrasa,pctGrasaFin);
+
+  const generarYCerrar=()=>{
+    const hoy=new Date().toISOString().split('T')[0];
+    const registro={
+      id:genId('pereval'),
+      periodizacionId:cliente.periodizacion,
+      periodizacionNombre:per?.nombre||cliente.periodizacion,
+      faseMetodo:cliente.nivel,
+      inicio:{fecha:snap.fecha||cliente.periodizacionInicio,peso:snap.peso,pctGrasa:snap.pctGrasa,imc:snap.imc},
+      fin:{fecha:hoy,peso:pesoFin,pctGrasa:pctGrasaFin},
+      cumplioObjetivo,notas,
+    };
+    const bc=brand.colorPrimary;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cierre de periodización — ${cliente.nombre}</title><style>${getPrintCSS(bc)}
+      .comp{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #e2e2e2;border-radius:6px;overflow:hidden;margin-bottom:14px}
+      .comp .col{padding:12px 14px}
+      .comp .col.fin{background:#F0FDF4;border-left:1px solid #e2e2e2}
+      .comp .lbl{font-size:9px;color:#999;text-transform:uppercase;margin-bottom:2px}
+      .comp .val{font-size:20px;font-weight:800}
+      </style></head><body>
+      <div class="doc-header"><div><div class="brand">${brand.gymName}</div><div class="brand-tag">Cierre de periodización</div></div><div class="doc-meta"><strong>${cliente.nombre} ${cliente.apellido}</strong><br/>${hoy}</div></div>
+      <div class="sec"><div class="sec-title">${registro.periodizacionNombre}</div><div class="sec-body filas">
+        <div class="fila"><span class="fila-label">Inicio</span><span class="fila-val">${registro.inicio.fecha||'—'}</span></div>
+        <div class="fila"><span class="fila-label">Cierre</span><span class="fila-val">${hoy}</span></div>
+        <div class="fila"><span class="fila-label">Fase del método</span><span class="fila-val">${NIVEL[cliente.nivel]?.label||cliente.nivel}</span></div>
+      </div></div>
+      <div class="comp">
+        <div class="col"><div class="lbl">Peso — Inicio</div><div class="val">${snap.peso||'—'} kg</div></div>
+        <div class="col fin"><div class="lbl">Peso — Cierre</div><div class="val" style="color:${diffPeso?(diffPeso.valor<0?'#16A34A':'#DC2626'):'#111'}">${pesoFin||'—'} kg ${diffPeso?`(${diffPeso.txt})`:''}</div></div>
+        <div class="col"><div class="lbl">% Grasa — Inicio</div><div class="val">${snap.pctGrasa||'—'}%</div></div>
+        <div class="col fin"><div class="lbl">% Grasa — Cierre</div><div class="val" style="color:${diffGrasa?(diffGrasa.valor<0?'#16A34A':'#DC2626'):'#111'}">${pctGrasaFin||'—'}% ${diffGrasa?`(${diffGrasa.txt})`:''}</div></div>
+      </div>
+      ${cumplioObjetivo!==null?`<div class="alerta ${cumplioObjetivo?'verde':'ambar'}">${cumplioObjetivo?'✓ Se cumplieron los requisitos de avance planteados para este ciclo.':'⚠ No se cumplieron todos los requisitos — evaluar extender o ajustar el ciclo.'}</div>`:''}
+      ${notas?`<div class="sec"><div class="sec-title">Notas del profesional</div><div class="sec-body">${notas}</div></div>`:''}
+      ${footerHTML({centro:brand.gymName,pieTexto:'Método Activa Integra'})}
+      <script>window.onload=()=>window.print()<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+
+    saveClient({
+      ...cliente,
+      periodizacionesHistorial:[...(cliente.periodizacionesHistorial||[]),registro],
+      // se cierra el ciclo — queda sin periodización asignada hasta que se elija la siguiente
+      periodizacion:'',periodizacionInicio:'',periodizacionFin:'',periodizacionSnapshotInicio:null,
+    });
+    onClose();
+  };
+
+  return OverlayWrap({children:(<>
+    <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>🎯 Mini evaluación de cierre</div>
+    <div style={{fontSize:11,color:G3,marginBottom:14}}>{per?.nombre} · {cliente.nombre} {cliente.apellido} · inició {snap.fecha||cliente.periodizacionInicio||'—'}</div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+      <div><span style={s.lbl}>Peso actual (kg)</span><input value={pesoFin} onChange={e=>setPesoFin(e.target.value)} style={s.inp} placeholder={snap.peso||'—'}/></div>
+      <div><span style={s.lbl}>% Grasa actual</span><input value={pctGrasaFin} onChange={e=>setPctGrasaFin(e.target.value)} style={s.inp} placeholder={snap.pctGrasa||'—'}/></div>
+    </div>
+    <div style={{marginBottom:10}}>
+      <span style={s.lbl}>¿Se cumplieron los requisitos de avance planteados para este ciclo?</span>
+      <div style={{display:'flex',gap:6,marginTop:3}}>
+        {[['Sí',true,'#16A34A'],['No',false,'#DC2626']].map(([lbl,v,c])=>(
+          <button key={lbl} onClick={()=>setCumplioObjetivo(v)} style={{fontSize:11,fontWeight:700,padding:'6px 14px',borderRadius:6,border:`1px solid ${cumplioObjetivo===v?c:G2}`,background:cumplioObjetivo===v?c:WH,color:cumplioObjetivo===v?WH:G4,cursor:'pointer'}}>{lbl}</button>
+        ))}
+      </div>
+    </div>
+    <div style={{marginBottom:14}}><span style={s.lbl}>Notas (opcional)</span><textarea value={notas} onChange={e=>setNotas(e.target.value)} style={{...s.inp,minHeight:60,resize:'vertical'}} placeholder="Observaciones sobre el cierre de este ciclo..."/></div>
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={onClose} style={{...s.btnG,flex:1}}>Cancelar</button>
+      <button onClick={generarYCerrar} style={{...s.btnR,flex:2,background:brand.colorPrimary}}>📄 Generar PDF y cerrar ciclo</button>
+    </div>
+  </>)});
+};
+
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -2710,6 +2826,7 @@ export default function App(){
   const [clientWizard,setClientWizard]=useState(null);
   const [clienteSearch,setClienteSearch]=useState('');
   const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
+  const [miniEvalCliente,setMiniEvalCliente]=useState(null); // cliente con el modal de mini evaluación de cierre abierto
   const [editandoCriterios,setEditandoCriterios]=useState(null); // fase cuya plantilla se está editando
   const [informeCliente,setInformeCliente]=useState(null);
 
@@ -3366,6 +3483,7 @@ export default function App(){
                   )}
                   {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
                   {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
+                  {c.periodizacion&&c.periodizacionSnapshotInicio&&<button onClick={()=>setMiniEvalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FFFBEB',color:'#92400E',borderColor:'#FDE68A'}}>🎯 Cerrar ciclo</button>}
                   {c.screeningCompleto&&<button onClick={()=>setAvanceAbierto(avanceAbierto===c.id?null:c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:avanceAbierto===c.id?NIVEL[c.nivel]?.color:'#ECFDF5',color:avanceAbierto===c.id?WH:'#059669',borderColor:'#6EE7B7'}}>📈 Avance de fase</button>}
                   <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
                   {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
@@ -3442,6 +3560,28 @@ export default function App(){
           );
         })}
       </div>
+      {clients.length>0&&(()=>{
+        const alertas=clients
+          .map(c=>({c,al:calcularAlertaPeriodizacion(c)}))
+          .filter(({al})=>al&&(al.proxima||al.vencida))
+          .sort((a,b)=>a.al.diasRestantes-b.al.diasRestantes);
+        return alertas.length>0&&(
+          <div style={{...s.card,marginTop:8,background:'#FFFBEB',border:'1px solid #FDE68A'}}>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:'#92400E'}}>⏰ Periodizaciones a revisar</div>
+            <div style={{display:'flex',flexDirection:'column',gap:5}}>
+              {alertas.map(({c,al})=>(
+                <div key={c.id} onClick={()=>setClientWizard({cli:c,step:0})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:WH,borderRadius:5,padding:'6px 10px',cursor:'pointer',borderLeft:`3px solid ${al.vencida?R:'#D97706'}`}}>
+                  <div>
+                    <span style={{fontSize:11,fontWeight:700}}>{c.nombre} {c.apellido}</span>
+                    <span style={{fontSize:10,color:G4,marginLeft:6}}>{al.mensaje}</span>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:700,color:al.vencida?R:'#D97706'}}>{al.vencida?`Venció hace ${Math.abs(al.diasRestantes)}d`:al.diasRestantes===0?'Hoy':`en ${al.diasRestantes}d`}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       {clients.length>0&&(
         <div style={{...s.card,marginTop:8,background:G1}}>
           <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4}}>Resumen</div>
@@ -4148,6 +4288,7 @@ export default function App(){
     <div style={s.page}>
       {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
       {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand} setSession={setSession} setTab={setTab} iaReglas={iaReglas}/>}
+      {miniEvalCliente&&<MiniEvaluacionModal cliente={miniEvalCliente} saveClient={saveClient} onClose={()=>setMiniEvalCliente(null)} brand={brand} s={s}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...

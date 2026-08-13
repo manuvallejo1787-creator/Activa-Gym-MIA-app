@@ -205,6 +205,10 @@ function mapClientFromDB(r) {
     notasInternas: r.notas_internas||'', screeningCompleto: r.screening_completo||false,
     screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
     periodizacion: r.periodizacion||'',
+    periodizacionInicio: r.periodizacion_inicio||'',
+    periodizacionFin: r.periodizacion_fin||'',
+    periodizacionSnapshotInicio: r.periodizacion_snapshot_inicio||null,
+    periodizacionesHistorial: r.periodizaciones_historial||[],
     portal_token: r.portal_token||'',
     criterios_avance_estado: r.criterios_avance_estado||{},
   }
@@ -221,6 +225,10 @@ function mapClientToDB(c) {
     notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
     screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
     periodizacion: c.periodizacion||'',
+    periodizacion_inicio: c.periodizacionInicio||null,
+    periodizacion_fin: c.periodizacionFin||null,
+    periodizacion_snapshot_inicio: c.periodizacionSnapshotInicio||null,
+    periodizaciones_historial: c.periodizacionesHistorial||[],
     criterios_avance_estado: c.criterios_avance_estado||{},
     ...(c.portal_token?{portal_token:c.portal_token}:{}),
   }
