@@ -89,6 +89,321 @@ const ResumenDia = ({ totales, objetivoNut }) => {
   );
 };
 
+  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento, onEliminar}) => {
+    const [search, setSearch] = useState('');
+    const [cat, setCat] = useState('all');
+    const filtered = todosAlimentos.filter(a =>
+      (cat==='all'||a.categoria===cat) &&
+      (!search||a.nombre.toLowerCase().includes(search.toLowerCase()))
+    );
+    return(
+      <div style={{padding:'12px 14px'}}>
+        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${TL}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>📚 Base de alimentos</div>
+          <div style={{fontSize:11,color:G3}}>{todosAlimentos.length} alimentos · Uruguay y región</div>
+        </div>
+        <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar..." style={{...ns.inp,flex:1,minWidth:150}}/>
+          <select value={cat} onChange={e=>setCat(e.target.value)} style={ns.sel}>
+            <option value="all">Todas las categorías ({todosAlimentos.length})</option>
+            {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label} ({todosAlimentos.filter(a=>a.categoria===k).length})</option>)}
+          </select>
+          <button onClick={onNuevoAlimento} style={ns.btnTl}>➕ Nuevo</button>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
+            <thead>
+              <tr style={{background:BK,color:WH}}>
+                {['Alimento','Categoría','P (g)','C (g)','G (g)','F (g)','Kcal','Micro 1','Micro 2',''].map(h=>(
+                  <th key={h} style={{padding:'7px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,whiteSpace:'nowrap'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((al,i)=>{
+                const cat2=CATEGORIAS_ALIMENTOS[al.categoria];
+                return(
+                  <tr key={al.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
+                    <td style={{padding:'5px 8px',fontWeight:600,maxWidth:200}}>{al.nombre} {al.custom&&<span style={{...ns.tag('#7C3AED'),fontSize:7}}>CUSTOM</span>}</td>
+                    <td style={{padding:'5px 8px',whiteSpace:'nowrap'}}><span style={ns.tag(cat2?.color||G4)}>{cat2?.emoji} {cat2?.label}</span></td>
+                    <td style={{padding:'5px 8px',color:'#CC0000',fontWeight:700}}>{al.proteinas}</td>
+                    <td style={{padding:'5px 8px',color:'#7C3AED',fontWeight:700}}>{al.carbos}</td>
+                    <td style={{padding:'5px 8px',color:AM,fontWeight:700}}>{al.grasas}</td>
+                    <td style={{padding:'5px 8px',color:TL}}>{al.fibra}</td>
+                    <td style={{padding:'5px 8px',fontWeight:700,color:NV}}>{al.calorias}</td>
+                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro1?.nombre&&`${al.micro1.nombre}: ${al.micro1.valor}${al.micro1.unidad}`}</td>
+                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro2?.nombre&&`${al.micro2.nombre}: ${al.micro2.valor}${al.micro2.unidad}`}</td>
+                    <td style={{padding:'5px 8px'}}>{al.custom&&<button onClick={()=>{if(confirm(`¿Eliminar "${al.nombre}" de la base?`))onEliminar(al.id);}} style={{background:'none',border:'none',color:'#CC0000',cursor:'pointer',fontSize:13}}>×</button>}</td>
+                  </tr>
+                );
+              })}
+              {filtered.length===0&&<tr><td colSpan={10} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  const NuevoPlanFormComp = ({cliente, prefill, onCrear}) => {
+    const [nombre, setNombre] = useState(cliente?`Plan ${cliente.nombre} ${new Date().toLocaleDateString('es-ES')}`:'');
+    const [perfil, setPerfil] = useState({
+      peso: prefill?.peso||'', talla: prefill?.talla||'', edad: prefill?.edad||'',
+      sexo: prefill?.sexo||'M',
+      actividad: prefill?.actividad || cliente?.screening?.actividad || 'moderado',
+      objetivo_nut: prefill?.objetivo_nut ||
+                   (cliente?.objetivo?.toLowerCase().includes('grasa')||cliente?.objetivo?.toLowerCase().includes('bajar')?'perdida_leve':
+                   cliente?.objetivo?.toLowerCase().includes('masa')||cliente?.objetivo?.toLowerCase().includes('volumen')?'hipertrofia':'mantenimiento'),
+    });
+    const set = (k,v) => setPerfil(p=>({...p,[k]:v}));
+    const tdee = perfil.peso&&perfil.talla&&perfil.edad ? calcularTDEE(parseFloat(perfil.peso),parseFloat(perfil.talla),parseInt(perfil.edad),perfil.sexo,perfil.actividad) : null;
+    const obj = tdee ? calcularObjetivo(tdee, perfil.objetivo_nut, parseFloat(perfil.peso)) : null;
+    return (
+      <div style={{...ns.card,border:`2px solid ${TL}`}}>
+        <div style={{fontSize:14,fontWeight:800,marginBottom:12}}>📋 Configurar nuevo plan nutricional</div>
+        <div style={{marginBottom:8}}><span style={ns.lbl}>Nombre del plan *</span><input value={nombre} onChange={e=>setNombre(e.target.value)} style={ns.inp}/></div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:8}}>
+          <div><span style={ns.lbl}>Peso corporal (kg) *</span><input type="number" value={perfil.peso} onChange={e=>set('peso',e.target.value)} style={ns.inp}/></div>
+          <div><span style={ns.lbl}>Talla (cm) *</span><input type="number" value={perfil.talla} onChange={e=>set('talla',e.target.value)} style={ns.inp}/></div>
+          <div><span style={ns.lbl}>Edad (años) *</span><input type="number" value={perfil.edad} onChange={e=>set('edad',e.target.value)} style={ns.inp}/></div>
+          <div><span style={ns.lbl}>Sexo</span>
+            <select value={perfil.sexo} onChange={e=>set('sexo',e.target.value)} style={{...ns.sel,width:'100%'}}>
+              <option value="M">Masculino</option><option value="F">Femenino</option>
+            </select>
+          </div>
+          <div><span style={ns.lbl}>Nivel de actividad</span>
+            <select value={perfil.actividad} onChange={e=>set('actividad',e.target.value)} style={{...ns.sel,width:'100%'}}>
+              <option value="sedentario">Sedentario (×1.40)</option>
+              <option value="moderado">Moderado (×1.55)</option>
+              <option value="activo">Activo 4×/sem (×1.65)</option>
+              <option value="muy_activo">Muy activo (×1.75)</option>
+            </select>
+          </div>
+          <div><span style={ns.lbl}>Objetivo nutricional</span>
+            <select value={perfil.objetivo_nut} onChange={e=>set('objetivo_nut',e.target.value)} style={{...ns.sel,width:'100%'}}>
+              <option value="mantenimiento">Mantenimiento</option>
+              <option value="hipertrofia">Hipertrofia (+300 kcal)</option>
+              <option value="perdida_leve">Pérdida leve (-300 kcal)</option>
+              <option value="perdida_moderada">Pérdida moderada (-500 kcal)</option>
+              <option value="recomposicion">Recomposición (-200 kcal)</option>
+            </select>
+          </div>
+        </div>
+        {obj&&(
+          <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'10px 14px',marginBottom:10}}>
+            <div style={{fontSize:11,fontWeight:700,color:NV,marginBottom:4}}>📊 Resultado Mifflin-St Jeor</div>
+            <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:11}}>
+              <span>TDEE: <strong>{tdee} kcal</strong></span>
+              <span style={{color:obj.color}}>Objetivo: <strong>{obj.kcal} kcal</strong> ({obj.label})</span>
+              <span>Proteínas: <strong>{obj.prot_g}g</strong></span>
+              <span>Carbos: <strong>{obj.carb_g}g</strong></span>
+              <span>Grasas: <strong>{obj.gras_g}g</strong></span>
+            </div>
+          </div>
+        )}
+        <button onClick={()=>{if(nombre&&perfil.peso&&perfil.talla&&perfil.edad)onCrear(nombre,perfil);}}
+          disabled={!nombre||!perfil.peso||!perfil.talla||!perfil.edad}
+          style={{...ns.btnTl,width:'100%',padding:'9px',opacity:(!nombre||!perfil.peso||!perfil.talla||!perfil.edad)?.4:1}}>
+          Crear plan y abrir constructor →
+        </button>
+      </div>
+    );
+  };
+
+  const PickerAlimentosComp = ({onClose, onAdd, comidaActiva, todosAlimentos, onNuevoAlimento, pickerSearch, pickerCat}) => {
+    const [localSearch, setLocalSearch] = useState(pickerSearch);
+    const [localCat, setLocalCat] = useState(pickerCat);
+    const [inputVal, setInputVal] = useState('');   // cantidad ingresada
+    const [modoUnidad, setModoUnidad] = useState(false); // false=gramos, true=unidades
+    const [selAl, setSelAl] = useState(null);
+    const filtered = useMemo(() => todosAlimentos.filter(a =>
+      (localCat === 'all' || a.categoria === localCat) &&
+      (!localSearch || a.nombre.toLowerCase().includes(localSearch.toLowerCase()))
+    ), [localSearch, localCat]);
+    // Calcular gramos reales según modo
+    const gramosReales = useMemo(() => {
+      if (!selAl || !inputVal) return 0;
+      if (modoUnidad && selAl.tiene_unidad) {
+        return Math.round((parseFloat(inputVal)||1) * selAl.gramos_por_unidad);
+      }
+      return parseFloat(inputVal)||0;
+    }, [selAl, inputVal, modoUnidad]);
+    const preview = selAl && gramosReales > 0 ? calcularMacros(selAl, gramosReales) : null;
+    // When selecting a food, auto-switch mode and set default qty
+    const handleSelAl = (al) => {
+      if (selAl?.id === al.id) { setSelAl(null); return; }
+      setSelAl(al);
+      if (al.tiene_unidad) {
+        setModoUnidad(true);
+        setInputVal('1');
+      } else {
+        setModoUnidad(false);
+        setInputVal(String(al.porcion_ref||100));
+      }
+    };
+    return (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,width:'100%',maxWidth:520,marginBottom:20}}>
+          <div style={{background:BK,borderRadius:'10px 10px 0 0',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{color:WH,fontWeight:800,fontSize:13}}>🥗 Agregar alimento — {COMIDAS.find(c=>c.id===comidaActiva)?.label}</div>
+            <button onClick={onClose} style={{...ns.btnG,background:'transparent',color:WH,border:'1px solid #555'}}>✕</button>
+          </div>
+          <div style={{padding:'12px 14px'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:6,marginBottom:8}}>
+              <input value={localSearch} onChange={e=>setLocalSearch(e.target.value)} placeholder="Buscar alimento..." style={ns.inp}/>
+              <select value={localCat} onChange={e=>setLocalCat(e.target.value)} style={ns.sel}>
+                <option value="all">Todas las categorías</option>
+                {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
+              </select>
+            </div>
+            <div style={{maxHeight:'38vh',overflowY:'auto',marginBottom:10}}>
+              {filtered.map(al => {
+                const cat = CATEGORIAS_ALIMENTOS[al.categoria];
+                return (
+                  <div key={al.id} onClick={()=>handleSelAl(al)}
+                    style={{padding:'7px 10px',borderBottom:`1px solid ${G2}`,cursor:'pointer',background:selAl?.id===al.id?'#EFF6FF':WH,borderLeft:selAl?.id===al.id?`3px solid ${TL}`:'3px solid transparent'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div>
+                        <span style={{fontSize:11,fontWeight:600}}>{al.nombre}</span>
+                        {al.custom&&<span style={{...ns.tag('#7C3AED'),marginLeft:5,fontSize:7}}>CUSTOM</span>}
+                        <div style={{fontSize:9,color:G3,marginTop:1}}>{cat?.emoji} {cat?.label} · por 100g: P {al.proteinas}g · C {al.carbos}g · G {al.grasas}g · {al.calorias} kcal</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {filtered.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin resultados</div>}
+            </div>
+            {selAl&&(
+              <div style={{background:G1,borderRadius:7,padding:'10px',marginBottom:10,border:`1px solid ${TL}`}}>
+                <div style={{fontSize:11,fontWeight:700,marginBottom:6}}>{selAl.nombre}</div>
+                {/* Toggle gramos / unidades */}
+                {selAl.tiene_unidad&&(
+                  <div style={{display:'flex',gap:4,marginBottom:8}}>
+                    <button onClick={()=>{setModoUnidad(false);setInputVal(String(selAl.porcion_ref||100));}}
+                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${!modoUnidad?TL:G2}`,background:!modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:!modoUnidad?700:400,color:!modoUnidad?NV:G4}}>
+                      ⚖️ Por gramos
+                    </button>
+                    <button onClick={()=>{setModoUnidad(true);setInputVal('1');}}
+                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${modoUnidad?TL:G2}`,background:modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:modoUnidad?700:400,color:modoUnidad?NV:G4}}>
+                      🔢 Por unidad ({selAl.nombre_unidad})
+                    </button>
+                  </div>
+                )}
+                <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
+                  <span style={{...ns.lbl,whiteSpace:'nowrap'}}>
+                    {modoUnidad&&selAl.tiene_unidad?`Cantidad (${selAl.nombre_unidad}):`:'Cantidad (gramos):'}
+                  </span>
+                  <input type="number" value={inputVal} onChange={e=>setInputVal(e.target.value)}
+                    placeholder={modoUnidad&&selAl.tiene_unidad?'1':`${selAl.porcion_ref}g`}
+                    min="0.5" step={modoUnidad&&selAl.tiene_unidad?'0.5':'10'}
+                    style={{...ns.inp,width:90,textAlign:'center'}}/>
+                  {modoUnidad&&selAl.tiene_unidad&&gramosReales>0&&(
+                    <span style={{fontSize:10,color:G3,whiteSpace:'nowrap'}}>= {gramosReales}g</span>
+                  )}
+                  {!modoUnidad&&(
+                    <button onClick={()=>setInputVal(String(selAl.porcion_ref))} style={{...ns.btnG,fontSize:9,whiteSpace:'nowrap'}}>Porción ref. ({selAl.porcion_ref}g)</button>
+                  )}
+                </div>
+                {preview&&<div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,color:G4,background:G1,padding:'5px 8px',borderRadius:5,marginBottom:3}}>
+                  <span>P: <strong>{preview.proteinas}g</strong></span>
+                  <span>C: <strong>{preview.carbos}g</strong></span>
+                  <span>G: <strong>{preview.grasas}g</strong></span>
+                  <span>F: <strong>{preview.fibra}g</strong></span>
+                  <span style={{fontWeight:700,color:NV}}>🔥 {preview.calorias} kcal</span>
+                </div>}
+                {selAl.micro1?.nombre&&gramosReales>0&&<div style={{fontSize:9,color:G3}}>{selAl.micro1.nombre}: {Math.round(selAl.micro1.valor*gramosReales/100*10)/10}{selAl.micro1.unidad}{selAl.micro2?.nombre?` · ${selAl.micro2.nombre}: ${Math.round(selAl.micro2.valor*gramosReales/100*10)/10}${selAl.micro2.unidad}`:''}</div>}
+              </div>
+            )}
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={onNuevoAlimento} style={{...ns.btnG,flex:1,fontSize:10}}>➕ Nuevo alimento</button>
+              <button onClick={()=>{if(selAl&&gramosReales>0)onAdd(selAl.id,gramosReales);}} disabled={!selAl||gramosReales<=0} style={{...ns.btnTl,flex:2,opacity:(!selAl||gramosReales<=0)?.5:1}}>Agregar al menú</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
+
+  const NuevoAlimentoFormComp = ({onClose, onSave}) => {
+    const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg', tiene_unidad:false, nombre_unidad:'', gramos_por_unidad:'' });
+    const set = (k,v) => setF(f=>({...f,[k]:v}));
+    const calAuto = Math.round(form.proteinas*4 + form.carbos*4 + form.grasas*9);
+    return (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo alimento</div>
+            <button onClick={onClose} style={ns.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:7}}>
+            <div><span style={ns.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={ns.inp}/></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              <div><span style={ns.lbl}>Categoría</span>
+                <select value={form.categoria} onChange={e=>set('categoria',e.target.value)} style={{...ns.sel,width:'100%'}}>
+                  {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
+                </select>
+              </div>
+              <div><span style={ns.lbl}>Porción ref. (g)</span><input type="number" value={form.porcion_ref} onChange={e=>set('porcion_ref',e.target.value)} style={ns.inp}/></div>
+            </div>
+            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
+              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Macros por 100g</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5}}>
+                {[['proteinas','Proteínas (g)'],['carbos','Carbos (g)'],['grasas','Grasas (g)'],['fibra','Fibra (g)']].map(([k,lbl])=>(
+                  <div key={k}><span style={ns.lbl}>{lbl}</span><input type="number" value={form[k]} onChange={e=>set(k,parseFloat(e.target.value)||0)} style={ns.inp}/></div>
+                ))}
+              </div>
+              <div style={{marginTop:6}}>
+                <span style={ns.lbl}>Calorías (kcal/100g)</span>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={form.calorias} onChange={e=>set('calorias',parseFloat(e.target.value)||0)} style={{...ns.inp,flex:1}}/>
+                  <button onClick={()=>set('calorias',calAuto)} style={{...ns.btnG,fontSize:10,whiteSpace:'nowrap'}}>Auto ({calAuto})</button>
+                </div>
+              </div>
+            </div>
+            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
+              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Micronutrientes (opcional)</div>
+              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5,marginBottom:5}}>
+                <div><span style={ns.lbl}>Micro 1 nombre</span><input value={form.micro1_nombre} onChange={e=>set('micro1_nombre',e.target.value)} placeholder="Ej: Vitamina C" style={ns.inp}/></div>
+                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro1_valor} onChange={e=>set('micro1_valor',e.target.value)} style={ns.inp}/></div>
+                <div><span style={ns.lbl}>Unidad</span><input value={form.micro1_unidad} onChange={e=>set('micro1_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5}}>
+                <div><span style={ns.lbl}>Micro 2 nombre</span><input value={form.micro2_nombre} onChange={e=>set('micro2_nombre',e.target.value)} placeholder="Ej: Hierro" style={ns.inp}/></div>
+                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro2_valor} onChange={e=>set('micro2_valor',e.target.value)} style={ns.inp}/></div>
+                <div><span style={ns.lbl}>Unidad</span><input value={form.micro2_unidad} onChange={e=>set('micro2_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
+              </div>
+            </div>
+            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
+              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:10,fontWeight:700,color:G4,cursor:'pointer'}}>
+                <input type="checkbox" checked={form.tiene_unidad} onChange={e=>set('tiene_unidad',e.target.checked)}/>
+                Se mide por unidad/porción (ej: fetas, rebanadas, unidades)
+              </label>
+              {form.tiene_unidad&&(
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:6,marginTop:7}}>
+                  <div><span style={ns.lbl}>Nombre de la unidad</span><input value={form.nombre_unidad} onChange={e=>set('nombre_unidad',e.target.value)} placeholder="Ej: feta, rebanada, unidad" style={ns.inp}/></div>
+                  <div><span style={ns.lbl}>Gramos por unidad</span><input type="number" value={form.gramos_por_unidad} onChange={e=>set('gramos_por_unidad',e.target.value)} placeholder="Ej: 25" style={ns.inp}/></div>
+                </div>
+              )}
+            </div>
+          </div>
+          <button onClick={()=>{
+            if(!form.nombre.trim())return;
+            onSave({...form,id:'ca_'+genNutId(),
+              tiene_unidad:!!form.tiene_unidad,
+              gramos_por_unidad:form.tiene_unidad?(parseFloat(form.gramos_por_unidad)||null):null,
+              micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
+            onClose();
+          }} disabled={!form.nombre.trim()} style={{...ns.btnR,width:'100%',padding:'9px',marginTop:10}}>Guardar alimento</button>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
+
 export default function Nutricion({ clients, brand, reglas = [] }) {
   // ── Estado principal ──────────────────────────────────────────────────────
   const [view, setView]     = useState('planes');    // planes | plan | alimentos | nuevo_cliente
@@ -345,262 +660,6 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   };
 
   // ─── NUEVO ALIMENTO FORM ──────────────────────────────────────────────────
-  const NuevoAlimentoFormComp = ({onClose, onSave}) => {
-    const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg', tiene_unidad:false, nombre_unidad:'', gramos_por_unidad:'' });
-    const set = (k,v) => setF(f=>({...f,[k]:v}));
-    const calAuto = Math.round(form.proteinas*4 + form.carbos*4 + form.grasas*9);
-    return (
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo alimento</div>
-            <button onClick={onClose} style={ns.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            <div><span style={ns.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={ns.inp}/></div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-              <div><span style={ns.lbl}>Categoría</span>
-                <select value={form.categoria} onChange={e=>set('categoria',e.target.value)} style={{...ns.sel,width:'100%'}}>
-                  {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
-                </select>
-              </div>
-              <div><span style={ns.lbl}>Porción ref. (g)</span><input type="number" value={form.porcion_ref} onChange={e=>set('porcion_ref',e.target.value)} style={ns.inp}/></div>
-            </div>
-            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Macros por 100g</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5}}>
-                {[['proteinas','Proteínas (g)'],['carbos','Carbos (g)'],['grasas','Grasas (g)'],['fibra','Fibra (g)']].map(([k,lbl])=>(
-                  <div key={k}><span style={ns.lbl}>{lbl}</span><input type="number" value={form[k]} onChange={e=>set(k,parseFloat(e.target.value)||0)} style={ns.inp}/></div>
-                ))}
-              </div>
-              <div style={{marginTop:6}}>
-                <span style={ns.lbl}>Calorías (kcal/100g)</span>
-                <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                  <input type="number" value={form.calorias} onChange={e=>set('calorias',parseFloat(e.target.value)||0)} style={{...ns.inp,flex:1}}/>
-                  <button onClick={()=>set('calorias',calAuto)} style={{...ns.btnG,fontSize:10,whiteSpace:'nowrap'}}>Auto ({calAuto})</button>
-                </div>
-              </div>
-            </div>
-            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Micronutrientes (opcional)</div>
-              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5,marginBottom:5}}>
-                <div><span style={ns.lbl}>Micro 1 nombre</span><input value={form.micro1_nombre} onChange={e=>set('micro1_nombre',e.target.value)} placeholder="Ej: Vitamina C" style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro1_valor} onChange={e=>set('micro1_valor',e.target.value)} style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Unidad</span><input value={form.micro1_unidad} onChange={e=>set('micro1_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5}}>
-                <div><span style={ns.lbl}>Micro 2 nombre</span><input value={form.micro2_nombre} onChange={e=>set('micro2_nombre',e.target.value)} placeholder="Ej: Hierro" style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro2_valor} onChange={e=>set('micro2_valor',e.target.value)} style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Unidad</span><input value={form.micro2_unidad} onChange={e=>set('micro2_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
-              </div>
-            </div>
-            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
-              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:10,fontWeight:700,color:G4,cursor:'pointer'}}>
-                <input type="checkbox" checked={form.tiene_unidad} onChange={e=>set('tiene_unidad',e.target.checked)}/>
-                Se mide por unidad/porción (ej: fetas, rebanadas, unidades)
-              </label>
-              {form.tiene_unidad&&(
-                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:6,marginTop:7}}>
-                  <div><span style={ns.lbl}>Nombre de la unidad</span><input value={form.nombre_unidad} onChange={e=>set('nombre_unidad',e.target.value)} placeholder="Ej: feta, rebanada, unidad" style={ns.inp}/></div>
-                  <div><span style={ns.lbl}>Gramos por unidad</span><input type="number" value={form.gramos_por_unidad} onChange={e=>set('gramos_por_unidad',e.target.value)} placeholder="Ej: 25" style={ns.inp}/></div>
-                </div>
-              )}
-            </div>
-          </div>
-          <button onClick={()=>{
-            if(!form.nombre.trim())return;
-            onSave({...form,id:'ca_'+genNutId(),
-              tiene_unidad:!!form.tiene_unidad,
-              gramos_por_unidad:form.tiene_unidad?(parseFloat(form.gramos_por_unidad)||null):null,
-              micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
-            onClose();
-          }} disabled={!form.nombre.trim()} style={{...ns.btnR,width:'100%',padding:'9px',marginTop:10}}>Guardar alimento</button>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
-  const PickerAlimentosComp = ({onClose, onAdd, comidaActiva, todosAlimentos, onNuevoAlimento}) => {
-    const [localSearch, setLocalSearch] = useState(pickerSearch);
-    const [localCat, setLocalCat] = useState(pickerCat);
-    const [inputVal, setInputVal] = useState('');   // cantidad ingresada
-    const [modoUnidad, setModoUnidad] = useState(false); // false=gramos, true=unidades
-    const [selAl, setSelAl] = useState(null);
-    const filtered = useMemo(() => todosAlimentos.filter(a =>
-      (localCat === 'all' || a.categoria === localCat) &&
-      (!localSearch || a.nombre.toLowerCase().includes(localSearch.toLowerCase()))
-    ), [localSearch, localCat]);
-    // Calcular gramos reales según modo
-    const gramosReales = useMemo(() => {
-      if (!selAl || !inputVal) return 0;
-      if (modoUnidad && selAl.tiene_unidad) {
-        return Math.round((parseFloat(inputVal)||1) * selAl.gramos_por_unidad);
-      }
-      return parseFloat(inputVal)||0;
-    }, [selAl, inputVal, modoUnidad]);
-    const preview = selAl && gramosReales > 0 ? calcularMacros(selAl, gramosReales) : null;
-    // When selecting a food, auto-switch mode and set default qty
-    const handleSelAl = (al) => {
-      if (selAl?.id === al.id) { setSelAl(null); return; }
-      setSelAl(al);
-      if (al.tiene_unidad) {
-        setModoUnidad(true);
-        setInputVal('1');
-      } else {
-        setModoUnidad(false);
-        setInputVal(String(al.porcion_ref||100));
-      }
-    };
-    return (
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,width:'100%',maxWidth:520,marginBottom:20}}>
-          <div style={{background:BK,borderRadius:'10px 10px 0 0',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div style={{color:WH,fontWeight:800,fontSize:13}}>🥗 Agregar alimento — {COMIDAS.find(c=>c.id===comidaActiva)?.label}</div>
-            <button onClick={()=>setShowPicker(false)} style={{...ns.btnG,background:'transparent',color:WH,border:'1px solid #555'}}>✕</button>
-          </div>
-          <div style={{padding:'12px 14px'}}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:6,marginBottom:8}}>
-              <input value={localSearch} onChange={e=>setLocalSearch(e.target.value)} placeholder="Buscar alimento..." style={ns.inp}/>
-              <select value={localCat} onChange={e=>setLocalCat(e.target.value)} style={ns.sel}>
-                <option value="all">Todas las categorías</option>
-                {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
-              </select>
-            </div>
-            <div style={{maxHeight:'38vh',overflowY:'auto',marginBottom:10}}>
-              {filtered.map(al => {
-                const cat = CATEGORIAS_ALIMENTOS[al.categoria];
-                return (
-                  <div key={al.id} onClick={()=>handleSelAl(al)}
-                    style={{padding:'7px 10px',borderBottom:`1px solid ${G2}`,cursor:'pointer',background:selAl?.id===al.id?'#EFF6FF':WH,borderLeft:selAl?.id===al.id?`3px solid ${TL}`:'3px solid transparent'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                      <div>
-                        <span style={{fontSize:11,fontWeight:600}}>{al.nombre}</span>
-                        {al.custom&&<span style={{...ns.tag('#7C3AED'),marginLeft:5,fontSize:7}}>CUSTOM</span>}
-                        <div style={{fontSize:9,color:G3,marginTop:1}}>{cat?.emoji} {cat?.label} · por 100g: P {al.proteinas}g · C {al.carbos}g · G {al.grasas}g · {al.calorias} kcal</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {filtered.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin resultados</div>}
-            </div>
-            {selAl&&(
-              <div style={{background:G1,borderRadius:7,padding:'10px',marginBottom:10,border:`1px solid ${TL}`}}>
-                <div style={{fontSize:11,fontWeight:700,marginBottom:6}}>{selAl.nombre}</div>
-                {/* Toggle gramos / unidades */}
-                {selAl.tiene_unidad&&(
-                  <div style={{display:'flex',gap:4,marginBottom:8}}>
-                    <button onClick={()=>{setModoUnidad(false);setInputVal(String(selAl.porcion_ref||100));}}
-                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${!modoUnidad?TL:G2}`,background:!modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:!modoUnidad?700:400,color:!modoUnidad?NV:G4}}>
-                      ⚖️ Por gramos
-                    </button>
-                    <button onClick={()=>{setModoUnidad(true);setInputVal('1');}}
-                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${modoUnidad?TL:G2}`,background:modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:modoUnidad?700:400,color:modoUnidad?NV:G4}}>
-                      🔢 Por unidad ({selAl.nombre_unidad})
-                    </button>
-                  </div>
-                )}
-                <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
-                  <span style={{...ns.lbl,whiteSpace:'nowrap'}}>
-                    {modoUnidad&&selAl.tiene_unidad?`Cantidad (${selAl.nombre_unidad}):`:'Cantidad (gramos):'}
-                  </span>
-                  <input type="number" value={inputVal} onChange={e=>setInputVal(e.target.value)}
-                    placeholder={modoUnidad&&selAl.tiene_unidad?'1':`${selAl.porcion_ref}g`}
-                    min="0.5" step={modoUnidad&&selAl.tiene_unidad?'0.5':'10'}
-                    style={{...ns.inp,width:90,textAlign:'center'}}/>
-                  {modoUnidad&&selAl.tiene_unidad&&gramosReales>0&&(
-                    <span style={{fontSize:10,color:G3,whiteSpace:'nowrap'}}>= {gramosReales}g</span>
-                  )}
-                  {!modoUnidad&&(
-                    <button onClick={()=>setInputVal(String(selAl.porcion_ref))} style={{...ns.btnG,fontSize:9,whiteSpace:'nowrap'}}>Porción ref. ({selAl.porcion_ref}g)</button>
-                  )}
-                </div>
-                {preview&&<div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,color:G4,background:G1,padding:'5px 8px',borderRadius:5,marginBottom:3}}>
-                  <span>P: <strong>{preview.proteinas}g</strong></span>
-                  <span>C: <strong>{preview.carbos}g</strong></span>
-                  <span>G: <strong>{preview.grasas}g</strong></span>
-                  <span>F: <strong>{preview.fibra}g</strong></span>
-                  <span style={{fontWeight:700,color:NV}}>🔥 {preview.calorias} kcal</span>
-                </div>}
-                {selAl.micro1?.nombre&&gramosReales>0&&<div style={{fontSize:9,color:G3}}>{selAl.micro1.nombre}: {Math.round(selAl.micro1.valor*gramosReales/100*10)/10}{selAl.micro1.unidad}{selAl.micro2?.nombre?` · ${selAl.micro2.nombre}: ${Math.round(selAl.micro2.valor*gramosReales/100*10)/10}${selAl.micro2.unidad}`:''}</div>}
-              </div>
-            )}
-            <div style={{display:'flex',gap:6}}>
-              <button onClick={onNuevoAlimento} style={{...ns.btnG,flex:1,fontSize:10}}>➕ Nuevo alimento</button>
-              <button onClick={()=>{if(selAl&&gramosReales>0)onAdd(selAl.id,gramosReales);}} disabled={!selAl||gramosReales<=0} style={{...ns.btnTl,flex:2,opacity:(!selAl||gramosReales<=0)?.5:1}}>Agregar al menú</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
-  const NuevoPlanFormComp = ({cliente, prefill, onCrear}) => {
-    const [nombre, setNombre] = useState(cliente?`Plan ${cliente.nombre} ${new Date().toLocaleDateString('es-ES')}`:'');
-    const [perfil, setPerfil] = useState({
-      peso: prefill?.peso||'', talla: prefill?.talla||'', edad: prefill?.edad||'',
-      sexo: prefill?.sexo||'M',
-      actividad: prefill?.actividad || cliente?.screening?.actividad || 'moderado',
-      objetivo_nut: prefill?.objetivo_nut ||
-                   (cliente?.objetivo?.toLowerCase().includes('grasa')||cliente?.objetivo?.toLowerCase().includes('bajar')?'perdida_leve':
-                   cliente?.objetivo?.toLowerCase().includes('masa')||cliente?.objetivo?.toLowerCase().includes('volumen')?'hipertrofia':'mantenimiento'),
-    });
-    const set = (k,v) => setPerfil(p=>({...p,[k]:v}));
-    const tdee = perfil.peso&&perfil.talla&&perfil.edad ? calcularTDEE(parseFloat(perfil.peso),parseFloat(perfil.talla),parseInt(perfil.edad),perfil.sexo,perfil.actividad) : null;
-    const obj = tdee ? calcularObjetivo(tdee, perfil.objetivo_nut, parseFloat(perfil.peso)) : null;
-    return (
-      <div style={{...ns.card,border:`2px solid ${TL}`}}>
-        <div style={{fontSize:14,fontWeight:800,marginBottom:12}}>📋 Configurar nuevo plan nutricional</div>
-        <div style={{marginBottom:8}}><span style={ns.lbl}>Nombre del plan *</span><input value={nombre} onChange={e=>setNombre(e.target.value)} style={ns.inp}/></div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:8}}>
-          <div><span style={ns.lbl}>Peso corporal (kg) *</span><input type="number" value={perfil.peso} onChange={e=>set('peso',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Talla (cm) *</span><input type="number" value={perfil.talla} onChange={e=>set('talla',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Edad (años) *</span><input type="number" value={perfil.edad} onChange={e=>set('edad',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Sexo</span>
-            <select value={perfil.sexo} onChange={e=>set('sexo',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="M">Masculino</option><option value="F">Femenino</option>
-            </select>
-          </div>
-          <div><span style={ns.lbl}>Nivel de actividad</span>
-            <select value={perfil.actividad} onChange={e=>set('actividad',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="sedentario">Sedentario (×1.40)</option>
-              <option value="moderado">Moderado (×1.55)</option>
-              <option value="activo">Activo 4×/sem (×1.65)</option>
-              <option value="muy_activo">Muy activo (×1.75)</option>
-            </select>
-          </div>
-          <div><span style={ns.lbl}>Objetivo nutricional</span>
-            <select value={perfil.objetivo_nut} onChange={e=>set('objetivo_nut',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="mantenimiento">Mantenimiento</option>
-              <option value="hipertrofia">Hipertrofia (+300 kcal)</option>
-              <option value="perdida_leve">Pérdida leve (-300 kcal)</option>
-              <option value="perdida_moderada">Pérdida moderada (-500 kcal)</option>
-              <option value="recomposicion">Recomposición (-200 kcal)</option>
-            </select>
-          </div>
-        </div>
-        {obj&&(
-          <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'10px 14px',marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:NV,marginBottom:4}}>📊 Resultado Mifflin-St Jeor</div>
-            <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:11}}>
-              <span>TDEE: <strong>{tdee} kcal</strong></span>
-              <span style={{color:obj.color}}>Objetivo: <strong>{obj.kcal} kcal</strong> ({obj.label})</span>
-              <span>Proteínas: <strong>{obj.prot_g}g</strong></span>
-              <span>Carbos: <strong>{obj.carb_g}g</strong></span>
-              <span>Grasas: <strong>{obj.gras_g}g</strong></span>
-            </div>
-          </div>
-        )}
-        <button onClick={()=>{if(nombre&&perfil.peso&&perfil.talla&&perfil.edad)crearPlan(nombre,perfil);}}
-          disabled={!nombre||!perfil.peso||!perfil.talla||!perfil.edad}
-          style={{...ns.btnTl,width:'100%',padding:'9px',opacity:(!nombre||!perfil.peso||!perfil.talla||!perfil.edad)?.4:1}}>
-          Crear plan y abrir constructor →
-        </button>
-      </div>
-    );
-  };
 
   // ─── VISTA: LISTA DE PLANES ────────────────────────────────────────────────
   const VistaPlanes = () => (
@@ -660,7 +719,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
               <div style={{fontSize:9,color:G3,marginTop:4,fontStyle:'italic'}}>Los planes (sobre todo los ⭐ ejemplo) se le pasan a la IA como contexto al generar nuevos planes.</div>
             </div>
           )}
-          {NuevoPlanFormComp({cliente,prefill,onCrear:crearPlan})}
+          <NuevoPlanFormComp cliente={cliente} prefill={prefill} onCrear={crearPlan}/>
         </>
       )}
     </div>
@@ -795,67 +854,12 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
   };
 
   // ─── VISTA: BASE DE ALIMENTOS ─────────────────────────────────────────────
-  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento, onEliminar}) => {
-    const [search, setSearch] = useState('');
-    const [cat, setCat] = useState('all');
-    const filtered = todosAlimentos.filter(a =>
-      (cat==='all'||a.categoria===cat) &&
-      (!search||a.nombre.toLowerCase().includes(search.toLowerCase()))
-    );
-    return(
-      <div style={{padding:'12px 14px'}}>
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${TL}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>📚 Base de alimentos</div>
-          <div style={{fontSize:11,color:G3}}>{todosAlimentos.length} alimentos · Uruguay y región</div>
-        </div>
-        <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar..." style={{...ns.inp,flex:1,minWidth:150}}/>
-          <select value={cat} onChange={e=>setCat(e.target.value)} style={ns.sel}>
-            <option value="all">Todas las categorías ({todosAlimentos.length})</option>
-            {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label} ({todosAlimentos.filter(a=>a.categoria===k).length})</option>)}
-          </select>
-          <button onClick={onNuevoAlimento} style={ns.btnTl}>➕ Nuevo</button>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
-            <thead>
-              <tr style={{background:BK,color:WH}}>
-                {['Alimento','Categoría','P (g)','C (g)','G (g)','F (g)','Kcal','Micro 1','Micro 2',''].map(h=>(
-                  <th key={h} style={{padding:'7px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,whiteSpace:'nowrap'}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((al,i)=>{
-                const cat2=CATEGORIAS_ALIMENTOS[al.categoria];
-                return(
-                  <tr key={al.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
-                    <td style={{padding:'5px 8px',fontWeight:600,maxWidth:200}}>{al.nombre} {al.custom&&<span style={{...ns.tag('#7C3AED'),fontSize:7}}>CUSTOM</span>}</td>
-                    <td style={{padding:'5px 8px',whiteSpace:'nowrap'}}><span style={ns.tag(cat2?.color||G4)}>{cat2?.emoji} {cat2?.label}</span></td>
-                    <td style={{padding:'5px 8px',color:'#CC0000',fontWeight:700}}>{al.proteinas}</td>
-                    <td style={{padding:'5px 8px',color:'#7C3AED',fontWeight:700}}>{al.carbos}</td>
-                    <td style={{padding:'5px 8px',color:AM,fontWeight:700}}>{al.grasas}</td>
-                    <td style={{padding:'5px 8px',color:TL}}>{al.fibra}</td>
-                    <td style={{padding:'5px 8px',fontWeight:700,color:NV}}>{al.calorias}</td>
-                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro1?.nombre&&`${al.micro1.nombre}: ${al.micro1.valor}${al.micro1.unidad}`}</td>
-                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro2?.nombre&&`${al.micro2.nombre}: ${al.micro2.valor}${al.micro2.unidad}`}</td>
-                    <td style={{padding:'5px 8px'}}>{al.custom&&<button onClick={()=>{if(confirm(`¿Eliminar "${al.nombre}" de la base?`))onEliminar(al.id);}} style={{background:'none',border:'none',color:'#CC0000',cursor:'pointer',fontSize:13}}>×</button>}</td>
-                  </tr>
-                );
-              })}
-              {filtered.length===0&&<tr><td colSpan={10} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
 
   // ─── RENDER PRINCIPAL ─────────────────────────────────────────────────────
   return(
     <div style={{minHeight:'100vh',background:G1}}>
-      {showPicker && PickerAlimentosComp({onClose:()=>setShowPicker(false),onAdd:agregarAlimento,comidaActiva,todosAlimentos,onNuevoAlimento:()=>{setShowPicker(false);setShowNuevoAlimento(true);}})}
-      {showNuevoAlimento && NuevoAlimentoFormComp({onClose:()=>setShowNuevoAlimento(false),onSave:al=>{saveAlimentoCustom(al).catch(e=>alert('No se pudo guardar el alimento: '+e.message));setShowNuevoAlimento(false);}})}
+      {showPicker && <PickerAlimentosComp onClose={()=>setShowPicker(false)} onAdd={agregarAlimento} comidaActiva={comidaActiva} todosAlimentos={todosAlimentos} onNuevoAlimento={()=>{setShowPicker(false);setShowNuevoAlimento(true);}} pickerSearch={pickerSearch} pickerCat={pickerCat}/>}
+      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{saveAlimentoCustom(al).catch(e=>alert('No se pudo guardar el alimento: '+e.message));setShowNuevoAlimento(false);}}/>}
       {/* Sub-tabs */}
       <div style={{display:'flex',borderBottom:`2px solid ${G2}`,background:WH,overflowX:'auto'}}>
         {[['planes','📋 Planes'],['plan','🏗️ Constructor'],['alimentos','📚 Alimentos']].map(([v,lbl])=>(
@@ -866,7 +870,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
       </div>
       {view==='planes'    && VistaPlanes()}
       {view==='plan'      && VistaConstructor()}
-      {view==='alimentos' && VistaAlimentosComp({todosAlimentos,onNuevoAlimento:()=>setShowNuevoAlimento(true),onEliminar:id=>deleteAlimentoCustom(id).catch(e=>alert('No se pudo eliminar: '+e.message))})}
+      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)} onEliminar={id=>deleteAlimentoCustom(id).catch(e=>alert('No se pudo eliminar: '+e.message))}/>}
     </div>
   );
 }

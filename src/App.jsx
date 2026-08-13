@@ -916,611 +916,65 @@ function EjecucionModal({ plan, exs, onClose }){
   );
 }
 
-export default function App(){
-  const s=mkS();
-  const [tab,setTab]=useState(()=>{
-    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
-  });
-  useEffect(()=>{
-    try { localStorage.setItem('activa_tab',tab); } catch {}
-  },[tab]);
-  // Ejercicios en tiempo real (Supabase) — seeded from DB0 on first run
-  const { exs, saveEjercicio: dbSaveEjercicio, deleteEjercicio: dbDeleteEjercicio, setExs } = useEjercicios(DB0);
-  // ── ESTADO DE PLAN SEMANAL ────────────────────────────────────────────────
-  // El plan agrupa de 1 a 5 sesiones (días) que comparten cliente/fecha/plan.
-  // Cada día = { id, obj, name, blocks, notas }. activeDia = día en edición.
-  const blankDia=(n=1)=>({id:genId('dia'),obj:null,name:`Día ${n}`,blocks:[],notas:''});
-  const [session,setSession]=useState({
-    cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
-    planNombre:'', dias:[blankDia(1)], activeDia:0,
-    faseIdx:0, // qué fase de la periodización se está armando (no siempre la inicial — se puede adelantar trabajo)
-  });
-  // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
-  const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
-  const [clients, setClientsLocal] = useState([]);
+const OverlayWrap=({children,wide})=>(
+  <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 16px'}}>
+    <div style={{background:WH,borderRadius:12,padding:24,width:'100%',maxWidth:wide?760:440,marginBottom:20}}>{children}</div>
+  </div>
+);
 
-  // Sincronizar clientes de DB con estado local
-  useEffect(()=>{ setClientsLocal(dbClients); }, [dbClients]);
+// ══════════════════════════════════════════════════════════════════════════
+// WIZARD DE ALTA DE CLIENTE
+// Paso 0 = Datos personales | Pasos 1-9 = Screening
+// ══════════════════════════════════════════════════════════════════════════
+const WIZARD_STEPS=[
+  {title:'Datos personales',          icon:'👤',fase:1},
+  {title:'Historia de salud',         icon:'🏥',fase:1},
+  {title:'Historia de entrenamiento', icon:'🏋️',fase:1},
+  {title:'Estilo de vida y objetivos',icon:'🌿',fase:1},
+  {title:'Guardar / Agendar evaluación',icon:'💾',fase:'transicion'},
+  {title:'Composición corporal',      icon:'📊',fase:2},
+  {title:'Evaluación postural',       icon:'🔍',fase:2},
+  {title:'Movilidad y control motor', icon:'🦵',fase:2},
+  {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
+  {title:'Banderas clínicas',         icon:'🚩',fase:2},
+  {title:'Potencia y saltos (deportistas)',icon:'🏃',fase:2},
+  {title:'Síntesis y plan',           icon:'📋',fase:2},
+];
 
-  // Wrappers que persisten en DB Y actualizan estado local
-  const saveClientFn = useCallback(async (client) => {
-    await dbSaveClient(client);
-  }, [dbSaveClient]);
-
-  const deleteClientFn = useCallback(async (id) => {
-    await dbDeleteClient(id);
-    if(session.clienteId===id) setSession(p=>({...p,clienteId:null,cliente:''}));
-  }, [dbDeleteClient, session.clienteId]);
-
-  const updateClientFn = useCallback(async (id, updates) => {
-    await dbUpdateClient(id, updates);
-  }, [dbUpdateClient]);
-  const [dbFilter,setDbFilter]=useState('all');
-  const [dbSearch,setDbSearch]=useState('');
-  const [showExForm,setShowExForm]=useState(false);
-  const [editingEx,setEditingEx]=useState(null);
-  const [expandedBlock,setExpandedBlock]=useState(null);
-  const [selBlock,setSelBlock]=useState(null);
-  const [replaceTarget,setReplaceTarget]=useState(null);
-  const [exSearch,setExSearch]=useState('');
-  const [overrideState,setOverrideState]=useState(null);
-  const [addBType,setAddBType]=useState('');
-  const [addBPos,setAddBPos]=useState('');
-  // brand ahora sincroniza entre dispositivos vía Supabase realtime (antes
-  // vivía solo en localStorage — ver useCentroConfig en db.js).
-  const { config: brand, saveConfig: setBrand } = useCentroConfig();
-  const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
-  const [clientWizard,setClientWizard]=useState(null);
-  const [clienteSearch,setClienteSearch]=useState('');
-  const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
-  const [editandoCriterios,setEditandoCriterios]=useState(null); // fase cuya plantilla se está editando
-  const [informeCliente,setInformeCliente]=useState(null);
-
-  const logoInputRef=useRef();
-  const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
-
-  const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
-  // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
-  const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
-  // Registro de planes del cliente activo + base de conocimiento de la IA
-  const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
-  // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
-  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
-  const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
-  // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
-  const ejecucionResumen=useMemo(()=>{
-    if(!ejecRegistros.length)return [];
-    const porEx={};
-    ejecRegistros.forEach(r=>{
-      if(r.peso_real==null&&!r.reps_real)return;
-      const nom=r.ejercicio_nombre||(exs.find(e=>e.id===r.ejercicio_id)?.nombre)||r.ejercicio_id;
-      (porEx[nom]=porEx[nom]||[]).push({sem:r.semana,peso:r.peso_real,reps:r.reps_real});
-    });
-    return Object.entries(porEx).map(([nom,arr])=>{
-      arr.sort((a,b)=>a.sem-b.sem);
-      const pts=arr.map(x=>`S${x.sem}: ${x.peso!=null?x.peso+'kg':''}${x.reps?'×'+x.reps:''}`.trim());
-      return `${nom} → ${pts.join(', ')}`;
-    });
-  },[ejecRegistros,exs]);
-  const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
-  const [showHistorial,setShowHistorial]=useState(false);
-  const [verEjecucion,setVerEjecucion]=useState(null);
-  const [compilarSel,setCompilarSel]=useState([]);
-  const [showEntrenarIA,setShowEntrenarIA]=useState(false);
-  // Fase activa del plan de periodización del cliente
-  const activeFasePlan=useMemo(()=>{
-    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
-    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
-  },[activeClient]);
-
-  // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
-  const numDias=session.dias?.length||1;
-  const activeDiaIdx=Math.min(session.activeDia||0,numDias-1);
-  const dia=session.dias?.[activeDiaIdx]||{obj:null,blocks:[],name:'',notas:''};
-  // Cronograma (plazos) del plan según la periodización del cliente y la fecha de inicio
-  const planMeta=useMemo(()=>{
-    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
-    return planTimeline(PERIODIZACIONES[activeClient.periodizacion],session.fecha);
-  },[activeClient,session.fecha]);
-
-  // Modifica SOLO el día activo (fn recibe el día y devuelve el día nuevo)
-  const setDia=(fn)=>setSession(p=>{
-    const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
-    return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
-  });
-  const addDia=()=>setSession(p=>{
-    if((p.dias?.length||0)>=6)return p;
-    return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
-  });
-  const removeDia=(idx)=>setSession(p=>{
-    if((p.dias?.length||1)<=1)return p;
-    const dias=p.dias.filter((_,i)=>i!==idx).map((d,i)=>({...d,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Día ${i+1}`}));
-    return {...p,dias,activeDia:Math.max(0,Math.min(p.activeDia,dias.length-1))};
-  });
-  const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
-  const setNumDias=(target)=>setSession(p=>{
-    const cur=p.dias?.length||1;
-    if(target===cur||target<1||target>6)return p;
-    if(target>cur){
-      const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
-      return {...p,dias:[...p.dias,...extra]};
-    }
-    return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
-  });
-  const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
-
-  // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
-  // Resumen textual compacto de un plan (para la lista y como contexto de IA)
-  const resumirPlan=(dias)=>{
-    return (dias||[]).filter(d=>d.obj&&d.blocks.length).map((d,i)=>{
-      const ejs=d.blocks.flatMap(b=>b.exercises.map(be=>{
-        const ex=exs.find(e=>e.id===be.exId);const p=be.params||b.params;
-        return ex?`${ex.nombre} ${p.series||'?'}×${p.reps||'?'}`:null;
-      }).filter(Boolean));
-      return `${d.name||`Día ${i+1}`} (${OBJS[d.obj]?.label||d.obj}): ${ejs.join('; ')}`;
-    }).join(' | ');
+// Componente propio a nivel de módulo — usa hooks internamente (useState),
+// así que TIENE que ser un componente de verdad (invocado como <Comp/>),
+// no una función que se llama directo. Vivía adentro de App() y se llamaba
+// como EditorCriteriosFase({...}) — eso rompía las Reglas de Hooks de React
+// apenas se llamaba condicionalmente (exactamente el error #310 reportado).
+const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>{
+  const [items,setItems]=useState(()=>[...(criteriosAvanceTemplate[fase]||[])]);
+  const dirty=JSON.stringify(items)!==JSON.stringify(criteriosAvanceTemplate[fase]||[]);
+  const setTexto=(i,v)=>setItems(p=>p.map((it,idx)=>idx===i?{...it,texto:v}:it));
+  const eliminar=(i)=>setItems(p=>p.filter((_,idx)=>idx!==i));
+  const agregar=()=>setItems(p=>[...p,{id:genId('crit'),texto:''}]);
+  const guardar=()=>{
+    const limpio=items.filter(it=>it.texto.trim());
+    saveCriteriosFase(fase,limpio);
+    setItems(limpio);
   };
-  const guardarPlanActual=async()=>{
-    if(!activeClient){alert('Vinculá un cliente antes de guardar el plan.');return;}
-    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
-    if(!diasArmados.length){alert('No hay días con ejercicios para guardar.');return;}
-    const id=session.planId||genId('plan');
-    const registro={
-      id,
-      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
-      fecha_inicio:session.fecha,
-      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
-      periodizacion:activeClient.periodizacion||'',
-      nivel_metodo:activeClient.nivel||'',
-      num_dias:diasArmados.length,
-      estado:session.planEstado||'activo',
-      dias:session.dias,
-      plazos:planMeta||null,
-      resumen:resumirPlan(session.dias),
-      es_ejemplo:session.planEsEjemplo||false,
-      notas:session.planNotasGlobal||'',
-    };
-    try{
-      await saveGymPlan(registro);
-      setSession(p=>({...p,planId:id}));
-      alert('💾 Plan guardado en el historial del cliente.');
-    }catch(e){alert('Error al guardar el plan: '+e.message);}
-  };
-  const cargarPlan=(plan)=>{
-    setSession(p=>({
-      ...p,
-      planId:plan.id,
-      planNombre:plan.nombre,
-      fecha:plan.fecha_inicio||p.fecha,
-      planEstado:plan.estado,
-      planEsEjemplo:plan.es_ejemplo,
-      dias:(plan.dias&&plan.dias.length)?plan.dias:[blankDia(1)],
-      activeDia:0,
-    }));
-    setShowHistorial(false);setExpandedBlock(null);setSelBlock(null);
-    setTab('session');
-  };
-  const duplicarPlan=(plan)=>{
-    setSession(p=>({
-      ...p,
-      planId:null, // nuevo registro
-      planNombre:`${plan.nombre} (copia)`,
-      fecha:new Date().toISOString().split('T')[0],
-      planEstado:'activo',planEsEjemplo:false,
-      dias:(plan.dias&&plan.dias.length)?JSON.parse(JSON.stringify(plan.dias)):[blankDia(1)],
-      activeDia:0,
-    }));
-    setShowHistorial(false);setTab('session');
-  };
-  const cambiarEstadoPlan=async(plan,estado)=>{try{await saveGymPlan({...plan,estado});}catch(e){console.error(e);}};
-  const marcarEjemploPlan=async(plan,val)=>{try{await saveGymPlan({...plan,es_ejemplo:val});}catch(e){console.error(e);}};
-
-  // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
-  const applyAISession=(aiResult)=>{
-    // Orden canónico de bloques en una sesión
-    const ORDEN_BLOQUES=['movilidad','activacion','propiocepcion','prev_rehab','potencia','pliometria','fuerza','accesorios','zona_media','funcional','cardio','flex_recovery'];
-    let descartados=0;
-    const blocks=(aiResult.blocks||[])
-      .filter(b=>BLOCKS[b.type]) // solo tipos de bloque válidos
-      .map((b)=>{
-        // VALIDACIÓN CLAVE: cada ejercicio debe pertenecer al bloque correcto.
-        // El ejercicio en la DB tiene .bloque — debe coincidir con b.type.
-        const ejerciciosValidos=(b.exercises||[]).filter(e=>{
-          const ex=exs.find(x=>x.id===e.exId);
-          if(!ex){descartados++;return false;}
-          if(ex.bloque!==b.type){descartados++;return false;} // descarta ej. en bloque equivocado
-          return true;
-        });
-        return {type:b.type,params:b.params,exercises:ejerciciosValidos};
-      })
-      .filter(b=>b.exercises.length>0) // descarta bloques que quedaron vacíos
-      .sort((a,b)=>ORDEN_BLOQUES.indexOf(a.type)-ORDEN_BLOQUES.indexOf(b.type)) // ordena
-      .map((b,i)=>({
-        id:Date.now()+i,
-        type:b.type,
-        position:i+1,
-        exercises:b.exercises.map(e=>({
-          exId:e.exId,override:false,note:'',
-          params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
-          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
-        })),
-        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
-      }));
-    setDia(d=>({...d,obj:d.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||d.name,notas:aiResult.objetivo_sesion||d.notas}));
-    if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
-  };
-  const suggestBlocks=(obj)=>{
-    const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
-    setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
-  };
-  const addBlock=()=>{
-    if(!addBType||!addBPos||dia.blocks.length>=7)return;
-    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
-    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
-    setAddBType('');setAddBPos('');
-  };
-  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
-  const addExToBlock=(blockId,exId,override=false,note='')=>{
-    setDia(d=>({...d,blocks:d.blocks.map(b=>{
-      if(b.id!==blockId||b.exercises.length>=5)return b;
-      const exObj=exs.find(e=>e.id===exId);
-      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,b.params.reps):null;
-      const exEntry={exId,override,note,
-        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
-        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:''};
-      return{...b,exercises:[...b.exercises,exEntry]};
-    })}));
-  };
-  const updateExParam=(blockId,exId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
-  })}));
-  const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>{
-      if(be.exId!==exId)return be;
-      const merged={...be,params:{...(be.params||{}),...params}};
-      // Recalcular peso sugerido al cambiar reps/modo, salvo que se haya fijado a mano
-      if(('reps'in params||'modo'in params)&&be.pesoSugAuto!==false){
-        const exObj=exs.find(e=>e.id===exId);
-        const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,merged.params.reps):null;
-        merged.pesoSug=(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'';
-      }
-      return merged;
-    })};
-  })}));
-  // El usuario escribe un peso a mano → deja de recalcularse solo
-  const setPesoSugManual=(blockId,exId,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,pesoSug:val,pesoSugAuto:false}:be)};
-  })}));
-  // Volver a modo automático y recalcular desde las reps actuales
-  const reAutoPesoSug=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>{
-      if(be.exId!==exId)return be;
-      const exObj=exs.find(e=>e.id===exId);
-      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,(be.params||{}).reps):null;
-      return{...be,pesoSugAuto:true,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):''};
-    })};
-  })}));
-  const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
-  })}));
-  // Mover un ejercicio dentro del bloque (por índice, sin perder el resto)
-  const moveExInBlock=(blockId,idx,dir)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    const arr=b.exercises.slice();const j=idx+dir;
-    if(idx<0||idx>=arr.length||j<0||j>=arr.length)return b;
-    [arr[idx],arr[j]]=[arr[j],arr[idx]];
-    return{...b,exercises:arr};
-  })}));
-  // Reemplazar el ejercicio en una posición por otro, conservando series/reps/etc.
-  const replaceExInBlock=(blockId,idx,ex,override=false,note='')=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    const arr=b.exercises.slice();
-    if(idx<0||idx>=arr.length)return b;
-    const ns=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,(arr[idx].params||b.params).reps);
-    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:'',pesoSugAuto:true};
-    return{...b,exercises:arr};
-  })}));
-  const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
-  // Agrupar ejercicios: biserie / triserie / circuito, con letra de grupo (A/B/C/D)
-  const setExGrupo=(blockId,exId,grupo)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,grupo}:be)};
-  })}));
-
-  const handlePickEx=(block,ex)=>{
-    const rest=checkRestriction(ex,activeClient);
-    if(rest==='block'){
-      alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
-      return;
-    }
-    const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
-    if(rest==='warn'){
-      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true,replaceIdx:repl});
-      return;
-    }
-    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false,replaceIdx:repl});return;}
-    if(repl!=null){replaceExInBlock(block.id,repl,ex);setReplaceTarget(null);setSelBlock(null);setExSearch('');}
-    else{addExToBlock(block.id,ex.id);setSelBlock(null);setExSearch('');}
-  };
-  const confirmOverride=()=>{
-    if(!overrideState)return;
-    if(overrideState.replaceIdx!=null){replaceExInBlock(overrideState.blockId,overrideState.replaceIdx,overrideState.ex,true,overrideState.note);setReplaceTarget(null);}
-    else addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
-    setOverrideState(null);setSelBlock(null);setExSearch('');
-  };
-
-  // ─── GUARDAR CLIENTE ────────────────────────────────────────────────────
-  const saveClient=(client)=>{
-    saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
-    setClientWizard(null);
-  };
-  // Genera (si hace falta) y copia el link del portal personal del cliente
-  const copiarPortalCliente=async(c)=>{
-    let token=c.portal_token;
-    if(!token){
-      token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
-      try{await updateClientFn(c.id,{portal_token:token});}
-      catch(e){alert('No se pudo generar el acceso: '+e.message);return;}
-    }
-    const link=`${location.origin}/portal.html?t=${token}`;
-    try{await navigator.clipboard.writeText(link);alert('📲 Link del portal copiado:\n\n'+link+'\n\nEnviáselo al cliente (WhatsApp). Con ese enlace entra a SU entrenamiento y carga los pesos/reps de cada semana. Solo ve sus propios datos.');}
-    catch(e){prompt('Copiá el link del portal de '+c.nombre+':',link);}
-  };
-  // Regenera el token: invalida el link anterior y crea uno nuevo
-  const regenerarPortalCliente=async(c)=>{
-    if(!confirm(`¿Regenerar el link de ${c.nombre}?\n\nEl link anterior dejará de funcionar. Tenés que enviarle el nuevo.`))return;
-    const token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
-    try{await updateClientFn(c.id,{portal_token:token});}
-    catch(e){alert('No se pudo regenerar: '+e.message);return;}
-    const link=`${location.origin}/portal.html?t=${token}`;
-    try{await navigator.clipboard.writeText(link);alert('🔄 Link nuevo generado y copiado:\n\n'+link+'\n\nEl anterior ya no sirve. Enviale este al cliente.');}
-    catch(e){prompt('Nuevo link del portal de '+c.nombre+':',link);}
-  };
-  const deleteClient=(id)=>{
-    deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
-  };
-
-  // ─── EXPORTAR PDF (PLAN COMPLETO: TODOS LOS DÍAS + PLAZOS + GRILLA 8 SEM) ──
-  const exportPDF=()=>{
-    const diasConBloques=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
-    if(!diasConBloques.length){alert('No hay días con bloques cargados para exportar.');return;}
-    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
-    const SEMANAS=8;
-    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
-    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
-
-    // Tabla de UN día (una fila por ejercicio + 8 celdas vacías para pesos semanales)
-    const tablaDia=(d)=>{
-      const rows=d.blocks.flatMap(b=>{
-        const bd=BLOCKS[b.type];const bg=bd.color;
-        if(b.exercises.length===0){
-          return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
-        }
-        return b.exercises.map((be,idx)=>{
-          const ex=exs.find(e=>e.id===be.exId);
-          const exNombre=ex?ex.nombre:be.exId;
-          const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
-          const pctTxt=sug?`${sug.pct}%`:'—';
-          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
-          const bloqueCel=idx===0
-            ?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`
-            :'';
-          return`<tr>
-            ${bloqueCel}
-            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
-            <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
-            ${celdasSem}
-          </tr>`;
-        });
-      }).join('');
-      return`<table class="plan"><thead><tr>
-          <th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}
-        </tr></thead><tbody>${rows}</tbody></table>
-        ${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
-    };
-
-    // Secciones de cada día, separadas con salto de página
-    const seccionesDias=diasConBloques.map((d,i)=>{
-      const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
-      return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}>
-        <div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${d.blocks.reduce((a,b)=>a+b.exercises.length,0)} ejercicios</div></div></div>
-        ${tablaDia(d)}
-      </section>`;
-    }).join('');
-
-    // ── PLAZOS DEL PLAN (punto 4) ──
-    let plazosHtml='';
-    if(planMeta){
-      const faseRows=planMeta.fases.map(f=>`<tr>
-        <td style="padding:5px 9px;font-weight:700;font-size:10px;">${f.nombre}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.semanasLabel||'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.fIni&&f.fFin?`${f.fIni} → ${f.fFin}`:'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.reps||'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.intensidad||'—'}</td>
-        <td style="padding:5px 9px;font-size:9px;color:#555;">${f.objetivo||''}</td>
-      </tr>`).join('');
-      const totalTxt=planMeta.secuencial&&planMeta.totalSemanas
-        ?`<strong>${planMeta.totalSemanas} semanas</strong>${planMeta.fechaFin?` · ${planMeta.fechaInicio} → ${planMeta.fechaFin}`:''}`
-        :`${planMeta.duracionTexto} <span style="color:#888;">(fases no secuenciales en el tiempo)</span>`;
-      const faseMetodo=activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:(activeClient?activeClient.nivel:'—');
-      plazosHtml=`<section class="plazos">
-        <div class="sec-title">📅 Plazos del plan — ${planMeta.nombre}</div>
-        <div style="font-size:10px;color:#555;margin:2px 0 8px;">Autor/base: ${planMeta.autor||'—'} · Duración total: ${totalTxt}</div>
-        <div style="font-size:10px;color:#555;margin-bottom:8px;">Fase del Método Activa Integra: <strong style="color:${brand.colorPrimary};">${(faseMetodo||'').toUpperCase()}</strong> · El cronograma de abajo corresponde a las fases del <strong>plan asignado</strong> (no del método).</div>
-        <table class="plan"><thead><tr><th>Fase del plan</th><th style="text-align:center;">Semanas</th><th style="text-align:center;">Fechas estimadas</th><th style="text-align:center;">Reps</th><th style="text-align:center;">Intensidad</th><th>Objetivo</th></tr></thead><tbody>${faseRows}</tbody></table>
-      </section>`;
-    }
-
-    const sfBanner=activeClient?`<div class="sf" style="background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
-    const logoHtml=brand.logoImg
-      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
-      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
-
-    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
-      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
-      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
-      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
-      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
-      .sf{margin-bottom:12px;padding:9px 13px;border-radius:6px;font-size:11px}
-      .sec-title{font-size:14px;font-weight:800;color:${brand.colorPrimary};margin-top:4px}
-      .plazos{margin-bottom:16px;padding-bottom:14px;border-bottom:2px dashed #ddd}
-      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:2px}
-      .dia-num{background:${brand.colorPrimary};color:#fff;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
-      .dia-title{font-size:15px;font-weight:800;color:#111}
-      .dia-sub{font-size:10px;color:#777}
-      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
-      .leyenda{margin-top:6px;font-size:9px;color:#888;font-style:italic}
-      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
-      @page{size:A4 landscape;margin:12mm}
-      @media print{body{padding:0}}`;
-
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${planNom}</title><style>${css}</style></head><body>
-      <div class="hdr"><div>${logoHtml}</div>
-        <div style="text-align:right">
-          <div style="font-size:16px;font-weight:800;color:#111">${planNom}</div>
-          <div style="font-size:10px;color:#666;margin-top:3px">Cliente: ${session.cliente||'—'}${activeClient?` · Nivel: ${NIVEL[activeClient.nivel].label}`:''} · Inicio: ${session.fecha} · ${diasConBloques.length} sesión/es por semana</div>
+  return(
+    <div style={{background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:6,padding:'8px 10px',marginTop:6}}>
+      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>Esta plantilla se sincroniza en todos los dispositivos — editarla acá cambia los requisitos para TODOS los clientes en fase {NIVEL[fase]?.label}, no solo este.</div>
+      {items.map((it,i)=>(
+        <div key={it.id} style={{display:'flex',gap:5,marginBottom:4,alignItems:'center'}}>
+          <input value={it.texto} onChange={e=>setTexto(i,e.target.value)} placeholder="Requisito..." style={{...s.inp,fontSize:11,padding:'5px 8px'}}/>
+          <button onClick={()=>eliminar(i)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:13,padding:'0 4px'}}>✕</button>
         </div>
+      ))}
+      <div style={{display:'flex',gap:6,marginTop:6}}>
+        <button onClick={agregar} style={{...s.btnG,fontSize:10,padding:'5px 10px',borderStyle:'dashed'}}>+ Requisito</button>
+        <button onClick={guardar} disabled={!dirty} style={{...s.btnR,fontSize:10,padding:'5px 12px',opacity:dirty?1:.4,cursor:dirty?'pointer':'not-allowed'}}>Guardar plantilla</button>
       </div>
-      ${sfBanner}
-      ${plazosHtml}
-      ${seccionesDias}
-      <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
-      <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
-      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
-    const w=window.open('','_blank');w.document.write(html);w.document.close();
-  };
-
-  // Compila varios planes guardados (fases del bloque) en UN solo PDF, en orden
-  const compilarBloquePDF=(planes)=>{
-    const lista=(planes||[]).filter(p=>Array.isArray(p.dias)&&p.dias.some(d=>d.obj&&(d.blocks||[]).length>0));
-    if(lista.length===0){alert('Elegí al menos un plan con días armados para compilar.');return;}
-    const ord=[...lista].sort((a,b)=>{const fa=a.fecha_inicio||'',fb=b.fecha_inicio||'';if(!fa&&!fb)return 0;if(!fa)return 1;if(!fb)return -1;return fa<fb?-1:fa>fb?1:0;});
-    const SEMANAS=8;
-    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
-    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
-    const tablaDia=(d)=>{
-      const rows=(d.blocks||[]).flatMap(b=>{
-        const bd=BLOCKS[b.type]||{color:'#333',label:b.type,emoji:''};const bg=bd.color;
-        if((b.exercises||[]).length===0)return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
-        return b.exercises.map((be,idx)=>{
-          const ex=exs.find(e=>e.id===be.exId);const exNombre=ex?ex.nombre:be.exId;const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');const pctTxt=sug?`${sug.pct}%`:'—';
-          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
-          const bloqueCel=idx===0?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`:'';
-          return`<tr>${bloqueCel}<td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td><td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>${celdasSem}</tr>`;
-        });
-      }).join('');
-      return`<table class="plan"><thead><tr><th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}</tr></thead><tbody>${rows}</tbody></table>${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
-    };
-    const fasesSecc=ord.map((pl,pi)=>{
-      const dias=(pl.dias||[]).filter(d=>d.obj&&(d.blocks||[]).length>0);
-      const rango=pl.fecha_inicio?`${pl.fecha_inicio}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}`:'';
-      const seccionesDias=dias.map((d,i)=>{
-        const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
-        return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}><div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${(d.blocks||[]).reduce((a,b)=>a+(b.exercises||[]).length,0)} ejercicios</div></div></div>${tablaDia(d)}</section>`;
-      }).join('');
-      return`<div class="fase" style="page-break-before:always;"><div class="fase-hdr"><div class="fase-num">FASE ${pi+1}</div><div><div class="fase-title">${pl.nombre}</div><div class="fase-sub">${rango?`${rango} · `:''}${(pl.periodizacion||'').replace(/_/g,' ')} · ${dias.length} sesión/es por semana</div></div></div>${seccionesDias}</div>`;
-    }).join('');
-    const idxRows=ord.map((pl,pi)=>`<tr><td style="padding:5px 9px;font-weight:700;font-size:11px;">Fase ${pi+1}</td><td style="padding:5px 9px;font-size:11px;">${pl.nombre}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.fecha_inicio||'—'}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${(pl.periodizacion||'').replace(/_/g,' ')||'—'}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.num_dias||((pl.dias||[]).filter(d=>d.obj).length)} día/s</td></tr>`).join('');
-    const logoHtml=brand.logoImg
-      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
-      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
-    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
-      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
-      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
-      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
-      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
-      table.idx{width:100%;border-collapse:collapse;margin-top:14px}
-      table.idx th{background:#1a1a1a;color:#fff;padding:7px 9px;font-size:10px;text-align:left;text-transform:uppercase}
-      table.idx td{border-bottom:1px solid #e0e0e0}
-      .cover-title{font-size:26px;font-weight:900;color:${brand.colorPrimary};margin-top:26px;letter-spacing:1px}
-      .cover-sub{font-size:13px;color:#555;margin-top:6px}
-      .fase-hdr{display:flex;align-items:center;gap:12px;background:${brand.colorPrimary};color:#fff;padding:12px 16px;border-radius:8px;margin-bottom:10px}
-      .fase-num{background:rgba(255,255,255,.22);border-radius:6px;padding:6px 12px;font-weight:900;font-size:14px;flex-shrink:0}
-      .fase-title{font-size:18px;font-weight:900}
-      .fase-sub{font-size:10px;opacity:.9;margin-top:2px}
-      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px}
-      .dia-num{background:#1a1a1a;color:#fff;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
-      .dia-title{font-size:14px;font-weight:800;color:#111}
-      .dia-sub{font-size:10px;color:#777}
-      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
-      .leyenda{margin-top:14px;font-size:9px;color:#888;font-style:italic}
-      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
-      @page{size:A4 landscape;margin:12mm}
-      @media print{body{padding:0}}`;
-    const nombreBloque=`Bloque de entrenamiento — ${activeClient?`${activeClient.nombre} ${activeClient.apellido}`:'Cliente'}`;
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${nombreBloque}</title><style>${css}</style></head><body>
-      <div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">Plan por fases</div><div style="font-size:10px;color:#666;margin-top:3px">Generado ${new Date().toLocaleDateString('es-UY')}</div></div></div>
-      <div class="cover-title">${nombreBloque}</div>
-      <div class="cover-sub">${ord.length} fases · ${activeClient?`Nivel: ${NIVEL[activeClient.nivel].label}`:''}</div>
-      <table class="idx"><thead><tr><th>#</th><th>Fase</th><th style="text-align:center;">Fechas</th><th style="text-align:center;">Periodización</th><th style="text-align:center;">Sesiones</th></tr></thead><tbody>${idxRows}</tbody></table>
-      <div class="leyenda">Cada fase arranca en página nueva. S1–S8 = semanas de esa fase; el cliente anota el peso real usado. Las fases se ordenan por fecha de inicio.</div>
-      ${fasesSecc}
-      <div class="footer">${brand.gymName} · ${brand.gymSub} · Método Activa Integra</div>
-      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
-    const w=window.open('','_blank');w.document.write(html);w.document.close();
-  };
-
-  const exportCSV=()=>{
-    const headers=['Día','Posición','Bloque','Ejercicio','Override','Series','Reps','RPE','Tempo','Descanso','% 1RM','Peso sug. (kg)',...Array.from({length:8},(_,i)=>`Sem ${i+1}`),'Cliente','Nivel','Plan','Fecha inicio'];
-    const rows=[];
-    const nivelLabel=activeClient?NIVEL[activeClient.nivel].label:'';
-    const planNom=session.planNombre||'';
-    (session.dias||[]).forEach((d,di)=>{
-      if(!d.obj)return;
-      const diaLbl=d.name||`Día ${di+1}`;
-      const objLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
-      d.blocks.forEach(b=>{
-        const bd=BLOCKS[b.type];
-        if(b.exercises.length===0){rows.push([diaLbl,b.position,bd.label,'(sin ejercicios)','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,'','','','','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);return;}
-        b.exercises.forEach(be=>{
-          const ex=exs.find(e=>e.id===be.exId);
-          const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          rows.push([diaLbl,b.position,bd.label,(be.grupo?`[${grupoTagTxt(be.grupo)}] `:'')+(ex?ex.nombre:be.exId),be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
-        });
-      });
-    });
-    const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
-    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(planNom||'plan').replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
-  };
-
-  const OverlayWrap=({children,wide})=>(
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 16px'}}>
-      <div style={{background:WH,borderRadius:12,padding:24,width:'100%',maxWidth:wide?760:440,marginBottom:20}}>{children}</div>
     </div>
   );
+};
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // WIZARD DE ALTA DE CLIENTE
-  // Paso 0 = Datos personales | Pasos 1-9 = Screening
-  // ══════════════════════════════════════════════════════════════════════════
-  const WIZARD_STEPS=[
-    {title:'Datos personales',          icon:'👤',fase:1},
-    {title:'Historia de salud',         icon:'🏥',fase:1},
-    {title:'Historia de entrenamiento', icon:'🏋️',fase:1},
-    {title:'Estilo de vida y objetivos',icon:'🌿',fase:1},
-    {title:'Guardar / Agendar evaluación',icon:'💾',fase:'transicion'},
-    {title:'Composición corporal',      icon:'📊',fase:2},
-    {title:'Evaluación postural',       icon:'🔍',fase:2},
-    {title:'Movilidad y control motor', icon:'🦵',fase:2},
-    {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
-    {title:'Banderas clínicas',         icon:'🚩',fase:2},
-    {title:'Potencia y saltos (deportistas)',icon:'🏃',fase:2},
-    {title:'Síntesis y plan',           icon:'📋',fase:2},
-  ];
-
-  // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
-  const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand})=>{
+  const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,setTab,iaReglas})=>{
     const {tests:clientTests}=useFuerzaTests(cliente?.id||null);
     const [iaInforme,setIaInforme]=useState(null);
     if(!cliente)return null;
@@ -1754,6 +1208,813 @@ export default function App(){
       </div>
     );
   };
+
+  const FuerzaTab=({brand,clients,s,saveClientFn})=>{
+    const [selClientId,setSelClientId]=useState('');
+    const pac=clients.find(x=>x.id===selClientId);
+    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
+    const [showForm,setShowForm]=useState(false);
+    const [editingTest,setEditingTest]=useState(null);
+    const [showPlan,setShowPlan]=useState(false);
+    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
+    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
+    const {customRows,saveCustom}=useCustomTests(selClientId||null);
+    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
+    const [showCustomEdit,setShowCustomEdit]=useState(false);
+    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
+    const migradoRef=useRef(new Set());
+    useEffect(()=>{
+      if(!selClientId||migradoRef.current.has(selClientId))return;
+      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
+      try{
+        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
+        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
+          migradoRef.current.add(selClientId);
+          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
+        }
+      }catch{}
+    },[selClientId,customRows,saveCustom]);
+
+    // Sync custom tests when client changes
+    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
+
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}} brand={brand} s={s}/>}
+        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)} brand={brand} clients={clients} s={s}/>}
+        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} brand={brand} s={s} onSave={(tests)=>{
+          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
+        }}/>}
+        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
+          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
+        </div>
+        {/* Selector de cliente */}
+        <div style={{...s.card,marginBottom:12}}>
+          <span style={s.lbl}>Seleccionar cliente</span>
+          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
+            <option value=''>— Seleccionar cliente —</option>
+            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
+          </select>
+        </div>
+        {pac&&(
+          <>
+            {/* Header del paciente */}
+            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
+                  <div style={{fontSize:11,color:G3,marginTop:2}}>
+                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
+                    {tests.length>0&&(()=>{
+                      const last=new Date(tests[0].fecha);
+                      const next=new Date(last);next.setMonth(next.getMonth()+4);
+                      const dias=Math.ceil((next-new Date())/86400000);
+                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
+                    })()}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
+                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
+                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
+                </div>
+              </div>
+            </div>
+            {/* Plan activo */}
+            {planes.filter(p=>p.activo).length>0&&(()=>{
+              const plan=planes.filter(p=>p.activo)[0];
+              const ps=PERIODIZACIONES[plan.sistema_id];
+              return(
+                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
+                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
+                  {ps&&(
+                    <>
+                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
+                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
+                        {ps.fases.map((f,i)=>(
+                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
+                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
+                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
+                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
+                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
+                    </>
+                  )}
+                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
+                </div>
+              );
+            })()}
+            {/* Grid resumen 1RM */}
+            <div style={{...s.card,marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                {allTests.map((tf,tfIdx)=>{
+                  const data=tests.filter(t=>t.test_id===tf.id);
+                  const last=data[0];
+                  const rm1=last?.rm1_real||last?.rm1_calculado;
+                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
+                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
+                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
+                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
+                  return(
+                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
+                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
+                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
+                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
+                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
+                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
+                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {/* Historial */}
+            <div style={s.card}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
+              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
+              {tests.map(t=>{
+                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
+                const rm1=t.rm1_real||t.rm1_calculado;
+                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
+                return(
+                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
+                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
+                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
+                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
+                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
+                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
+                      </div>
+                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
+                    </div>
+                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
+                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
+                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
+                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
+      </div>
+    );
+  };
+
+
+  const CustomTestsModal=({customTests,onSave,onClose,brand,s})=>{
+    const [local,setLocal]=useState(()=>[
+      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
+      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
+      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
+    ]);
+    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
+            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
+          </div>
+          {local.map((t,i)=>(
+            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div><span style={s.lbl}>Nombre del ejercicio</span>
+                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Patrón de movimiento</span>
+                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Protocolo de evaluación</span>
+                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
+                </div>
+                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>{
+            const validos=local.filter(t=>t.nombre.trim());
+            onSave(validos);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
+            💾 Guardar ejercicios personalizados
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+
+  const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose,brand,clients,s})=>{
+    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
+      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const p=PERIODIZACIONES[form.sistema_id];
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div><span style={s.lbl}>Sistema de periodización</span>
+              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
+                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
+              </select>
+            </div>
+            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
+              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
+              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
+              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
+                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
+                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
+                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
+                </div>))}
+              </div>
+            </div>)}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
+            </div>
+            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
+          </div>
+          <button onClick={()=>{
+            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
+            savePlan(planFinal).catch(e=>console.error(e));
+            const cli=clients.find(x=>x.id===selClientId);
+            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 Asignar plan
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── CustomTestsModal — gestión de 3 ejercicios personalizados ─────────────
+
+  const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests,brand,s})=>{
+    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
+      fecha:new Date().toISOString().split('T')[0],
+      peso_corporal:pac?.screening?.peso||'',
+      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
+    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const testsDisp=allTests||TESTS_FUERZA;
+    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
+    // Pull-ups: base = peso corporal
+    const esDom=form.test_id==='pull_ups';
+    const pesoLev=parseFloat(form.peso_levantado)||0;
+    const pesoCorp=parseFloat(form.peso_corporal)||0;
+    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
+    const formulaSel=form.formula||'epley_brzycki';
+    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
+    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div>
+              <span style={s.lbl}>Ejercicio</span>
+              <select value={form.test_id} onChange={e=>{
+                const t=testsDisp.find(x=>x.id===e.target.value);
+                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
+              }} style={{...s.sel,width:'100%'}}>
+                <optgroup label="── Ejercicios estándar ──">
+                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>
+                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
+                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>}
+              </select>
+            </div>
+            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
+              <strong>📋 Protocolo:</strong> {ti.protocolo}
+              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
+            </div>}
+            {/* SELECTOR DE FÓRMULA */}
+            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
+              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
+              <select value={form.formula||'epley_brzycki'} onChange={e=>{
+                const nuevaF=e.target.value;
+                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
+                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
+              }} style={{...s.sel,width:'100%'}}>
+                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
+              </select>
+              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
+                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
+              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
+              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
+                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
+                  {((form.formula||'epley_brzycki')==='lombardi'
+                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
+                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Preview 1RM */}
+            {rm1c&&(
+              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
+                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
+                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
+                </div>
+                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
+                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
+                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
+                </div>}
+              </div>
+            )}
+            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
+              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
+            </div>
+          </div>
+          <button onClick={()=>{
+            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
+            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
+            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 {editingTest?'Guardar cambios':'Guardar test'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── PlanFormComp — asignar plan de periodización ──────────────────────────
+
+  const RehabTab=({brand,clients,s})=>{
+    const [rehabRegion,setRehabRegion]=useState('');
+    const [rehabFase,setRehabFase]=useState('aguda');
+    const [rehabTejido,setRehabTejido]=useState('');
+    const [rehabSession,setRehabSession]=useState([]);
+    const [showTejidos,setShowTejidos]=useState(false);
+    const [activeClientRehab,setActiveClientRehab]=useState('');
+    const [rehabNotas,setRehabNotas]=useState('');
+    const [showAddEx,setShowAddEx]=useState(false);
+    const [buscarEx,setBuscarEx]=useState('');
+    const {protocolos:customEx,saveEjercicio:saveCustomEx,deleteEjercicio:deleteCustomEx}=useRehabProtocolos();
+
+    const ejerciciosBase=rehabRegion&&REHAB_DB[rehabRegion]?REHAB_DB[rehabRegion][rehabFase]||[]:[];
+    const ejerciciosCustom=customEx.filter(e=>e.region===rehabRegion&&e.fase===rehabFase);
+    const ejerciciosDisponibles=[...ejerciciosBase,...ejerciciosCustom.map(e=>({id:e.id,nombre:e.nombre,desc:e.desc||'',param:e.param||'',custom:true}))];
+    const ejerciciosFiltrados=buscarEx?ejerciciosDisponibles.filter(e=>e.nombre.toLowerCase().includes(buscarEx.toLowerCase())):ejerciciosDisponibles;
+
+    const addToSession=(ej)=>{
+      if(rehabSession.find(e=>e.id===ej.id))return;
+      setRehabSession(p=>[...p,{...ej,series:3,reps:ej.param,notas:'',activo:true}]);
+    };
+    const removeFromSession=(id)=>setRehabSession(p=>p.filter(e=>e.id!==id));
+    const updateEj=(id,k,v)=>setRehabSession(p=>p.map(e=>e.id===id?{...e,[k]:v}:e));
+
+    const exportRehabPDF=()=>{
+      if(!rehabSession.length)return;
+      const region=rehabRegion?REGIONES[rehabRegion]:{label:'General',color:'#374151'};
+      const fase=FASES_REHAB[rehabFase];
+      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:8px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:8px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.desc}</td><td style="padding:8px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.reps}</td><td style="padding:8px 10px;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.notas||''}</td></tr>`).join('');
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>${getPrintCSS(brand.colorPrimary)}</style></head><body>
+        <div style="display:flex;justify-content:space-between;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:16px">
+          <div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary}">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
+          <div style="text-align:right"><div style="font-size:15px;font-weight:800">Protocolo de Rehabilitación</div>
+            <div style="font-size:11px;color:#555">Región: ${region.label} · Fase: ${fase.label}</div>
+            ${activeClientRehab?`<div style="font-size:11px;color:#777">Paciente: ${activeClientRehab}</div>`:''}
+            <div style="font-size:10px;color:#999">Fecha: ${new Date().toLocaleDateString('es-ES')}</div></div>
+        </div>
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:#1a1a1a;color:#fff">
+            <th style="padding:8px 10px;font-size:9px;text-align:left">Ejercicio</th>
+            <th style="padding:8px 10px;font-size:9px;text-align:left">Descripción</th>
+            <th style="padding:8px 10px;font-size:9px;width:130px">Parámetros</th>
+            <th style="padding:8px 10px;font-size:9px;text-align:left">Notas sesión</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${rehabNotas?`<div style="margin-top:14px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:10px 14px;font-size:11px"><strong>Notas:</strong> ${rehabNotas}</div>`:''}
+        <div style="margin-top:12px;background:#fff9ec;border:1px solid #fcd34d;border-radius:6px;padding:10px;font-size:10px;color:#78350f"><strong>⚠</strong> Suspender si el dolor supera 4/10. Reevaluar ante exacerbación de síntomas.</div>
+        <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · FisioActiva · Método Activa Integra · ${new Date().toLocaleDateString('es-ES')}</div>
+        <script>window.onload=()=>window.print()<\/script></body></html>`;
+      const w=window.open('','_blank');w.document.write(html);w.document.close();
+    };
+
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {showAddEx&&<NuevoEjercicioRehabComp region={rehabRegion} fase={rehabFase} onSave={(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);}} onClose={()=>setShowAddEx(false)} s={s} brand={brand}/>}
+
+        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:`4px solid ${brand.colorPrimary}`}}>
+          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:3}}>🩹 Constructor de Sesión — Rehabilitación</div>
+          <div style={{fontSize:12,color:G3}}>Protocolos por región y fase · Ejercicios editables y guardados en BD</div>
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+          <div><span style={s.lbl}>Paciente</span>
+            {clients.filter(c=>c.nivel==='restaura').length>0
+              ?<select value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value=''>Sin paciente vinculado</option>
+                  {clients.filter(c=>c.nivel==='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}
+                  {clients.filter(c=>c.nivel!=='restaura').length>0&&<optgroup label="── Otros ──">{clients.filter(c=>c.nivel!=='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}</optgroup>}
+                </select>
+              :<input value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} placeholder="Nombre del paciente" style={s.inp}/>}
+          </div>
+          <div><span style={s.lbl}>Notas del fisioterapeuta</span>
+            <input value={rehabNotas} onChange={e=>setRehabNotas(e.target.value)} placeholder="Indicaciones especiales..." style={s.inp}/></div>
+        </div>
+
+        <div style={{marginBottom:12}}>
+          <span style={s.lbl}>Región anatómica</span>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginTop:4}}>
+            {Object.entries(REGIONES).map(([k,v])=>(
+              <div key={k} onClick={()=>{setRehabRegion(k);setRehabSession([]);}} style={{cursor:'pointer',padding:'9px 6px',borderRadius:7,border:`2px solid ${rehabRegion===k?v.color:G2}`,background:rehabRegion===k?`${v.color}15`:WH,textAlign:'center',transition:'all .15s'}}>
+                <div style={{fontSize:16,marginBottom:3}}>{v.icon}</div>
+                <div style={{fontSize:10,fontWeight:rehabRegion===k?700:400,color:rehabRegion===k?v.color:G4,lineHeight:1.2}}>{v.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{marginBottom:12}}>
+          <span style={s.lbl}>Fase de rehabilitación</span>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginTop:4}}>
+            {Object.entries(FASES_REHAB).map(([k,v])=>(
+              <div key={k} onClick={()=>{setRehabFase(k);setRehabSession([]);}} style={{cursor:'pointer',padding:'10px 12px',borderRadius:7,border:`2px solid ${rehabFase===k?v.color:G2}`,background:rehabFase===k?v.bg:WH,transition:'all .15s'}}>
+                <div style={{fontWeight:700,fontSize:12,color:rehabFase===k?v.color:'#333'}}>{v.label}</div>
+                <div style={{fontSize:10,color:G3,marginTop:2}}>{v.sub}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={()=>setShowTejidos(p=>!p)} style={{...s.btnBK,marginBottom:12,width:'100%',padding:'9px',fontSize:12}}>
+          {showTejidos?'▲ Ocultar':'📋 Ver protocolos por tipo de tejido (fractura, tendón, ligamento, músculo, fascia)'}
+        </button>
+
+        {showTejidos&&(
+          <div style={{marginBottom:14}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:10}}>
+              {Object.entries(TEJIDOS_BASE).map(([k,v])=>(
+                <div key={k} onClick={()=>setRehabTejido(rehabTejido===k?'':k)} style={{cursor:'pointer',padding:'10px 8px',borderRadius:7,border:`2px solid ${rehabTejido===k?R:G2}`,background:rehabTejido===k?'#FEF2F2':WH,textAlign:'center',transition:'all .15s'}}>
+                  <div style={{fontSize:18,marginBottom:3}}>{v.icon}</div>
+                  <div style={{fontSize:10,fontWeight:700,color:rehabTejido===k?R:G4}}>{v.label}</div>
+                </div>
+              ))}
+            </div>
+            {rehabTejido&&(()=>{
+              const tj=TEJIDOS_BASE[rehabTejido];const fa=tj.fases[rehabFase];
+              return(
+                <div style={{background:WH,border:`1px solid ${G2}`,borderRadius:8,padding:'12px 14px',borderLeft:`4px solid ${R}`}}>
+                  <div style={{fontWeight:800,fontSize:13,marginBottom:4}}>{tj.icon} {tj.label} — {fa.titulo}</div>
+                  <div style={{fontSize:11,color:'#444',marginBottom:8,background:'#FFF9F0',borderRadius:5,padding:'6px 10px'}}><strong>Criterios:</strong> {fa.criterios}</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:5,marginBottom:10}}>
+                    {fa.ejercicios.map((ej,i)=>(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',background:G1,borderRadius:5}}><span style={{color:R,fontWeight:700,fontSize:11,flexShrink:0}}>→</span><span style={{fontSize:11}}>{ej}</span></div>))}
+                  </div>
+                  <div style={{fontSize:10,color:R,background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:5,padding:'6px 10px'}}><strong>⚠ Precauciones:</strong> {tj.precauciones}</div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:12,color:G4,textTransform:'uppercase',letterSpacing:'.04em'}}>
+                {rehabRegion?`${REGIONES[rehabRegion].label} — ${FASES_REHAB[rehabFase].label}`:'Seleccioná región'}
+                {rehabRegion&&<span style={{marginLeft:6,fontSize:11,color:G3,fontWeight:400}}>({ejerciciosFiltrados.length})</span>}
+              </div>
+              {rehabRegion&&<button onClick={()=>setShowAddEx(true)} style={{...s.btnR,fontSize:10,padding:'4px 9px',background:brand.colorPrimary}}>+ Nuevo</button>}
+            </div>
+            {rehabRegion&&<input value={buscarEx} onChange={e=>setBuscarEx(e.target.value)} placeholder="Buscar ejercicio..." style={{...s.inp,marginBottom:8,fontSize:11}}/>}
+            {!rehabRegion&&<div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná una región anatómica arriba.</div>}
+            <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:480,overflowY:'auto'}}>
+              {ejerciciosFiltrados.map(ej=>{
+                const inSession=rehabSession.some(e=>e.id===ej.id);
+                return(
+                  <div key={ej.id} style={{background:inSession?'#F0FDF4':WH,border:`1px solid ${inSession?'#86EFAC':G2}`,borderRadius:7,padding:'9px 11px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,fontWeight:700,marginBottom:2}}>
+                          {ej.nombre}
+                          {ej.custom&&<span style={{marginLeft:5,background:'#EDE9FE',color:'#7C3AED',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>CUSTOM</span>}
+                        </div>
+                        <div style={{fontSize:10,color:G4,lineHeight:1.4,marginBottom:3}}>{ej.desc}</div>
+                        <div style={{fontSize:10,color:brand.colorPrimary,fontWeight:700}}>{ej.param}</div>
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
+                        {!inSession?<button onClick={()=>addToSession(ej)} style={{...s.btnR,fontSize:10,padding:'3px 8px',background:brand.colorPrimary}}>+ Agregar</button>
+                          :<span style={{fontSize:10,color:GN,fontWeight:700,padding:'3px 8px'}}>✓ Sesión</span>}
+                        {ej.custom&&<button onClick={()=>deleteCustomEx(ej.id).catch(console.error)} style={{...s.btnG,fontSize:9,padding:'2px 6px',color:R,borderColor:R}}>Del</button>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <div style={{fontWeight:700,fontSize:12,color:G4,textTransform:'uppercase',letterSpacing:'.04em'}}>Sesión ({rehabSession.length})</div>
+              {rehabSession.length>0&&<button onClick={exportRehabPDF} style={{...s.btnR,fontSize:10,padding:'4px 8px',background:brand.colorPrimary}}>📄 PDF</button>}
+              {rehabSession.length>0&&<button onClick={()=>{
+                const protocolo={
+                  region:rehabRegion,fase:rehabFase,paciente:activeClientRehab,
+                  ejercicios:rehabSession.map(e=>({nombre:e.nombre,param:e.reps,series:e.series,notas:e.notas||''})),
+                  notas:rehabNotas,fecha:new Date().toISOString().split('T')[0]
+                };
+                try{
+                  const pend=JSON.parse(localStorage.getItem('protocolos_pendientes')||'[]');
+                  pend.unshift(protocolo);
+                  localStorage.setItem('protocolos_pendientes',JSON.stringify(pend.slice(0,10)));
+                  alert('✅ Protocolo enviado a sesión clínica.\nAbrilo desde FisioActiva → Registro de Sesiones → Nueva sesión → "Cargar protocolo".');
+                }catch(err){alert('Error: '+err.message);}
+              }} style={{...s.btnGreen,fontSize:10,padding:'4px 8px'}}>→ Pasar a sesión clínica</button>}
+            </div>
+            {rehabSession.length===0&&<div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3,fontSize:12}}>Agregá ejercicios desde el banco.</div>}
+            <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:480,overflowY:'auto'}}>
+              {rehabSession.map((e,idx)=>(
+                <div key={e.id} style={{background:WH,border:`1px solid ${G2}`,borderRadius:8,padding:'10px 12px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                    <div><span style={{fontSize:11,fontWeight:700,color:G4,marginRight:6}}>{idx+1}.</span>
+                      <span style={{fontSize:12,fontWeight:700}}>{e.nombre}</span>
+                      {e.custom&&<span style={{marginLeft:5,background:'#EDE9FE',color:'#7C3AED',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>CUSTOM</span>}
+                    </div>
+                    <button onClick={()=>removeFromSession(e.id)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:16,lineHeight:1}}>×</button>
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,marginBottom:5}}>
+                    <div><span style={s.lbl}>Parámetros</span><input value={e.reps} onChange={ev=>updateEj(e.id,'reps',ev.target.value)} style={{...s.inp,fontSize:10}}/></div>
+                    <div><span style={s.lbl}>Series</span><input type="number" value={e.series} onChange={ev=>updateEj(e.id,'series',ev.target.value)} style={{...s.inp,fontSize:10}}/></div>
+                  </div>
+                  <div><span style={s.lbl}>Notas de esta sesión</span>
+                    <input value={e.notas||''} onChange={ev=>updateEj(e.id,'notas',ev.target.value)} placeholder="Observaciones..." style={{...s.inp,fontSize:10}}/></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── FuerzaFormComp — crear Y editar tests de fuerza ─────────────────────
+
+  const NuevoEjercicioRehabComp=({region,fase,onSave,onClose,s,brand})=>{
+    const [form,setF]=useState({id:'cr_'+genId(),nombre:'',desc:'',param:'3×10 rep',tejido:'',notas:''});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const REGIONES_LIST=Object.entries(REGIONES).map(([k,v])=>({k,label:v.label}));
+    const FASES_LIST=Object.entries(FASES_REHAB).map(([k,v])=>({k,label:v.label}));
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:460,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo ejercicio de rehabilitación</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:7}}>
+            <div><span style={s.lbl}>Nombre del ejercicio *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              <div><span style={s.lbl}>Región</span>
+                <select value={region} disabled style={{...s.sel,width:'100%',opacity:.7}}>
+                  {REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}
+                </select>
+              </div>
+              <div><span style={s.lbl}>Fase</span>
+                <select value={fase} disabled style={{...s.sel,width:'100%',opacity:.7}}>
+                  {FASES_LIST.map(f=><option key={f.k} value={f.k}>{f.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><span style={s.lbl}>Descripción / Procedimiento</span><textarea value={form.desc} onChange={e=>set('desc',e.target.value)} rows={3} style={{...s.inp,resize:'vertical'}} placeholder="Cómo realizar el ejercicio, puntos clave, precauciones..."/></div>
+            <div><span style={s.lbl}>Parámetros sugeridos</span><input value={form.param} onChange={e=>set('param',e.target.value)} placeholder="Ej: 3×12 rep · RPE 5–6 · hold 5 seg" style={s.inp}/></div>
+            <div><span style={s.lbl}>Tejido objetivo (opcional)</span><input value={form.tejido} onChange={e=>set('tejido',e.target.value)} placeholder="tendón, músculo, ligamento..." style={s.inp}/></div>
+            <div><span style={s.lbl}>Notas clínicas</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Evidencia, indicaciones especiales..." style={s.inp}/></div>
+          </div>
+          <button onClick={()=>{if(form.nombre.trim())onSave({...form,region,fase});}}
+            disabled={!form.nombre.trim()}
+            style={{...s.btnR,width:'100%',padding:'9px',marginTop:12,background:brand.colorPrimary,opacity:!form.nombre.trim()?.5:1}}>
+            💾 Guardar en base de datos
+          </button>
+          <div style={{fontSize:9,color:G3,textAlign:'center',marginTop:4}}>El ejercicio quedará disponible en futuros protocolos de {region} — {fase}</div>
+        </div>
+      </div>
+    );
+  };
+
+
+  const BrandingTab=({brand,setBrand,s})=>{
+    const [local,setLocal]=useState({...brand});
+    const logoInputRef=useRef();
+    const set=(k,v)=>setLocal(f=>({...f,[k]:v}));
+    return(
+      <div style={{padding:'16px 14px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div>
+            <div style={s.card}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Identidad</div>
+              <div style={{marginBottom:10}}><span style={s.lbl}>Nombre</span><input value={local.gymName} onChange={e=>set('gymName',e.target.value)} style={s.inp}/></div>
+              <div style={{marginBottom:10}}><span style={s.lbl}>Subtítulo</span><input value={local.gymSub} onChange={e=>set('gymSub',e.target.value)} style={s.inp}/></div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                <div><span style={s.lbl}>Color primario</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
+                <div><span style={s.lbl}>Color fondo</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
+              </div>
+            </div>
+            <div style={s.card}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Logo</div>
+              <input ref={logoInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>setLocal(f=>({...f,logoImg:ev.target.result}));reader.readAsDataURL(file);}}/>
+              <div style={{display:'flex',gap:8,marginBottom:8}}>
+                <button onClick={()=>logoInputRef.current.click()} style={{...s.btnBK,flex:1}}>Subir logo</button>
+                {local.logoImg&&<button onClick={()=>set('logoImg',null)} style={{...s.btnG,color:R,borderColor:R}}>Quitar</button>}
+              </div>
+              {local.logoImg?<img src={local.logoImg} alt="Logo" style={{maxHeight:50,maxWidth:'100%',objectFit:'contain',display:'block'}}/>:<div style={{background:G1,padding:10,textAlign:'center',borderRadius:6,color:G3,fontSize:11}}>Logo kettlebell por defecto</div>}
+            </div>
+            <button onClick={()=>setBrand(local)} style={{...s.btnR,background:local.colorPrimary,width:'100%',padding:'12px'}}>Aplicar cambios</button>
+          </div>
+          <div>
+            <div style={{background:local.colorBg,borderRadius:8,padding:'12px 16px',marginBottom:10,borderBottom:`3px solid ${local.colorPrimary}`}}>
+              {local.logoImg?(
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <img src={local.logoImg} alt="logo" style={{height:44,objectFit:'contain',flexShrink:0}}/>
+                  <div>
+                    <div style={{fontFamily:'Arial Black,Arial,sans-serif',fontWeight:900,fontSize:18,color:local.colorPrimary,letterSpacing:2,lineHeight:1}}>{local.gymName||'NOMBRE'}</div>
+                    <div style={{fontFamily:'Arial,sans-serif',fontSize:10,color:WH,letterSpacing:'3px',marginTop:2}}>{local.gymSub||'SUBTÍTULO'}</div>
+                  </div>
+                </div>
+              ):<DefaultLogo h={44} gymName={local.gymName||'NOMBRE'} gymSub={local.gymSub||'SUBTÍTULO'}/>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TAB: REHABILITACIÓN ──────────────────────────────────────────────────
+  // ── NuevoEjercicioRehabComp — external (has useState) ───────────────────────
+
+  const DBTab=({exs,dbSaveEjercicio,dbDeleteEjercicio,brand,s})=>{
+    const [dbFilter,setDbFilter]=useState('all');
+    const [dbSearch,setDbSearch]=useState('');
+    const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
+    const [editingExLocal,setEditingExLocal]=useState(null);
+    const [showExFormLocal,setShowExFormLocal]=useState(false);
+    const saveExLocal=(ex)=>{
+      // Antes esto nunca marcaba custom:true en un ejercicio nuevo — quedaban
+      // indistinguibles de los 272 nativos de fábrica. Ahora, si no tiene id
+      // (alta nueva), se marca explícitamente.
+      const toSave=ex.id?ex:{...ex,id:genId('ex'),custom:true};
+      dbSaveEjercicio(toSave).catch(e=>console.error('Error guardando ejercicio:',e));
+      setShowExFormLocal(false);setEditingExLocal(null);
+    };
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
+          <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:8,marginBottom:12}}>
+          <select value={dbFilter} onChange={e=>setDbFilter(e.target.value)} style={s.sel}>
+            <option value='all'>Todos ({exs.length})</option>
+            {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} ({exs.filter(e=>e.bloque===k).length})</option>)}
+          </select>
+          <input value={dbSearch} onChange={e=>setDbSearch(e.target.value)} placeholder="Buscar por nombre, músculo..." style={s.inp}/>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+            <thead><tr style={{background:BK,color:WH}}>{['','Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filteredExs.map((ex,i)=>{
+                const rr=exs.find(e=>e.id===ex.regresion);const pr=exs.find(e=>e.id===ex.progresion);
+                const hasMedia=ex.mediaUrl&&ex.mediaUrl.length>0;
+                return(
+                  <tr key={ex.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
+                    <td style={{padding:'4px 6px',width:40}}>
+                      {hasMedia
+                        ?<div style={{width:34,height:34,borderRadius:4,overflow:'hidden',background:G2,flexShrink:0,cursor:'pointer'}} onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}}>
+                            {(ex.mediaTipo==='video'||ex.mediaUrl?.includes('youtube')||ex.mediaUrl?.includes('youtu.be'))
+                              ?<div style={{width:34,height:34,background:'#CC0000',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>▶</div>
+                              :<img src={ex.mediaUrl} alt="" style={{width:34,height:34,objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>
+                            }
+                          </div>
+                        :<div style={{width:34,height:34,borderRadius:4,background:G1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:G3}}>📷</div>
+                      }
+                    </td>
+                    <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.emoji} {BLOCKS[ex.bloque]?.tag}</span></td>
+                    <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
+                    <td style={{padding:'7px 8px',color:G4,fontSize:10,maxWidth:140}}>{ex.patron}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{NIVEL_EMOJI?.[ex.nivel]} {ex.nivel}</span></td>
+                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{rr?rr.nombre:ex.regresion||'—'}</td>
+                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{pr?pr.nombre:ex.progresion||'—'}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}>
+                      <button onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}} style={{...s.btnG,padding:'3px 7px',fontSize:10,marginRight:4}}>Editar</button>
+                      <button onClick={()=>dbDeleteEjercicio(ex.id).catch(e=>console.error('Error:',e))} style={{...s.btnG,padding:'3px 7px',fontSize:10,color:R,borderColor:R}}>Del</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filteredExs.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+  // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
+
+  const ExForm=({ex, onSave, onClose, exs, s})=>{
+    const emptyExLocal={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:'',mediaUrl:'',mediaTipo:'imagen',mediaDesc:''};
+    const [form,setF2]=useState(ex||emptyExLocal);
+    const set=(k,v)=>setF2(f=>({...f,[k]:v}));
+    const regRef=exs.find(e=>e.id===form.regresion);
+    const progRef=exs.find(e=>e.id===form.progresion);
+    const isVideo=form.mediaUrl&&(form.mediaUrl.includes('youtube')||form.mediaUrl.includes('youtu.be')||form.mediaUrl.includes('vimeo'));
+    const getYTEmbed=(url)=>{
+      const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&\s]+)/);
+      return m?`https://www.youtube.com/embed/${m[1]}`:null;
+    };
+    return(
+      OverlayWrap({wide:true,children:(<>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
+          <button onClick={onClose} style={s.btnG}>✕</button>
+        </div>
+        <div style={{maxHeight:'60vh',overflowY:'auto',paddingRight:4}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
+            <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>set('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+            <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>set('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
+            {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
+              <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={s.inp}/></div>
+            ))}
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión (ID o texto)</span><input value={form.regresion||''} onChange={e=>set('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión (ID o texto)</span><input value={form.progresion||''} onChange={e=>set('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
+          </div>
+          {/* MEDIA — Imagen o Video */}
+          <div style={{background:G1,borderRadius:8,padding:'12px',marginTop:4,border:`1px solid ${G2}`}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>📎 Imagen / Video del ejercicio</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={s.lbl}>URL de imagen o video</span>
+                <input value={form.mediaUrl||''} onChange={e=>set('mediaUrl',e.target.value)} style={s.inp} placeholder="https://youtube.com/watch?v=... o https://i.imgur.com/..."/>
+                <div style={{fontSize:10,color:G3,marginTop:3}}>YouTube, Vimeo, o link directo a imagen (jpg, png, gif)</div>
+              </div>
+              <div><span style={s.lbl}>Tipo</span>
+                <select value={form.mediaTipo||'imagen'} onChange={e=>set('mediaTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value='imagen'>📷 Imagen</option>
+                  <option value='video'>🎥 Video (YouTube/Vimeo)</option>
+                  <option value='gif'>🎞️ GIF animado</option>
+                </select>
+              </div>
+              <div><span style={s.lbl}>Descripción del media</span><input value={form.mediaDesc||''} onChange={e=>set('mediaDesc',e.target.value)} style={s.inp} placeholder="Ej: Demostración técnica"/></div>
+            </div>
+            {/* Preview */}
+            {form.mediaUrl&&(
+              <div style={{background:WH,borderRadius:6,padding:8,border:`1px solid ${G2}`}}>
+                <div style={{fontSize:10,color:G3,marginBottom:6,fontWeight:700,textTransform:'uppercase'}}>Vista previa</div>
+                {isVideo&&getYTEmbed(form.mediaUrl)
+                  ?<div style={{position:'relative',paddingBottom:'40%',height:0,overflow:'hidden',borderRadius:6}}>
+                      <iframe src={getYTEmbed(form.mediaUrl)} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',border:'none',borderRadius:6}} allowFullScreen title="preview"/>
+                    </div>
+                  :<img src={form.mediaUrl} alt="preview" style={{maxWidth:'100%',maxHeight:180,borderRadius:6,objectFit:'cover',display:'block'}}
+                      onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='block'}}/>
+                }
+                <div style={{display:'none',fontSize:11,color:R,marginTop:4}}>⚠ No se pudo cargar la imagen. Verificá la URL.</div>
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
+      </>)})
+    );
+  };
+
+  // ── TAB: BASE DE EJERCICIOS ───────────────────────────────────────────────
 
   const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
     if(!clientWizard)return null;
@@ -2393,6 +2654,584 @@ export default function App(){
   };
 
   // ─── BANNER SEMÁFORO ─────────────────────────────────────────────────────
+
+export default function App(){
+  const s=mkS();
+  const [tab,setTab]=useState(()=>{
+    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
+  });
+  useEffect(()=>{
+    try { localStorage.setItem('activa_tab',tab); } catch {}
+  },[tab]);
+  // Ejercicios en tiempo real (Supabase) — seeded from DB0 on first run
+  const { exs, saveEjercicio: dbSaveEjercicio, deleteEjercicio: dbDeleteEjercicio, setExs } = useEjercicios(DB0);
+  // ── ESTADO DE PLAN SEMANAL ────────────────────────────────────────────────
+  // El plan agrupa de 1 a 5 sesiones (días) que comparten cliente/fecha/plan.
+  // Cada día = { id, obj, name, blocks, notas }. activeDia = día en edición.
+  const blankDia=(n=1)=>({id:genId('dia'),obj:null,name:`Día ${n}`,blocks:[],notas:''});
+  const [session,setSession]=useState({
+    cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
+    planNombre:'', dias:[blankDia(1)], activeDia:0,
+    faseIdx:0, // qué fase de la periodización se está armando (no siempre la inicial — se puede adelantar trabajo)
+  });
+  // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
+  const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
+  const [clients, setClientsLocal] = useState([]);
+
+  // Sincronizar clientes de DB con estado local
+  useEffect(()=>{ setClientsLocal(dbClients); }, [dbClients]);
+
+  // Wrappers que persisten en DB Y actualizan estado local
+  const saveClientFn = useCallback(async (client) => {
+    await dbSaveClient(client);
+  }, [dbSaveClient]);
+
+  const deleteClientFn = useCallback(async (id) => {
+    await dbDeleteClient(id);
+    if(session.clienteId===id) setSession(p=>({...p,clienteId:null,cliente:''}));
+  }, [dbDeleteClient, session.clienteId]);
+
+  const updateClientFn = useCallback(async (id, updates) => {
+    await dbUpdateClient(id, updates);
+  }, [dbUpdateClient]);
+  const [showExForm,setShowExForm]=useState(false);
+  const [editingEx,setEditingEx]=useState(null);
+  const [expandedBlock,setExpandedBlock]=useState(null);
+  const [selBlock,setSelBlock]=useState(null);
+  const [replaceTarget,setReplaceTarget]=useState(null);
+  const [exSearch,setExSearch]=useState('');
+  const [overrideState,setOverrideState]=useState(null);
+  const [addBType,setAddBType]=useState('');
+  const [addBPos,setAddBPos]=useState('');
+  // brand ahora sincroniza entre dispositivos vía Supabase realtime (antes
+  // vivía solo en localStorage — ver useCentroConfig en db.js).
+  const { config: brand, saveConfig: setBrand } = useCentroConfig();
+  const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
+  const [clientWizard,setClientWizard]=useState(null);
+  const [clienteSearch,setClienteSearch]=useState('');
+  const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
+  const [editandoCriterios,setEditandoCriterios]=useState(null); // fase cuya plantilla se está editando
+  const [informeCliente,setInformeCliente]=useState(null);
+
+  const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
+
+  const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
+  // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
+  const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
+  // Registro de planes del cliente activo + base de conocimiento de la IA
+  const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
+  // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
+  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
+  const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
+  // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
+  const ejecucionResumen=useMemo(()=>{
+    if(!ejecRegistros.length)return [];
+    const porEx={};
+    ejecRegistros.forEach(r=>{
+      if(r.peso_real==null&&!r.reps_real)return;
+      const nom=r.ejercicio_nombre||(exs.find(e=>e.id===r.ejercicio_id)?.nombre)||r.ejercicio_id;
+      (porEx[nom]=porEx[nom]||[]).push({sem:r.semana,peso:r.peso_real,reps:r.reps_real});
+    });
+    return Object.entries(porEx).map(([nom,arr])=>{
+      arr.sort((a,b)=>a.sem-b.sem);
+      const pts=arr.map(x=>`S${x.sem}: ${x.peso!=null?x.peso+'kg':''}${x.reps?'×'+x.reps:''}`.trim());
+      return `${nom} → ${pts.join(', ')}`;
+    });
+  },[ejecRegistros,exs]);
+  const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
+  const [showHistorial,setShowHistorial]=useState(false);
+  const [verEjecucion,setVerEjecucion]=useState(null);
+  const [compilarSel,setCompilarSel]=useState([]);
+  const [showEntrenarIA,setShowEntrenarIA]=useState(false);
+  // Fase activa del plan de periodización del cliente
+  const activeFasePlan=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
+  },[activeClient]);
+
+  // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
+  const numDias=session.dias?.length||1;
+  const activeDiaIdx=Math.min(session.activeDia||0,numDias-1);
+  const dia=session.dias?.[activeDiaIdx]||{obj:null,blocks:[],name:'',notas:''};
+  // Cronograma (plazos) del plan según la periodización del cliente y la fecha de inicio
+  const planMeta=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return planTimeline(PERIODIZACIONES[activeClient.periodizacion],session.fecha);
+  },[activeClient,session.fecha]);
+
+  // Modifica SOLO el día activo (fn recibe el día y devuelve el día nuevo)
+  const setDia=(fn)=>setSession(p=>{
+    const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
+    return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
+  });
+  const addDia=()=>setSession(p=>{
+    if((p.dias?.length||0)>=6)return p;
+    return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
+  });
+  const removeDia=(idx)=>setSession(p=>{
+    if((p.dias?.length||1)<=1)return p;
+    const dias=p.dias.filter((_,i)=>i!==idx).map((d,i)=>({...d,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Día ${i+1}`}));
+    return {...p,dias,activeDia:Math.max(0,Math.min(p.activeDia,dias.length-1))};
+  });
+  const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
+  const setNumDias=(target)=>setSession(p=>{
+    const cur=p.dias?.length||1;
+    if(target===cur||target<1||target>6)return p;
+    if(target>cur){
+      const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
+      return {...p,dias:[...p.dias,...extra]};
+    }
+    return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
+  });
+  const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
+
+  // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
+  // Resumen textual compacto de un plan (para la lista y como contexto de IA)
+  const resumirPlan=(dias)=>{
+    return (dias||[]).filter(d=>d.obj&&d.blocks.length).map((d,i)=>{
+      const ejs=d.blocks.flatMap(b=>b.exercises.map(be=>{
+        const ex=exs.find(e=>e.id===be.exId);const p=be.params||b.params;
+        return ex?`${ex.nombre} ${p.series||'?'}×${p.reps||'?'}`:null;
+      }).filter(Boolean));
+      return `${d.name||`Día ${i+1}`} (${OBJS[d.obj]?.label||d.obj}): ${ejs.join('; ')}`;
+    }).join(' | ');
+  };
+  const guardarPlanActual=async()=>{
+    if(!activeClient){alert('Vinculá un cliente antes de guardar el plan.');return;}
+    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasArmados.length){alert('No hay días con ejercicios para guardar.');return;}
+    const id=session.planId||genId('plan');
+    const registro={
+      id,
+      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
+      fecha_inicio:session.fecha,
+      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
+      periodizacion:activeClient.periodizacion||'',
+      nivel_metodo:activeClient.nivel||'',
+      num_dias:diasArmados.length,
+      estado:session.planEstado||'activo',
+      dias:session.dias,
+      plazos:planMeta||null,
+      resumen:resumirPlan(session.dias),
+      es_ejemplo:session.planEsEjemplo||false,
+      notas:session.planNotasGlobal||'',
+    };
+    try{
+      await saveGymPlan(registro);
+      setSession(p=>({...p,planId:id}));
+      alert('💾 Plan guardado en el historial del cliente.');
+    }catch(e){alert('Error al guardar el plan: '+e.message);}
+  };
+  const cargarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:plan.id,
+      planNombre:plan.nombre,
+      fecha:plan.fecha_inicio||p.fecha,
+      planEstado:plan.estado,
+      planEsEjemplo:plan.es_ejemplo,
+      dias:(plan.dias&&plan.dias.length)?plan.dias:[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setExpandedBlock(null);setSelBlock(null);
+    setTab('session');
+  };
+  const duplicarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:null, // nuevo registro
+      planNombre:`${plan.nombre} (copia)`,
+      fecha:new Date().toISOString().split('T')[0],
+      planEstado:'activo',planEsEjemplo:false,
+      dias:(plan.dias&&plan.dias.length)?JSON.parse(JSON.stringify(plan.dias)):[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setTab('session');
+  };
+  const cambiarEstadoPlan=async(plan,estado)=>{try{await saveGymPlan({...plan,estado});}catch(e){console.error(e);}};
+  const marcarEjemploPlan=async(plan,val)=>{try{await saveGymPlan({...plan,es_ejemplo:val});}catch(e){console.error(e);}};
+
+  // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
+  const applyAISession=(aiResult)=>{
+    // Orden canónico de bloques en una sesión
+    const ORDEN_BLOQUES=['movilidad','activacion','propiocepcion','prev_rehab','potencia','pliometria','fuerza','accesorios','zona_media','funcional','cardio','flex_recovery'];
+    let descartados=0;
+    const blocks=(aiResult.blocks||[])
+      .filter(b=>BLOCKS[b.type]) // solo tipos de bloque válidos
+      .map((b)=>{
+        // VALIDACIÓN CLAVE: cada ejercicio debe pertenecer al bloque correcto.
+        // El ejercicio en la DB tiene .bloque — debe coincidir con b.type.
+        const ejerciciosValidos=(b.exercises||[]).filter(e=>{
+          const ex=exs.find(x=>x.id===e.exId);
+          if(!ex){descartados++;return false;}
+          if(ex.bloque!==b.type){descartados++;return false;} // descarta ej. en bloque equivocado
+          return true;
+        });
+        return {type:b.type,params:b.params,exercises:ejerciciosValidos};
+      })
+      .filter(b=>b.exercises.length>0) // descarta bloques que quedaron vacíos
+      .sort((a,b)=>ORDEN_BLOQUES.indexOf(a.type)-ORDEN_BLOQUES.indexOf(b.type)) // ordena
+      .map((b,i)=>({
+        id:Date.now()+i,
+        type:b.type,
+        position:i+1,
+        exercises:b.exercises.map(e=>({
+          exId:e.exId,override:false,note:'',
+          params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
+          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
+        })),
+        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
+      }));
+    setDia(d=>({...d,obj:d.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||d.name,notas:aiResult.objetivo_sesion||d.notas}));
+    if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
+  };
+  const suggestBlocks=(obj)=>{
+    const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
+    setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
+  };
+  const addBlock=()=>{
+    if(!addBType||!addBPos||dia.blocks.length>=7)return;
+    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
+    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
+    setAddBType('');setAddBPos('');
+  };
+  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
+  const addExToBlock=(blockId,exId,override=false,note='')=>{
+    setDia(d=>({...d,blocks:d.blocks.map(b=>{
+      if(b.id!==blockId||b.exercises.length>=5)return b;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,b.params.reps):null;
+      const exEntry={exId,override,note,
+        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
+        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:''};
+      return{...b,exercises:[...b.exercises,exEntry]};
+    })}));
+  };
+  const updateExParam=(blockId,exId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
+  })}));
+  const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const merged={...be,params:{...(be.params||{}),...params}};
+      // Recalcular peso sugerido al cambiar reps/modo, salvo que se haya fijado a mano
+      if(('reps'in params||'modo'in params)&&be.pesoSugAuto!==false){
+        const exObj=exs.find(e=>e.id===exId);
+        const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,merged.params.reps):null;
+        merged.pesoSug=(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'';
+      }
+      return merged;
+    })};
+  })}));
+  // El usuario escribe un peso a mano → deja de recalcularse solo
+  const setPesoSugManual=(blockId,exId,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,pesoSug:val,pesoSugAuto:false}:be)};
+  })}));
+  // Volver a modo automático y recalcular desde las reps actuales
+  const reAutoPesoSug=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,(be.params||{}).reps):null;
+      return{...be,pesoSugAuto:true,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):''};
+    })};
+  })}));
+  const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
+  })}));
+  // Mover un ejercicio dentro del bloque (por índice, sin perder el resto)
+  const moveExInBlock=(blockId,idx,dir)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();const j=idx+dir;
+    if(idx<0||idx>=arr.length||j<0||j>=arr.length)return b;
+    [arr[idx],arr[j]]=[arr[j],arr[idx]];
+    return{...b,exercises:arr};
+  })}));
+  // Reemplazar el ejercicio en una posición por otro, conservando series/reps/etc.
+  const replaceExInBlock=(blockId,idx,ex,override=false,note='')=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();
+    if(idx<0||idx>=arr.length)return b;
+    const ns=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,(arr[idx].params||b.params).reps);
+    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:'',pesoSugAuto:true};
+    return{...b,exercises:arr};
+  })}));
+  const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
+  // Agrupar ejercicios: biserie / triserie / circuito, con letra de grupo (A/B/C/D)
+  const setExGrupo=(blockId,exId,grupo)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,grupo}:be)};
+  })}));
+
+  const handlePickEx=(block,ex)=>{
+    const rest=checkRestriction(ex,activeClient);
+    if(rest==='block'){
+      alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
+      return;
+    }
+    const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
+    if(rest==='warn'){
+      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true,replaceIdx:repl});
+      return;
+    }
+    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false,replaceIdx:repl});return;}
+    if(repl!=null){replaceExInBlock(block.id,repl,ex);setReplaceTarget(null);setSelBlock(null);setExSearch('');}
+    else{addExToBlock(block.id,ex.id);setSelBlock(null);setExSearch('');}
+  };
+  const confirmOverride=()=>{
+    if(!overrideState)return;
+    if(overrideState.replaceIdx!=null){replaceExInBlock(overrideState.blockId,overrideState.replaceIdx,overrideState.ex,true,overrideState.note);setReplaceTarget(null);}
+    else addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
+    setOverrideState(null);setSelBlock(null);setExSearch('');
+  };
+
+  // ─── GUARDAR CLIENTE ────────────────────────────────────────────────────
+  const saveClient=(client)=>{
+    saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
+    setClientWizard(null);
+  };
+  // Genera (si hace falta) y copia el link del portal personal del cliente
+  const copiarPortalCliente=async(c)=>{
+    let token=c.portal_token;
+    if(!token){
+      token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+      try{await updateClientFn(c.id,{portal_token:token});}
+      catch(e){alert('No se pudo generar el acceso: '+e.message);return;}
+    }
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('📲 Link del portal copiado:\n\n'+link+'\n\nEnviáselo al cliente (WhatsApp). Con ese enlace entra a SU entrenamiento y carga los pesos/reps de cada semana. Solo ve sus propios datos.');}
+    catch(e){prompt('Copiá el link del portal de '+c.nombre+':',link);}
+  };
+  // Regenera el token: invalida el link anterior y crea uno nuevo
+  const regenerarPortalCliente=async(c)=>{
+    if(!confirm(`¿Regenerar el link de ${c.nombre}?\n\nEl link anterior dejará de funcionar. Tenés que enviarle el nuevo.`))return;
+    const token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+    try{await updateClientFn(c.id,{portal_token:token});}
+    catch(e){alert('No se pudo regenerar: '+e.message);return;}
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('🔄 Link nuevo generado y copiado:\n\n'+link+'\n\nEl anterior ya no sirve. Enviale este al cliente.');}
+    catch(e){prompt('Nuevo link del portal de '+c.nombre+':',link);}
+  };
+  const deleteClient=(id)=>{
+    deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
+  };
+
+  // ─── EXPORTAR PDF (PLAN COMPLETO: TODOS LOS DÍAS + PLAZOS + GRILLA 8 SEM) ──
+  const exportPDF=()=>{
+    const diasConBloques=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasConBloques.length){alert('No hay días con bloques cargados para exportar.');return;}
+    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+
+    // Tabla de UN día (una fila por ejercicio + 8 celdas vacías para pesos semanales)
+    const tablaDia=(d)=>{
+      const rows=d.blocks.flatMap(b=>{
+        const bd=BLOCKS[b.type];const bg=bd.color;
+        if(b.exercises.length===0){
+          return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        }
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const exNombre=ex?ex.nombre:be.exId;
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
+          const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0
+            ?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`
+            :'';
+          return`<tr>
+            ${bloqueCel}
+            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
+            <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
+            ${celdasSem}
+          </tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr>
+          <th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}
+        </tr></thead><tbody>${rows}</tbody></table>
+        ${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+
+    // Secciones de cada día, separadas con salto de página
+    const seccionesDias=diasConBloques.map((d,i)=>{
+      const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}>
+        <div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${d.blocks.reduce((a,b)=>a+b.exercises.length,0)} ejercicios</div></div></div>
+        ${tablaDia(d)}
+      </section>`;
+    }).join('');
+
+    // ── PLAZOS DEL PLAN (punto 4) ──
+    let plazosHtml='';
+    if(planMeta){
+      const faseRows=planMeta.fases.map(f=>`<tr>
+        <td style="padding:5px 9px;font-weight:700;font-size:10px;">${f.nombre}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.semanasLabel||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.fIni&&f.fFin?`${f.fIni} → ${f.fFin}`:'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.reps||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.intensidad||'—'}</td>
+        <td style="padding:5px 9px;font-size:9px;color:#555;">${f.objetivo||''}</td>
+      </tr>`).join('');
+      const totalTxt=planMeta.secuencial&&planMeta.totalSemanas
+        ?`<strong>${planMeta.totalSemanas} semanas</strong>${planMeta.fechaFin?` · ${planMeta.fechaInicio} → ${planMeta.fechaFin}`:''}`
+        :`${planMeta.duracionTexto} <span style="color:#888;">(fases no secuenciales en el tiempo)</span>`;
+      const faseMetodo=activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:(activeClient?activeClient.nivel:'—');
+      plazosHtml=`<section class="plazos">
+        <div class="sec-title">📅 Plazos del plan — ${planMeta.nombre}</div>
+        <div style="font-size:10px;color:#555;margin:2px 0 8px;">Autor/base: ${planMeta.autor||'—'} · Duración total: ${totalTxt}</div>
+        <div style="font-size:10px;color:#555;margin-bottom:8px;">Fase del Método Activa Integra: <strong style="color:${brand.colorPrimary};">${(faseMetodo||'').toUpperCase()}</strong> · El cronograma de abajo corresponde a las fases del <strong>plan asignado</strong> (no del método).</div>
+        <table class="plan"><thead><tr><th>Fase del plan</th><th style="text-align:center;">Semanas</th><th style="text-align:center;">Fechas estimadas</th><th style="text-align:center;">Reps</th><th style="text-align:center;">Intensidad</th><th>Objetivo</th></tr></thead><tbody>${faseRows}</tbody></table>
+      </section>`;
+    }
+
+    const sfBanner=activeClient?`<div class="sf" style="background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
+    const logoHtml=brand.logoImg
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      .sf{margin-bottom:12px;padding:9px 13px;border-radius:6px;font-size:11px}
+      .sec-title{font-size:14px;font-weight:800;color:${brand.colorPrimary};margin-top:4px}
+      .plazos{margin-bottom:16px;padding-bottom:14px;border-bottom:2px dashed #ddd}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:2px}
+      .dia-num{background:${brand.colorPrimary};color:#fff;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+      .dia-title{font-size:15px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:6px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${planNom}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:800;color:#111">${planNom}</div>
+          <div style="font-size:10px;color:#666;margin-top:3px">Cliente: ${session.cliente||'—'}${activeClient?` · Nivel: ${NIVEL[activeClient.nivel].label}`:''} · Inicio: ${session.fecha} · ${diasConBloques.length} sesión/es por semana</div>
+        </div>
+      </div>
+      ${sfBanner}
+      ${plazosHtml}
+      ${seccionesDias}
+      <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+  };
+
+  // Compila varios planes guardados (fases del bloque) en UN solo PDF, en orden
+  const compilarBloquePDF=(planes)=>{
+    const lista=(planes||[]).filter(p=>Array.isArray(p.dias)&&p.dias.some(d=>d.obj&&(d.blocks||[]).length>0));
+    if(lista.length===0){alert('Elegí al menos un plan con días armados para compilar.');return;}
+    const ord=[...lista].sort((a,b)=>{const fa=a.fecha_inicio||'',fb=b.fecha_inicio||'';if(!fa&&!fb)return 0;if(!fa)return 1;if(!fb)return -1;return fa<fb?-1:fa>fb?1:0;});
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+    const tablaDia=(d)=>{
+      const rows=(d.blocks||[]).flatMap(b=>{
+        const bd=BLOCKS[b.type]||{color:'#333',label:b.type,emoji:''};const bg=bd.color;
+        if((b.exercises||[]).length===0)return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);const exNombre=ex?ex.nombre:be.exId;const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`:'';
+          return`<tr>${bloqueCel}<td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td><td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>${celdasSem}</tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr><th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}</tr></thead><tbody>${rows}</tbody></table>${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+    const fasesSecc=ord.map((pl,pi)=>{
+      const dias=(pl.dias||[]).filter(d=>d.obj&&(d.blocks||[]).length>0);
+      const rango=pl.fecha_inicio?`${pl.fecha_inicio}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}`:'';
+      const seccionesDias=dias.map((d,i)=>{
+        const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+        return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}><div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${(d.blocks||[]).reduce((a,b)=>a+(b.exercises||[]).length,0)} ejercicios</div></div></div>${tablaDia(d)}</section>`;
+      }).join('');
+      return`<div class="fase" style="page-break-before:always;"><div class="fase-hdr"><div class="fase-num">FASE ${pi+1}</div><div><div class="fase-title">${pl.nombre}</div><div class="fase-sub">${rango?`${rango} · `:''}${(pl.periodizacion||'').replace(/_/g,' ')} · ${dias.length} sesión/es por semana</div></div></div>${seccionesDias}</div>`;
+    }).join('');
+    const idxRows=ord.map((pl,pi)=>`<tr><td style="padding:5px 9px;font-weight:700;font-size:11px;">Fase ${pi+1}</td><td style="padding:5px 9px;font-size:11px;">${pl.nombre}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.fecha_inicio||'—'}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${(pl.periodizacion||'').replace(/_/g,' ')||'—'}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.num_dias||((pl.dias||[]).filter(d=>d.obj).length)} día/s</td></tr>`).join('');
+    const logoHtml=brand.logoImg
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      table.idx{width:100%;border-collapse:collapse;margin-top:14px}
+      table.idx th{background:#1a1a1a;color:#fff;padding:7px 9px;font-size:10px;text-align:left;text-transform:uppercase}
+      table.idx td{border-bottom:1px solid #e0e0e0}
+      .cover-title{font-size:26px;font-weight:900;color:${brand.colorPrimary};margin-top:26px;letter-spacing:1px}
+      .cover-sub{font-size:13px;color:#555;margin-top:6px}
+      .fase-hdr{display:flex;align-items:center;gap:12px;background:${brand.colorPrimary};color:#fff;padding:12px 16px;border-radius:8px;margin-bottom:10px}
+      .fase-num{background:rgba(255,255,255,.22);border-radius:6px;padding:6px 12px;font-weight:900;font-size:14px;flex-shrink:0}
+      .fase-title{font-size:18px;font-weight:900}
+      .fase-sub{font-size:10px;opacity:.9;margin-top:2px}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px}
+      .dia-num{background:#1a1a1a;color:#fff;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+      .dia-title{font-size:14px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:14px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+    const nombreBloque=`Bloque de entrenamiento — ${activeClient?`${activeClient.nombre} ${activeClient.apellido}`:'Cliente'}`;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${nombreBloque}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">Plan por fases</div><div style="font-size:10px;color:#666;margin-top:3px">Generado ${new Date().toLocaleDateString('es-UY')}</div></div></div>
+      <div class="cover-title">${nombreBloque}</div>
+      <div class="cover-sub">${ord.length} fases · ${activeClient?`Nivel: ${NIVEL[activeClient.nivel].label}`:''}</div>
+      <table class="idx"><thead><tr><th>#</th><th>Fase</th><th style="text-align:center;">Fechas</th><th style="text-align:center;">Periodización</th><th style="text-align:center;">Sesiones</th></tr></thead><tbody>${idxRows}</tbody></table>
+      <div class="leyenda">Cada fase arranca en página nueva. S1–S8 = semanas de esa fase; el cliente anota el peso real usado. Las fases se ordenan por fecha de inicio.</div>
+      ${fasesSecc}
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Método Activa Integra</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+  };
+
+  const exportCSV=()=>{
+    const headers=['Día','Posición','Bloque','Ejercicio','Override','Series','Reps','RPE','Tempo','Descanso','% 1RM','Peso sug. (kg)',...Array.from({length:8},(_,i)=>`Sem ${i+1}`),'Cliente','Nivel','Plan','Fecha inicio'];
+    const rows=[];
+    const nivelLabel=activeClient?NIVEL[activeClient.nivel].label:'';
+    const planNom=session.planNombre||'';
+    (session.dias||[]).forEach((d,di)=>{
+      if(!d.obj)return;
+      const diaLbl=d.name||`Día ${di+1}`;
+      const objLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      d.blocks.forEach(b=>{
+        const bd=BLOCKS[b.type];
+        if(b.exercises.length===0){rows.push([diaLbl,b.position,bd.label,'(sin ejercicios)','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,'','','','','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);return;}
+        b.exercises.forEach(be=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          rows.push([diaLbl,b.position,bd.label,(be.grupo?`[${grupoTagTxt(be.grupo)}] `:'')+(ex?ex.nombre:be.exId),be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
+        });
+      });
+    });
+    const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(planNom||'plan').replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
+  };
+
+  // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
+
   const SemaforoBanner=({cliente})=>{
     if(!cliente)return null;
     const sf=SF[cliente.semaforo];
@@ -2449,34 +3288,6 @@ export default function App(){
   };
 
   // ── TAB: CLIENTES ──────────────────────────────────────────────────────────
-  // ── Editor de la plantilla de criterios de avance (por fase) ─────────────
-  const EditorCriteriosFase=({fase})=>{
-    const [items,setItems]=useState(()=>[...(criteriosAvanceTemplate[fase]||[])]);
-    const dirty=JSON.stringify(items)!==JSON.stringify(criteriosAvanceTemplate[fase]||[]);
-    const setTexto=(i,v)=>setItems(p=>p.map((it,idx)=>idx===i?{...it,texto:v}:it));
-    const eliminar=(i)=>setItems(p=>p.filter((_,idx)=>idx!==i));
-    const agregar=()=>setItems(p=>[...p,{id:genId('crit'),texto:''}]);
-    const guardar=()=>{
-      const limpio=items.filter(it=>it.texto.trim());
-      saveCriteriosFase(fase,limpio);
-      setItems(limpio);
-    };
-    return(
-      <div style={{background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:6,padding:'8px 10px',marginTop:6}}>
-        <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>Esta plantilla se sincroniza en todos los dispositivos — editarla acá cambia los requisitos para TODOS los clientes en fase {NIVEL[fase]?.label}, no solo este.</div>
-        {items.map((it,i)=>(
-          <div key={it.id} style={{display:'flex',gap:5,marginBottom:4,alignItems:'center'}}>
-            <input value={it.texto} onChange={e=>setTexto(i,e.target.value)} placeholder="Requisito..." style={{...s.inp,fontSize:11,padding:'5px 8px'}}/>
-            <button onClick={()=>eliminar(i)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:13,padding:'0 4px'}}>✕</button>
-          </div>
-        ))}
-        <div style={{display:'flex',gap:6,marginTop:6}}>
-          <button onClick={agregar} style={{...s.btnG,fontSize:10,padding:'5px 10px',borderStyle:'dashed'}}>+ Requisito</button>
-          <button onClick={guardar} disabled={!dirty} style={{...s.btnR,fontSize:10,padding:'5px 12px',opacity:dirty?1:.4,cursor:dirty?'pointer':'not-allowed'}}>Guardar plantilla</button>
-        </div>
-      </div>
-    );
-  };
 
   const ClientesTab=()=>{
     const q=clienteSearch.trim().toLowerCase();
@@ -2623,7 +3434,7 @@ export default function App(){
                           </>
                     }
                     <button onClick={()=>setEditandoCriterios(editandoCriterios===c.nivel?null:c.nivel)} style={{fontSize:9,color:'#7C3AED',background:'none',border:'none',cursor:'pointer',marginTop:8,padding:0}}>✎ {editandoCriterios===c.nivel?'Cerrar edición':'Editar plantilla base de '+NIVEL[c.nivel]?.label}</button>
-                    {editandoCriterios===c.nivel&&EditorCriteriosFase({fase:c.nivel})}
+                    {editandoCriterios===c.nivel&&<EditorCriteriosFase fase={c.nivel} criteriosAvanceTemplate={criteriosAvanceTemplate} saveCriteriosFase={saveCriteriosFase} s={s}/>}
                   </div>
                 );
               })()}
@@ -3286,141 +4097,6 @@ export default function App(){
   };
 
   // ── EXFORM — Componente propio (tiene useState, debe ser <JSX/>) ────────────
-  const ExForm=({ex, onSave, onClose, exs, s})=>{
-    const emptyExLocal={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:'',mediaUrl:'',mediaTipo:'imagen',mediaDesc:''};
-    const [form,setF2]=useState(ex||emptyExLocal);
-    const set=(k,v)=>setF2(f=>({...f,[k]:v}));
-    const regRef=exs.find(e=>e.id===form.regresion);
-    const progRef=exs.find(e=>e.id===form.progresion);
-    const isVideo=form.mediaUrl&&(form.mediaUrl.includes('youtube')||form.mediaUrl.includes('youtu.be')||form.mediaUrl.includes('vimeo'));
-    const getYTEmbed=(url)=>{
-      const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&\s]+)/);
-      return m?`https://www.youtube.com/embed/${m[1]}`:null;
-    };
-    return(
-      OverlayWrap({wide:true,children:(<>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-          <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
-          <button onClick={onClose} style={s.btnG}>✕</button>
-        </div>
-        <div style={{maxHeight:'60vh',overflowY:'auto',paddingRight:4}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
-            <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>set('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
-            <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>set('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
-            {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
-              <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={s.inp}/></div>
-            ))}
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión (ID o texto)</span><input value={form.regresion||''} onChange={e=>set('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión (ID o texto)</span><input value={form.progresion||''} onChange={e=>set('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
-          </div>
-          {/* MEDIA — Imagen o Video */}
-          <div style={{background:G1,borderRadius:8,padding:'12px',marginTop:4,border:`1px solid ${G2}`}}>
-            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>📎 Imagen / Video del ejercicio</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-              <div style={{gridColumn:'1/-1'}}>
-                <span style={s.lbl}>URL de imagen o video</span>
-                <input value={form.mediaUrl||''} onChange={e=>set('mediaUrl',e.target.value)} style={s.inp} placeholder="https://youtube.com/watch?v=... o https://i.imgur.com/..."/>
-                <div style={{fontSize:10,color:G3,marginTop:3}}>YouTube, Vimeo, o link directo a imagen (jpg, png, gif)</div>
-              </div>
-              <div><span style={s.lbl}>Tipo</span>
-                <select value={form.mediaTipo||'imagen'} onChange={e=>set('mediaTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
-                  <option value='imagen'>📷 Imagen</option>
-                  <option value='video'>🎥 Video (YouTube/Vimeo)</option>
-                  <option value='gif'>🎞️ GIF animado</option>
-                </select>
-              </div>
-              <div><span style={s.lbl}>Descripción del media</span><input value={form.mediaDesc||''} onChange={e=>set('mediaDesc',e.target.value)} style={s.inp} placeholder="Ej: Demostración técnica"/></div>
-            </div>
-            {/* Preview */}
-            {form.mediaUrl&&(
-              <div style={{background:WH,borderRadius:6,padding:8,border:`1px solid ${G2}`}}>
-                <div style={{fontSize:10,color:G3,marginBottom:6,fontWeight:700,textTransform:'uppercase'}}>Vista previa</div>
-                {isVideo&&getYTEmbed(form.mediaUrl)
-                  ?<div style={{position:'relative',paddingBottom:'40%',height:0,overflow:'hidden',borderRadius:6}}>
-                      <iframe src={getYTEmbed(form.mediaUrl)} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',border:'none',borderRadius:6}} allowFullScreen title="preview"/>
-                    </div>
-                  :<img src={form.mediaUrl} alt="preview" style={{maxWidth:'100%',maxHeight:180,borderRadius:6,objectFit:'cover',display:'block'}}
-                      onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='block'}}/>
-                }
-                <div style={{display:'none',fontSize:11,color:R,marginTop:4}}>⚠ No se pudo cargar la imagen. Verificá la URL.</div>
-              </div>
-            )}
-          </div>
-        </div>
-        <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
-      </>)})
-    );
-  };
-
-  // ── TAB: BASE DE EJERCICIOS ───────────────────────────────────────────────
-  const DBTab=()=>{
-    const [editingExLocal,setEditingExLocal]=useState(null);
-    const [showExFormLocal,setShowExFormLocal]=useState(false);
-    const saveExLocal=(ex)=>{
-      // Antes esto nunca marcaba custom:true en un ejercicio nuevo — quedaban
-      // indistinguibles de los 272 nativos de fábrica. Ahora, si no tiene id
-      // (alta nueva), se marca explícitamente.
-      const toSave=ex.id?ex:{...ex,id:genId('ex'),custom:true};
-      dbSaveEjercicio(toSave).catch(e=>console.error('Error guardando ejercicio:',e));
-      setShowExFormLocal(false);setEditingExLocal(null);
-    };
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showExFormLocal&&ExForm({ex:editingExLocal,onSave:saveExLocal,onClose:()=>{setShowExFormLocal(false);setEditingExLocal(null);},exs,s})}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
-          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
-          <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:8,marginBottom:12}}>
-          <select value={dbFilter} onChange={e=>setDbFilter(e.target.value)} style={s.sel}>
-            <option value='all'>Todos ({exs.length})</option>
-            {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} ({exs.filter(e=>e.bloque===k).length})</option>)}
-          </select>
-          <input value={dbSearch} onChange={e=>setDbSearch(e.target.value)} placeholder="Buscar por nombre, músculo..." style={s.inp}/>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
-            <thead><tr style={{background:BK,color:WH}}>{['','Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
-            <tbody>
-              {filteredExs.map((ex,i)=>{
-                const rr=exs.find(e=>e.id===ex.regresion);const pr=exs.find(e=>e.id===ex.progresion);
-                const hasMedia=ex.mediaUrl&&ex.mediaUrl.length>0;
-                return(
-                  <tr key={ex.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
-                    <td style={{padding:'4px 6px',width:40}}>
-                      {hasMedia
-                        ?<div style={{width:34,height:34,borderRadius:4,overflow:'hidden',background:G2,flexShrink:0,cursor:'pointer'}} onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}}>
-                            {(ex.mediaTipo==='video'||ex.mediaUrl?.includes('youtube')||ex.mediaUrl?.includes('youtu.be'))
-                              ?<div style={{width:34,height:34,background:'#CC0000',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>▶</div>
-                              :<img src={ex.mediaUrl} alt="" style={{width:34,height:34,objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>
-                            }
-                          </div>
-                        :<div style={{width:34,height:34,borderRadius:4,background:G1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:G3}}>📷</div>
-                      }
-                    </td>
-                    <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.emoji} {BLOCKS[ex.bloque]?.tag}</span></td>
-                    <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
-                    <td style={{padding:'7px 8px',color:G4,fontSize:10,maxWidth:140}}>{ex.patron}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{NIVEL_EMOJI?.[ex.nivel]} {ex.nivel}</span></td>
-                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{rr?rr.nombre:ex.regresion||'—'}</td>
-                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{pr?pr.nombre:ex.progresion||'—'}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}>
-                      <button onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}} style={{...s.btnG,padding:'3px 7px',fontSize:10,marginRight:4}}>Editar</button>
-                      <button onClick={()=>dbDeleteEjercicio(ex.id).catch(e=>console.error('Error:',e))} style={{...s.btnG,padding:'3px 7px',fontSize:10,color:R,borderColor:R}}>Del</button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredExs.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
-  // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
   const ExportTab=()=>{
     const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
     const hasSession=diasArmados.length>0;
@@ -3458,666 +4134,6 @@ export default function App(){
   };
 
   // ── TAB: CENTRO ───────────────────────────────────────────────────────────
-  const BrandingTab=()=>{
-    const [local,setLocal]=useState({...brand});
-    const set=(k,v)=>setLocal(f=>({...f,[k]:v}));
-    return(
-      <div style={{padding:'16px 14px'}}>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-          <div>
-            <div style={s.card}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Identidad</div>
-              <div style={{marginBottom:10}}><span style={s.lbl}>Nombre</span><input value={local.gymName} onChange={e=>set('gymName',e.target.value)} style={s.inp}/></div>
-              <div style={{marginBottom:10}}><span style={s.lbl}>Subtítulo</span><input value={local.gymSub} onChange={e=>set('gymSub',e.target.value)} style={s.inp}/></div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                <div><span style={s.lbl}>Color primario</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
-                <div><span style={s.lbl}>Color fondo</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
-              </div>
-            </div>
-            <div style={s.card}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Logo</div>
-              <input ref={logoInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>setLocal(f=>({...f,logoImg:ev.target.result}));reader.readAsDataURL(file);}}/>
-              <div style={{display:'flex',gap:8,marginBottom:8}}>
-                <button onClick={()=>logoInputRef.current.click()} style={{...s.btnBK,flex:1}}>Subir logo</button>
-                {local.logoImg&&<button onClick={()=>set('logoImg',null)} style={{...s.btnG,color:R,borderColor:R}}>Quitar</button>}
-              </div>
-              {local.logoImg?<img src={local.logoImg} alt="Logo" style={{maxHeight:50,maxWidth:'100%',objectFit:'contain',display:'block'}}/>:<div style={{background:G1,padding:10,textAlign:'center',borderRadius:6,color:G3,fontSize:11}}>Logo kettlebell por defecto</div>}
-            </div>
-            <button onClick={()=>setBrand(local)} style={{...s.btnR,background:local.colorPrimary,width:'100%',padding:'12px'}}>Aplicar cambios</button>
-          </div>
-          <div>
-            <div style={{background:local.colorBg,borderRadius:8,padding:'12px 16px',marginBottom:10,borderBottom:`3px solid ${local.colorPrimary}`}}>
-              {local.logoImg?(
-                <div style={{display:'flex',alignItems:'center',gap:12}}>
-                  <img src={local.logoImg} alt="logo" style={{height:44,objectFit:'contain',flexShrink:0}}/>
-                  <div>
-                    <div style={{fontFamily:'Arial Black,Arial,sans-serif',fontWeight:900,fontSize:18,color:local.colorPrimary,letterSpacing:2,lineHeight:1}}>{local.gymName||'NOMBRE'}</div>
-                    <div style={{fontFamily:'Arial,sans-serif',fontSize:10,color:WH,letterSpacing:'3px',marginTop:2}}>{local.gymSub||'SUBTÍTULO'}</div>
-                  </div>
-                </div>
-              ):<DefaultLogo h={44} gymName={local.gymName||'NOMBRE'} gymSub={local.gymSub||'SUBTÍTULO'}/>}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
-  // ── TAB: REHABILITACIÓN ──────────────────────────────────────────────────
-  // ── NuevoEjercicioRehabComp — external (has useState) ───────────────────────
-  const NuevoEjercicioRehabComp=({region,fase,onSave,onClose,s})=>{
-    const [form,setF]=useState({id:'cr_'+genId(),nombre:'',desc:'',param:'3×10 rep',tejido:'',notas:''});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const REGIONES_LIST=Object.entries(REGIONES).map(([k,v])=>({k,label:v.label}));
-    const FASES_LIST=Object.entries(FASES_REHAB).map(([k,v])=>({k,label:v.label}));
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:460,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo ejercicio de rehabilitación</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            <div><span style={s.lbl}>Nombre del ejercicio *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-              <div><span style={s.lbl}>Región</span>
-                <select value={region} disabled style={{...s.sel,width:'100%',opacity:.7}}>
-                  {REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}
-                </select>
-              </div>
-              <div><span style={s.lbl}>Fase</span>
-                <select value={fase} disabled style={{...s.sel,width:'100%',opacity:.7}}>
-                  {FASES_LIST.map(f=><option key={f.k} value={f.k}>{f.label}</option>)}
-                </select>
-              </div>
-            </div>
-            <div><span style={s.lbl}>Descripción / Procedimiento</span><textarea value={form.desc} onChange={e=>set('desc',e.target.value)} rows={3} style={{...s.inp,resize:'vertical'}} placeholder="Cómo realizar el ejercicio, puntos clave, precauciones..."/></div>
-            <div><span style={s.lbl}>Parámetros sugeridos</span><input value={form.param} onChange={e=>set('param',e.target.value)} placeholder="Ej: 3×12 rep · RPE 5–6 · hold 5 seg" style={s.inp}/></div>
-            <div><span style={s.lbl}>Tejido objetivo (opcional)</span><input value={form.tejido} onChange={e=>set('tejido',e.target.value)} placeholder="tendón, músculo, ligamento..." style={s.inp}/></div>
-            <div><span style={s.lbl}>Notas clínicas</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Evidencia, indicaciones especiales..." style={s.inp}/></div>
-          </div>
-          <button onClick={()=>{if(form.nombre.trim())onSave({...form,region,fase});}}
-            disabled={!form.nombre.trim()}
-            style={{...s.btnR,width:'100%',padding:'9px',marginTop:12,background:brand.colorPrimary,opacity:!form.nombre.trim()?.5:1}}>
-            💾 Guardar en base de datos
-          </button>
-          <div style={{fontSize:9,color:G3,textAlign:'center',marginTop:4}}>El ejercicio quedará disponible en futuros protocolos de {region} — {fase}</div>
-        </div>
-      </div>
-    );
-  };
-
-  const RehabTab=()=>{
-    const [rehabRegion,setRehabRegion]=useState('');
-    const [rehabFase,setRehabFase]=useState('aguda');
-    const [rehabTejido,setRehabTejido]=useState('');
-    const [rehabSession,setRehabSession]=useState([]);
-    const [showTejidos,setShowTejidos]=useState(false);
-    const [activeClientRehab,setActiveClientRehab]=useState('');
-    const [rehabNotas,setRehabNotas]=useState('');
-    const [showAddEx,setShowAddEx]=useState(false);
-    const [buscarEx,setBuscarEx]=useState('');
-    const {protocolos:customEx,saveEjercicio:saveCustomEx,deleteEjercicio:deleteCustomEx}=useRehabProtocolos();
-
-    const ejerciciosBase=rehabRegion&&REHAB_DB[rehabRegion]?REHAB_DB[rehabRegion][rehabFase]||[]:[];
-    const ejerciciosCustom=customEx.filter(e=>e.region===rehabRegion&&e.fase===rehabFase);
-    const ejerciciosDisponibles=[...ejerciciosBase,...ejerciciosCustom.map(e=>({id:e.id,nombre:e.nombre,desc:e.desc||'',param:e.param||'',custom:true}))];
-    const ejerciciosFiltrados=buscarEx?ejerciciosDisponibles.filter(e=>e.nombre.toLowerCase().includes(buscarEx.toLowerCase())):ejerciciosDisponibles;
-
-    const addToSession=(ej)=>{
-      if(rehabSession.find(e=>e.id===ej.id))return;
-      setRehabSession(p=>[...p,{...ej,series:3,reps:ej.param,notas:'',activo:true}]);
-    };
-    const removeFromSession=(id)=>setRehabSession(p=>p.filter(e=>e.id!==id));
-    const updateEj=(id,k,v)=>setRehabSession(p=>p.map(e=>e.id===id?{...e,[k]:v}:e));
-
-    const exportRehabPDF=()=>{
-      if(!rehabSession.length)return;
-      const region=rehabRegion?REGIONES[rehabRegion]:{label:'General',color:'#374151'};
-      const fase=FASES_REHAB[rehabFase];
-      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:8px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:8px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.desc}</td><td style="padding:8px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.reps}</td><td style="padding:8px 10px;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.notas||''}</td></tr>`).join('');
-      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>${getPrintCSS(brand.colorPrimary)}</style></head><body>
-        <div style="display:flex;justify-content:space-between;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:16px">
-          <div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary}">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
-          <div style="text-align:right"><div style="font-size:15px;font-weight:800">Protocolo de Rehabilitación</div>
-            <div style="font-size:11px;color:#555">Región: ${region.label} · Fase: ${fase.label}</div>
-            ${activeClientRehab?`<div style="font-size:11px;color:#777">Paciente: ${activeClientRehab}</div>`:''}
-            <div style="font-size:10px;color:#999">Fecha: ${new Date().toLocaleDateString('es-ES')}</div></div>
-        </div>
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:#1a1a1a;color:#fff">
-            <th style="padding:8px 10px;font-size:9px;text-align:left">Ejercicio</th>
-            <th style="padding:8px 10px;font-size:9px;text-align:left">Descripción</th>
-            <th style="padding:8px 10px;font-size:9px;width:130px">Parámetros</th>
-            <th style="padding:8px 10px;font-size:9px;text-align:left">Notas sesión</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-        ${rehabNotas?`<div style="margin-top:14px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:10px 14px;font-size:11px"><strong>Notas:</strong> ${rehabNotas}</div>`:''}
-        <div style="margin-top:12px;background:#fff9ec;border:1px solid #fcd34d;border-radius:6px;padding:10px;font-size:10px;color:#78350f"><strong>⚠</strong> Suspender si el dolor supera 4/10. Reevaluar ante exacerbación de síntomas.</div>
-        <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · FisioActiva · Método Activa Integra · ${new Date().toLocaleDateString('es-ES')}</div>
-        <script>window.onload=()=>window.print()<\/script></body></html>`;
-      const w=window.open('','_blank');w.document.write(html);w.document.close();
-    };
-
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showAddEx&&NuevoEjercicioRehabComp({region:rehabRegion,fase:rehabFase,onSave:(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);},onClose:()=>setShowAddEx(false),s})}
-
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:3}}>🩹 Constructor de Sesión — Rehabilitación</div>
-          <div style={{fontSize:12,color:G3}}>Protocolos por región y fase · Ejercicios editables y guardados en BD</div>
-        </div>
-
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-          <div><span style={s.lbl}>Paciente</span>
-            {clients.filter(c=>c.nivel==='restaura').length>0
-              ?<select value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} style={{...s.sel,width:'100%'}}>
-                  <option value=''>Sin paciente vinculado</option>
-                  {clients.filter(c=>c.nivel==='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}
-                  {clients.filter(c=>c.nivel!=='restaura').length>0&&<optgroup label="── Otros ──">{clients.filter(c=>c.nivel!=='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}</optgroup>}
-                </select>
-              :<input value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} placeholder="Nombre del paciente" style={s.inp}/>}
-          </div>
-          <div><span style={s.lbl}>Notas del fisioterapeuta</span>
-            <input value={rehabNotas} onChange={e=>setRehabNotas(e.target.value)} placeholder="Indicaciones especiales..." style={s.inp}/></div>
-        </div>
-
-        <div style={{marginBottom:12}}>
-          <span style={s.lbl}>Región anatómica</span>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginTop:4}}>
-            {Object.entries(REGIONES).map(([k,v])=>(
-              <div key={k} onClick={()=>{setRehabRegion(k);setRehabSession([]);}} style={{cursor:'pointer',padding:'9px 6px',borderRadius:7,border:`2px solid ${rehabRegion===k?v.color:G2}`,background:rehabRegion===k?`${v.color}15`:WH,textAlign:'center',transition:'all .15s'}}>
-                <div style={{fontSize:16,marginBottom:3}}>{v.icon}</div>
-                <div style={{fontSize:10,fontWeight:rehabRegion===k?700:400,color:rehabRegion===k?v.color:G4,lineHeight:1.2}}>{v.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{marginBottom:12}}>
-          <span style={s.lbl}>Fase de rehabilitación</span>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginTop:4}}>
-            {Object.entries(FASES_REHAB).map(([k,v])=>(
-              <div key={k} onClick={()=>{setRehabFase(k);setRehabSession([]);}} style={{cursor:'pointer',padding:'10px 12px',borderRadius:7,border:`2px solid ${rehabFase===k?v.color:G2}`,background:rehabFase===k?v.bg:WH,transition:'all .15s'}}>
-                <div style={{fontWeight:700,fontSize:12,color:rehabFase===k?v.color:'#333'}}>{v.label}</div>
-                <div style={{fontSize:10,color:G3,marginTop:2}}>{v.sub}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <button onClick={()=>setShowTejidos(p=>!p)} style={{...s.btnBK,marginBottom:12,width:'100%',padding:'9px',fontSize:12}}>
-          {showTejidos?'▲ Ocultar':'📋 Ver protocolos por tipo de tejido (fractura, tendón, ligamento, músculo, fascia)'}
-        </button>
-
-        {showTejidos&&(
-          <div style={{marginBottom:14}}>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:10}}>
-              {Object.entries(TEJIDOS_BASE).map(([k,v])=>(
-                <div key={k} onClick={()=>setRehabTejido(rehabTejido===k?'':k)} style={{cursor:'pointer',padding:'10px 8px',borderRadius:7,border:`2px solid ${rehabTejido===k?R:G2}`,background:rehabTejido===k?'#FEF2F2':WH,textAlign:'center',transition:'all .15s'}}>
-                  <div style={{fontSize:18,marginBottom:3}}>{v.icon}</div>
-                  <div style={{fontSize:10,fontWeight:700,color:rehabTejido===k?R:G4}}>{v.label}</div>
-                </div>
-              ))}
-            </div>
-            {rehabTejido&&(()=>{
-              const tj=TEJIDOS_BASE[rehabTejido];const fa=tj.fases[rehabFase];
-              return(
-                <div style={{background:WH,border:`1px solid ${G2}`,borderRadius:8,padding:'12px 14px',borderLeft:`4px solid ${R}`}}>
-                  <div style={{fontWeight:800,fontSize:13,marginBottom:4}}>{tj.icon} {tj.label} — {fa.titulo}</div>
-                  <div style={{fontSize:11,color:'#444',marginBottom:8,background:'#FFF9F0',borderRadius:5,padding:'6px 10px'}}><strong>Criterios:</strong> {fa.criterios}</div>
-                  <div style={{display:'flex',flexDirection:'column',gap:5,marginBottom:10}}>
-                    {fa.ejercicios.map((ej,i)=>(<div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',background:G1,borderRadius:5}}><span style={{color:R,fontWeight:700,fontSize:11,flexShrink:0}}>→</span><span style={{fontSize:11}}>{ej}</span></div>))}
-                  </div>
-                  <div style={{fontSize:10,color:R,background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:5,padding:'6px 10px'}}><strong>⚠ Precauciones:</strong> {tj.precauciones}</div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
-
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-          <div>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-              <div style={{fontWeight:700,fontSize:12,color:G4,textTransform:'uppercase',letterSpacing:'.04em'}}>
-                {rehabRegion?`${REGIONES[rehabRegion].label} — ${FASES_REHAB[rehabFase].label}`:'Seleccioná región'}
-                {rehabRegion&&<span style={{marginLeft:6,fontSize:11,color:G3,fontWeight:400}}>({ejerciciosFiltrados.length})</span>}
-              </div>
-              {rehabRegion&&<button onClick={()=>setShowAddEx(true)} style={{...s.btnR,fontSize:10,padding:'4px 9px',background:brand.colorPrimary}}>+ Nuevo</button>}
-            </div>
-            {rehabRegion&&<input value={buscarEx} onChange={e=>setBuscarEx(e.target.value)} placeholder="Buscar ejercicio..." style={{...s.inp,marginBottom:8,fontSize:11}}/>}
-            {!rehabRegion&&<div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná una región anatómica arriba.</div>}
-            <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:480,overflowY:'auto'}}>
-              {ejerciciosFiltrados.map(ej=>{
-                const inSession=rehabSession.some(e=>e.id===ej.id);
-                return(
-                  <div key={ej.id} style={{background:inSession?'#F0FDF4':WH,border:`1px solid ${inSession?'#86EFAC':G2}`,borderRadius:7,padding:'9px 11px'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:12,fontWeight:700,marginBottom:2}}>
-                          {ej.nombre}
-                          {ej.custom&&<span style={{marginLeft:5,background:'#EDE9FE',color:'#7C3AED',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>CUSTOM</span>}
-                        </div>
-                        <div style={{fontSize:10,color:G4,lineHeight:1.4,marginBottom:3}}>{ej.desc}</div>
-                        <div style={{fontSize:10,color:brand.colorPrimary,fontWeight:700}}>{ej.param}</div>
-                      </div>
-                      <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
-                        {!inSession?<button onClick={()=>addToSession(ej)} style={{...s.btnR,fontSize:10,padding:'3px 8px',background:brand.colorPrimary}}>+ Agregar</button>
-                          :<span style={{fontSize:10,color:GN,fontWeight:700,padding:'3px 8px'}}>✓ Sesión</span>}
-                        {ej.custom&&<button onClick={()=>deleteCustomEx(ej.id).catch(console.error)} style={{...s.btnG,fontSize:9,padding:'2px 6px',color:R,borderColor:R}}>Del</button>}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-              <div style={{fontWeight:700,fontSize:12,color:G4,textTransform:'uppercase',letterSpacing:'.04em'}}>Sesión ({rehabSession.length})</div>
-              {rehabSession.length>0&&<button onClick={exportRehabPDF} style={{...s.btnR,fontSize:10,padding:'4px 8px',background:brand.colorPrimary}}>📄 PDF</button>}
-              {rehabSession.length>0&&<button onClick={()=>{
-                const protocolo={
-                  region:rehabRegion,fase:rehabFase,paciente:activeClientRehab,
-                  ejercicios:rehabSession.map(e=>({nombre:e.nombre,param:e.reps,series:e.series,notas:e.notas||''})),
-                  notas:rehabNotas,fecha:new Date().toISOString().split('T')[0]
-                };
-                try{
-                  const pend=JSON.parse(localStorage.getItem('protocolos_pendientes')||'[]');
-                  pend.unshift(protocolo);
-                  localStorage.setItem('protocolos_pendientes',JSON.stringify(pend.slice(0,10)));
-                  alert('✅ Protocolo enviado a sesión clínica.\nAbrilo desde FisioActiva → Registro de Sesiones → Nueva sesión → "Cargar protocolo".');
-                }catch(err){alert('Error: '+err.message);}
-              }} style={{...s.btnGreen,fontSize:10,padding:'4px 8px'}}>→ Pasar a sesión clínica</button>}
-            </div>
-            {rehabSession.length===0&&<div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3,fontSize:12}}>Agregá ejercicios desde el banco.</div>}
-            <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:480,overflowY:'auto'}}>
-              {rehabSession.map((e,idx)=>(
-                <div key={e.id} style={{background:WH,border:`1px solid ${G2}`,borderRadius:8,padding:'10px 12px'}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
-                    <div><span style={{fontSize:11,fontWeight:700,color:G4,marginRight:6}}>{idx+1}.</span>
-                      <span style={{fontSize:12,fontWeight:700}}>{e.nombre}</span>
-                      {e.custom&&<span style={{marginLeft:5,background:'#EDE9FE',color:'#7C3AED',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>CUSTOM</span>}
-                    </div>
-                    <button onClick={()=>removeFromSession(e.id)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:16,lineHeight:1}}>×</button>
-                  </div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:5,marginBottom:5}}>
-                    <div><span style={s.lbl}>Parámetros</span><input value={e.reps} onChange={ev=>updateEj(e.id,'reps',ev.target.value)} style={{...s.inp,fontSize:10}}/></div>
-                    <div><span style={s.lbl}>Series</span><input type="number" value={e.series} onChange={ev=>updateEj(e.id,'series',ev.target.value)} style={{...s.inp,fontSize:10}}/></div>
-                  </div>
-                  <div><span style={s.lbl}>Notas de esta sesión</span>
-                    <input value={e.notas||''} onChange={ev=>updateEj(e.id,'notas',ev.target.value)} placeholder="Observaciones..." style={{...s.inp,fontSize:10}}/></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ── FuerzaFormComp — crear Y editar tests de fuerza ─────────────────────
-  const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests})=>{
-    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
-      fecha:new Date().toISOString().split('T')[0],
-      peso_corporal:pac?.screening?.peso||'',
-      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
-    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const testsDisp=allTests||TESTS_FUERZA;
-    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
-    // Pull-ups: base = peso corporal
-    const esDom=form.test_id==='pull_ups';
-    const pesoLev=parseFloat(form.peso_levantado)||0;
-    const pesoCorp=parseFloat(form.peso_corporal)||0;
-    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
-    const formulaSel=form.formula||'epley_brzycki';
-    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
-    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div>
-              <span style={s.lbl}>Ejercicio</span>
-              <select value={form.test_id} onChange={e=>{
-                const t=testsDisp.find(x=>x.id===e.target.value);
-                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
-              }} style={{...s.sel,width:'100%'}}>
-                <optgroup label="── Ejercicios estándar ──">
-                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>
-                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
-                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>}
-              </select>
-            </div>
-            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
-              <strong>📋 Protocolo:</strong> {ti.protocolo}
-              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
-            </div>}
-            {/* SELECTOR DE FÓRMULA */}
-            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
-              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
-              <select value={form.formula||'epley_brzycki'} onChange={e=>{
-                const nuevaF=e.target.value;
-                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
-                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
-              }} style={{...s.sel,width:'100%'}}>
-                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
-              </select>
-              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
-                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
-              </div>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
-              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
-              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
-                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
-                  {((form.formula||'epley_brzycki')==='lombardi'
-                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
-                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
-                </select>
-              </div>
-            </div>
-            {/* Preview 1RM */}
-            {rm1c&&(
-              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <div>
-                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
-                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
-                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
-                </div>
-                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
-                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
-                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
-                </div>}
-              </div>
-            )}
-            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
-              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
-            </div>
-          </div>
-          <button onClick={()=>{
-            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
-            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
-            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 {editingTest?'Guardar cambios':'Guardar test'}
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  // ── PlanFormComp — asignar plan de periodización ──────────────────────────
-  const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose})=>{
-    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
-      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const p=PERIODIZACIONES[form.sistema_id];
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div><span style={s.lbl}>Sistema de periodización</span>
-              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
-                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
-              </select>
-            </div>
-            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
-              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
-              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
-              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
-                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
-                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
-                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
-                </div>))}
-              </div>
-            </div>)}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
-            </div>
-            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
-          </div>
-          <button onClick={()=>{
-            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
-            savePlan(planFinal).catch(e=>console.error(e));
-            const cli=clients.find(x=>x.id===selClientId);
-            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 Asignar plan
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  // ── CustomTestsModal — gestión de 3 ejercicios personalizados ─────────────
-  const CustomTestsModal=({customTests,onSave,onClose})=>{
-    const [local,setLocal]=useState(()=>[
-      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
-      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
-      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
-    ]);
-    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
-            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
-          </div>
-          {local.map((t,i)=>(
-            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
-              <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                <div><span style={s.lbl}>Nombre del ejercicio</span>
-                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Patrón de movimiento</span>
-                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Protocolo de evaluación</span>
-                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
-                </div>
-                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
-              </div>
-            </div>
-          ))}
-          <button onClick={()=>{
-            const validos=local.filter(t=>t.nombre.trim());
-            onSave(validos);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
-            💾 Guardar ejercicios personalizados
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const FuerzaTab=()=>{
-    const [selClientId,setSelClientId]=useState('');
-    const pac=clients.find(x=>x.id===selClientId);
-    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
-    const [showForm,setShowForm]=useState(false);
-    const [editingTest,setEditingTest]=useState(null);
-    const [showPlan,setShowPlan]=useState(false);
-    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
-    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
-    const {customRows,saveCustom}=useCustomTests(selClientId||null);
-    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
-    const [showCustomEdit,setShowCustomEdit]=useState(false);
-    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
-    const migradoRef=useRef(new Set());
-    useEffect(()=>{
-      if(!selClientId||migradoRef.current.has(selClientId))return;
-      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
-      try{
-        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
-        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
-          migradoRef.current.add(selClientId);
-          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
-        }
-      }catch{}
-    },[selClientId,customRows,saveCustom]);
-
-    // Sync custom tests when client changes
-    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
-
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showForm&&FuerzaFormComp({pac,editingTest,saveTest,allTests,onClose:()=>{setShowForm(false);setEditingTest(null);}})}
-        {showPlan&&PlanFormComp({selClientId,savePlan,saveClientFn,onClose:()=>setShowPlan(false)})}
-        {showCustomEdit&&CustomTestsModal({customTests,onClose:()=>setShowCustomEdit(false),onSave:(tests)=>{
-          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
-        }})}
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
-          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
-        </div>
-        {/* Selector de cliente */}
-        <div style={{...s.card,marginBottom:12}}>
-          <span style={s.lbl}>Seleccionar cliente</span>
-          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
-            <option value=''>— Seleccionar cliente —</option>
-            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
-          </select>
-        </div>
-        {pac&&(
-          <>
-            {/* Header del paciente */}
-            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
-                  <div style={{fontSize:11,color:G3,marginTop:2}}>
-                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
-                    {tests.length>0&&(()=>{
-                      const last=new Date(tests[0].fecha);
-                      const next=new Date(last);next.setMonth(next.getMonth()+4);
-                      const dias=Math.ceil((next-new Date())/86400000);
-                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
-                    })()}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
-                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
-                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
-                </div>
-              </div>
-            </div>
-            {/* Plan activo */}
-            {planes.filter(p=>p.activo).length>0&&(()=>{
-              const plan=planes.filter(p=>p.activo)[0];
-              const ps=PERIODIZACIONES[plan.sistema_id];
-              return(
-                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
-                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
-                  {ps&&(
-                    <>
-                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
-                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
-                        {ps.fases.map((f,i)=>(
-                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
-                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
-                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
-                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
-                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
-                    </>
-                  )}
-                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
-                </div>
-              );
-            })()}
-            {/* Grid resumen 1RM */}
-            <div style={{...s.card,marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
-                {allTests.map((tf,tfIdx)=>{
-                  const data=tests.filter(t=>t.test_id===tf.id);
-                  const last=data[0];
-                  const rm1=last?.rm1_real||last?.rm1_calculado;
-                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
-                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
-                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
-                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
-                  return(
-                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
-                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
-                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
-                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
-                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
-                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
-                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            {/* Historial */}
-            <div style={s.card}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
-              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
-              {tests.map(t=>{
-                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
-                const rm1=t.rm1_real||t.rm1_calculado;
-                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
-                return(
-                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
-                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
-                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
-                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
-                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
-                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
-                      </div>
-                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
-                    </div>
-                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
-                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
-                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
-                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
-      </div>
-    );
-  };
-
   const HeaderLogo=()=>brand.logoImg?(
     <div style={{display:'flex',alignItems:'center',gap:12}}>
       <img src={brand.logoImg} alt="logo" style={{height:46,objectFit:'contain',flexShrink:0}}/>
@@ -4130,8 +4146,8 @@ export default function App(){
 
   return(
     <div style={s.page}>
-      {clientWizard&&ClientWizardModal({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})}
-      {informeCliente&&InformeClienteModal({cliente:informeCliente,onClose:()=>setInformeCliente(null),saveClient,exs,s,brand})}
+      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
+      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand} setSession={setSession} setTab={setTab} iaReglas={iaReglas}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...
@@ -4185,9 +4201,9 @@ export default function App(){
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='clientes'&&ClientesTab()}
         {tab==='session'&&SessionTab()}
-        {tab==='fuerza'&&FuerzaTab()}
+        {tab==='fuerza'&&<FuerzaTab brand={brand} clients={clients} s={s} saveClientFn={saveClientFn}/>}
         {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}
-        {tab==='rehab'&&RehabTab()}
+        {tab==='rehab'&&<RehabTab brand={brand} clients={clients} s={s}/>}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
@@ -4198,8 +4214,8 @@ export default function App(){
           }}
         />}
         {tab==='export'&&ExportTab()}
-        {tab==='db'&&DBTab()}
-        {tab==='brand'&&BrandingTab()}
+        {tab==='db'&&<DBTab exs={exs} dbSaveEjercicio={dbSaveEjercicio} dbDeleteEjercicio={dbDeleteEjercicio} brand={brand} s={s}/>}
+        {tab==='brand'&&<BrandingTab brand={brand} setBrand={setBrand} s={s}/>}
       </div>
     </div>
   );
