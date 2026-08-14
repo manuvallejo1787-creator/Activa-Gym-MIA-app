@@ -32,7 +32,7 @@ async function sb(path, opts = {}) {
 async function clienteDeToken(token) {
   if (!token || typeof token !== "string" || token.length < 8) return null;
   const enc = encodeURIComponent(token);
-  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido`);
+  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido,nivel,objetivo,periodizacion,periodizacion_inicio,periodizacion_fin,criterios_avance_estado,screening`);
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
@@ -52,12 +52,34 @@ export default async function handler(req, res) {
       const plan = Array.isArray(planes) && planes.length ? planes[0] : null;
       let logs = [];
       let nombres = {};
+      let media = {};
       if (plan) {
-        logs = await sb(`ejecucion_registros?plan_id=eq.${plan.id}&select=dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real`);
-        const ejs = await sb(`ejercicios?select=id,nombre`);
-        (ejs || []).forEach(e => { nombres[e.id] = e.nombre; });
+        logs = await sb(`ejecucion_registros?plan_id=eq.${plan.id}&select=dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at`);
+        const ejs = await sb(`ejercicios?select=id,nombre,media_url,media_tipo,media_desc`);
+        (ejs || []).forEach(e => {
+          nombres[e.id] = e.nombre;
+          if (e.media_url) media[e.id] = { url: e.media_url, tipo: e.media_tipo || "imagen", desc: e.media_desc || "" };
+        });
       }
-      return res.status(200).json({ cliente: { nombre: cli.nombre, apellido: cli.apellido }, plan, logs: logs || [], nombres });
+      // Criterios de avance de la fase actual del cliente (plantilla, no editable acá)
+      let criterios = [];
+      if (cli.nivel) {
+        const rows = await sb(`criterios_avance_template?fase=eq.${encodeURIComponent(cli.nivel)}&select=criterios`);
+        criterios = Array.isArray(rows) && rows.length ? (rows[0].criterios || []) : [];
+      }
+      // Marca del centro (para que el portal use la paleta real, no una fija)
+      let brand = null;
+      try {
+        const brandRows = await sb(`centro_config?id=eq.default&select=gym_name,gym_sub,logo_img,color_primary,color_bg`);
+        if (Array.isArray(brandRows) && brandRows.length) brand = brandRows[0];
+      } catch {}
+
+      return res.status(200).json({
+        cliente: { nombre: cli.nombre, apellido: cli.apellido, nivel: cli.nivel, objetivo: cli.objetivo,
+          periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
+          criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
+        criterios, brand, plan, logs: logs || [], nombres, media,
+      });
     }
 
     // ── ESCRITURA: el cliente registra lo que hizo ──
