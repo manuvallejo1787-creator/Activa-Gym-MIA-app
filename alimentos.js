@@ -1,756 +1,336 @@
-// Nutricion.jsx — Módulo de Planes Nutricionales
-// Vinculado a clientes · Fórmula Mifflin-St Jeor · 7 días × 5 comidas · PDF export
+// alimentos.js — Base de alimentos Uruguay/región
+// Macros por 100g: proteinas, carbohidratos, grasas, fibra, calorias
+// Micronutrientes seleccionados: 2 principales por categoría
+// Fuentes: USDA, tablas INTA, tablas de composición alimentaria Uruguay
 
-import { useState, useMemo, useCallback } from "react";
-import {
-  DB_ALIMENTOS, CATEGORIAS_ALIMENTOS, DIAS_SEMANA, COMIDAS,
-  calcularTDEE, calcularObjetivo, sumarMacrosDia, calcularMacros, getAlimentoById
-} from "./alimentos.js";
-import { AIGeneradorNutricion } from "./AIActiva.jsx";
-
-// ─── PALETA ──────────────────────────────────────────────────────────────────
-const BK='#1a1a1a', WH='#FFFFFF', R='#CC0000';
-const G1='#F4F4F4', G2='#E0E0E0', G3='#999999', G4='#555555';
-const GN='#16A34A', AM='#D97706', RJ='#DC2626';
-const NV='#0A3D62', TL='#1BAA86';
-
-// ─── ESTILOS ─────────────────────────────────────────────────────────────────
-const ns = {
-  inp: { width:'100%', border:`1px solid ${G2}`, borderRadius:5, padding:'5px 8px', fontSize:11, background:WH, outline:'none' },
-  sel: { border:`1px solid ${G2}`, borderRadius:5, padding:'5px 8px', fontSize:11, background:WH, outline:'none' },
-  lbl: { display:'block', fontSize:9, color:G3, textTransform:'uppercase', letterSpacing:'.04em', marginBottom:3, fontWeight:700 },
-  card: { background:WH, borderRadius:8, padding:14, marginBottom:10, border:`1px solid ${G2}` },
-  btnR: { background:R, color:WH, border:'none', borderRadius:5, padding:'6px 12px', fontSize:11, fontWeight:700, cursor:'pointer' },
-  btnG: { background:WH, color:G4, border:`1px solid ${G2}`, borderRadius:5, padding:'5px 10px', fontSize:11, cursor:'pointer' },
-  btnTl: { background:TL, color:WH, border:'none', borderRadius:5, padding:'6px 12px', fontSize:11, fontWeight:700, cursor:'pointer' },
-  tag: (bg) => ({ background:bg, color:WH, fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:99, display:'inline-block' }),
+export const CATEGORIAS_ALIMENTOS = {
+  proteina_animal: { label: 'Proteína animal',   color: '#CC0000', emoji: '🥩' },
+  proteina_vegetal:{ label: 'Proteína vegetal',   color: '#16A34A', emoji: '🌱' },
+  lacteos:         { label: 'Lácteos',             color: '#0284C7', emoji: '🥛' },
+  huevos:          { label: 'Huevos',              color: '#F59E0B', emoji: '🥚' },
+  carbohidratos:   { label: 'Carbohidratos',       color: '#7C3AED', emoji: '🍚' },
+  frutas:          { label: 'Frutas',              color: '#EA580C', emoji: '🍎' },
+  verduras:        { label: 'Verduras',            color: '#059669', emoji: '🥦' },
+  grasas:          { label: 'Grasas saludables',  color: '#D97706', emoji: '🥑' },
+  bebidas:         { label: 'Bebidas',             color: '#2563EB', emoji: '💧' },
+  snacks:          { label: 'Snacks / Colaciones', color: '#9333EA', emoji: '🥜' },
+  fiambres:        { label: 'Fiambres / Embutidos', color: '#B91C1C', emoji: '🥓' },
+  panificados:     { label: 'Panificados / Harinas',color: '#D97706', emoji: '🍞' },
+  condimentos:     { label: 'Condimentos / Extras',  color: '#6B7280', emoji: '🧂' },
+  platos_calientes:{ label: 'Platos calientes / Olla', color: '#DC2626', emoji: '🍲' },
+  ensaladas:       { label: 'Ensaladas',               color: '#16A34A', emoji: '🥗' },
 };
 
-const genNutId = (prefix='n') => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+// Estructura: { id, nombre, categoria, porcion_ref (g), proteinas, carbos, grasas, fibra, calorias, micro1:{nombre,valor,unidad}, micro2:{nombre,valor,unidad}, notas }
+export const DB_ALIMENTOS = [
+  // ── PROTEÍNA ANIMAL ──────────────────────────────────────────────────────
+  { id:'pa01', nombre:'Pechuga de pollo (sin piel)',    categoria:'proteina_animal', porcion_ref:100, proteinas:31,  carbos:0,   grasas:3.6, fibra:0, calorias:165, micro1:{nombre:'Niacina (B3)',valor:13.4,unidad:'mg'}, micro2:{nombre:'Fósforo',valor:220,unidad:'mg'} },
+  { id:'pa02', nombre:'Muslo de pollo (sin piel)',      categoria:'proteina_animal', porcion_ref:100, proteinas:25,  carbos:0,   grasas:8,   fibra:0, calorias:177, micro1:{nombre:'Zinc',valor:2.4,unidad:'mg'},          micro2:{nombre:'Hierro',valor:1.2,unidad:'mg'} },
+  { id:'pa03', nombre:'Carne vacuna magra (lomo)',      categoria:'proteina_animal', porcion_ref:100, proteinas:29,  carbos:0,   grasas:5,   fibra:0, calorias:163, micro1:{nombre:'Hierro hemínico',valor:3.0,unidad:'mg'},micro2:{nombre:'Zinc',valor:4.8,unidad:'mg'} },
+  { id:'pa04', nombre:'Carne vacuna picada (90% magra)',categoria:'proteina_animal', porcion_ref:100, proteinas:26,  carbos:0,   grasas:10,  fibra:0, calorias:196, micro1:{nombre:'Hierro',valor:2.7,unidad:'mg'},        micro2:{nombre:'Zinc',valor:4.1,unidad:'mg'} },
+  { id:'pa05', nombre:'Asado / costilla vacuna',        categoria:'proteina_animal', porcion_ref:100, proteinas:23,  carbos:0,   grasas:18,  fibra:0, calorias:254, micro1:{nombre:'Hierro',valor:2.5,unidad:'mg'},        micro2:{nombre:'Selenio',valor:18,unidad:'µg'} },
+  { id:'pa06', nombre:'Salmón (filete)',                categoria:'proteina_animal', porcion_ref:100, proteinas:25,  carbos:0,   grasas:13,  fibra:0, calorias:208, micro1:{nombre:'Omega-3',valor:2.3,unidad:'g'},        micro2:{nombre:'Vitamina D',valor:14,unidad:'µg'} },
+  { id:'pa07', nombre:'Merluza',                        categoria:'proteina_animal', porcion_ref:100, proteinas:18,  carbos:0,   grasas:1.5, fibra:0, calorias:86,  micro1:{nombre:'Vitamina B12',valor:1.5,unidad:'µg'}, micro2:{nombre:'Fósforo',valor:200,unidad:'mg'} },
+  { id:'pa08', nombre:'Atún al natural (lata)',         categoria:'proteina_animal', porcion_ref:100, proteinas:27,  carbos:0,   grasas:1,   fibra:0, calorias:116, micro1:{nombre:'Selenio',valor:90,unidad:'µg'},        micro2:{nombre:'Vitamina B12',valor:2.5,unidad:'µg'} },
+  { id:'pa09', nombre:'Cerdo (lomo)',                   categoria:'proteina_animal', porcion_ref:100, proteinas:27,  carbos:0,   grasas:5,   fibra:0, calorias:153, micro1:{nombre:'Tiamina (B1)',valor:1.0,unidad:'mg'},  micro2:{nombre:'Zinc',valor:2.9,unidad:'mg'} },
+  { id:'pa10', nombre:'Pavo (pechuga)',                 categoria:'proteina_animal', porcion_ref:100, proteinas:29,  carbos:0,   grasas:2,   fibra:0, calorias:135, micro1:{nombre:'Triptófano',valor:0.4,unidad:'g'},    micro2:{nombre:'Selenio',valor:32,unidad:'µg'} },
+  { id:'pa11', nombre:'Camarones',                      categoria:'proteina_animal', porcion_ref:100, proteinas:24,  carbos:0.2, grasas:1.7, fibra:0, calorias:99,  micro1:{nombre:'Yodo',valor:35,unidad:'µg'},           micro2:{nombre:'Selenio',valor:39,unidad:'µg'} },
+  { id:'pa12', nombre:'Jamón crudo serrano',            categoria:'proteina_animal', porcion_ref:30,  proteinas:7.5, carbos:0.2, grasas:4,   fibra:0, calorias:68,  micro1:{nombre:'Vitamina B1',valor:0.5,unidad:'mg'},  micro2:{nombre:'Zinc',valor:1.5,unidad:'mg'} },
 
-// ─── SEMÁFORO DE MACROS ──────────────────────────────────────────────────────
-const calcSemaforo = (actual, objetivo, tolerancia=0.15) => {
-  if (!objetivo || objetivo <= 0) return 'verde';
-  const ratio = actual / objetivo;
-  if (ratio >= (1 - tolerancia) && ratio <= (1 + tolerancia)) return 'verde';
-  if (ratio >= (1 - tolerancia*2) && ratio <= (1 + tolerancia*2)) return 'amarillo';
-  return 'rojo';
-};
-const colorSem = { verde:GN, amarillo:AM, rojo:RJ };
-const emojiSem = { verde:'🟢', amarillo:'🟡', rojo:'🔴' };
+  // ── PROTEÍNA VEGETAL ─────────────────────────────────────────────────────
+  { id:'pv01', nombre:'Lentejas (cocidas)',             categoria:'proteina_vegetal', porcion_ref:100, proteinas:9,   carbos:20,  grasas:0.4, fibra:8,  calorias:116, micro1:{nombre:'Hierro no-heme',valor:3.3,unidad:'mg'},micro2:{nombre:'Folato',valor:181,unidad:'µg'} },
+  { id:'pv02', nombre:'Porotos negros (cocidos)',       categoria:'proteina_vegetal', porcion_ref:100, proteinas:8.9, carbos:23,  grasas:0.5, fibra:8.7,calorias:132, micro1:{nombre:'Hierro',valor:2.1,unidad:'mg'},       micro2:{nombre:'Potasio',valor:355,unidad:'mg'} },
+  { id:'pv03', nombre:'Garbanzos (cocidos)',            categoria:'proteina_vegetal', porcion_ref:100, proteinas:9,   carbos:27,  grasas:2.6, fibra:7.6,calorias:164, micro1:{nombre:'Folato',valor:172,unidad:'µg'},       micro2:{nombre:'Manganeso',valor:1.0,unidad:'mg'} },
+  { id:'pv04', nombre:'Tofu firme',                    categoria:'proteina_vegetal', porcion_ref:100, proteinas:8,   carbos:2,   grasas:4,   fibra:0.3,calorias:76,  micro1:{nombre:'Calcio',valor:350,unidad:'mg'},       micro2:{nombre:'Hierro',valor:5.4,unidad:'mg'} },
+  { id:'pv05', nombre:'Edamame (soja verde)',           categoria:'proteina_vegetal', porcion_ref:100, proteinas:11,  carbos:10,  grasas:5,   fibra:5,  calorias:121, micro1:{nombre:'Vitamina K',valor:26,unidad:'µg'},    micro2:{nombre:'Folato',valor:311,unidad:'µg'} },
+  { id:'pv06', nombre:'Soja texturizada (seca)',        categoria:'proteina_vegetal', porcion_ref:100, proteinas:52,  carbos:30,  grasas:1,   fibra:17, calorias:329, micro1:{nombre:'Hierro',valor:9,unidad:'mg'},         micro2:{nombre:'Zinc',valor:2.5,unidad:'mg'} },
+  { id:'pv07', nombre:'Proteína de suero (whey)',       categoria:'proteina_vegetal', porcion_ref:30,  proteinas:24,  carbos:3,   grasas:1.5, fibra:0,  calorias:121, micro1:{nombre:'BCAA',valor:6,unidad:'g'},            micro2:{nombre:'Calcio',valor:130,unidad:'mg'} },
 
-// ─── MACRO BAR ───────────────────────────────────────────────────────────────
-const MacroBar = ({ label, actual, objetivo, color, unidad='g' }) => {
-  const pct = objetivo > 0 ? Math.min(actual / objetivo * 100, 110) : 0;
-  const sem = calcSemaforo(actual, objetivo);
-  return (
-    <div style={{ marginBottom:6 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:2 }}>
-        <span style={{ fontSize:10, color:G4 }}>{label}</span>
-        <span style={{ fontSize:10, fontWeight:700, color:colorSem[sem] }}>
-          {emojiSem[sem]} {actual}{unidad} / {objetivo}{unidad}
-        </span>
-      </div>
-      <div style={{ background:G2, borderRadius:99, height:6, overflow:'hidden' }}>
-        <div style={{ width:`${Math.min(pct,100)}%`, background:colorSem[sem], height:'100%', borderRadius:99, transition:'width .3s' }}/>
-      </div>
-    </div>
-  );
-};
+  // ── LÁCTEOS ──────────────────────────────────────────────────────────────
+  { id:'lc01', nombre:'Yogur natural entero',           categoria:'lacteos', porcion_ref:200, proteinas:8,   carbos:12,  grasas:6,   fibra:0, calorias:134, micro1:{nombre:'Calcio',valor:240,unidad:'mg'},       micro2:{nombre:'Probióticos',valor:1,unidad:'(sí)'} },
+  { id:'lc02', nombre:'Yogur griego natural',           categoria:'lacteos', porcion_ref:150, proteinas:15,  carbos:9,   grasas:5,   fibra:0, calorias:141, micro1:{nombre:'Calcio',valor:200,unidad:'mg'},       micro2:{nombre:'Vitamina B12',valor:0.75,unidad:'µg'} },
+  { id:'lc03', nombre:'Leche entera',                   categoria:'lacteos', porcion_ref:250, tiene_unidad:true, nombre_unidad:'taza/vaso', gramos_por_unidad:250, proteinas:8,   carbos:12,  grasas:8,   fibra:0, calorias:150, micro1:{nombre:'Calcio',valor:300,unidad:'mg'},       micro2:{nombre:'Vitamina D',valor:2.5,unidad:'µg'} },
+  { id:'lc04', nombre:'Leche descremada',               categoria:'lacteos', porcion_ref:250, proteinas:8.5, carbos:12,  grasas:0.5, fibra:0, calorias:86,  micro1:{nombre:'Calcio',valor:300,unidad:'mg'},       micro2:{nombre:'Vitamina B12',valor:1.0,unidad:'µg'} },
+  { id:'lc05', nombre:'Queso cottage light',            categoria:'lacteos', porcion_ref:100, proteinas:13,  carbos:3.4, grasas:1.4, fibra:0, calorias:79,  micro1:{nombre:'Calcio',valor:111,unidad:'mg'},       micro2:{nombre:'Sodio',valor:372,unidad:'mg'} },
+  { id:'lc06', nombre:'Queso muzarella',                categoria:'lacteos', porcion_ref:40,  proteinas:10,  carbos:1,   grasas:9,   fibra:0, calorias:122, micro1:{nombre:'Calcio',valor:290,unidad:'mg'},       micro2:{nombre:'Vitamina A',valor:68,unidad:'µg'} },
+  { id:'lc07', nombre:'Queso magro (port salut light)', categoria:'lacteos', porcion_ref:40,  proteinas:9,   carbos:1,   grasas:5,   fibra:0, calorias:85,  micro1:{nombre:'Calcio',valor:320,unidad:'mg'},       micro2:{nombre:'Fósforo',valor:240,unidad:'mg'} },
+  { id:'lc08', nombre:'Queso fresco',                   categoria:'lacteos', porcion_ref:50,  proteinas:6,   carbos:0.5, grasas:7,   fibra:0, calorias:90,  micro1:{nombre:'Calcio',valor:200,unidad:'mg'},       micro2:{nombre:'Riboflavina',valor:0.2,unidad:'mg'} },
 
-// ─── PANEL RESUMEN MACROS DÍA ────────────────────────────────────────────────
-const ResumenDia = ({ totales, objetivoNut }) => {
-  if (!objetivoNut) return null;
-  const semCal = calcSemaforo(totales.calorias, objetivoNut.kcal);
-  return (
-    <div style={{ background:G1, borderRadius:7, padding:'10px 12px', border:`2px solid ${colorSem[semCal]}` }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <span style={{ fontSize:11, fontWeight:700 }}>Resumen del día</span>
-        <span style={{ fontSize:16 }}>{emojiSem[semCal]}</span>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:4, marginBottom:6 }}>
-        <div style={{ textAlign:'center', background:WH, borderRadius:5, padding:'6px' }}>
-          <div style={{ fontSize:9, color:G3 }}>CALORÍAS</div>
-          <div style={{ fontSize:18, fontWeight:800, color:colorSem[semCal] }}>{totales.calorias}</div>
-          <div style={{ fontSize:9, color:G3 }}>/ {objetivoNut.kcal} kcal</div>
-        </div>
-        <div style={{ textAlign:'center', background:WH, borderRadius:5, padding:'6px' }}>
-          <div style={{ fontSize:9, color:G3 }}>PROTEÍNAS</div>
-          <div style={{ fontSize:18, fontWeight:800, color:colorSem[calcSemaforo(totales.proteinas, objetivoNut.prot_g)] }}>{totales.proteinas}g</div>
-          <div style={{ fontSize:9, color:G3 }}>/ {objetivoNut.prot_g}g</div>
-        </div>
-      </div>
-      <MacroBar label="Carbohidratos" actual={totales.carbos}    objetivo={objetivoNut.carb_g} color={NV} />
-      <MacroBar label="Grasas"        actual={totales.grasas}    objetivo={objetivoNut.gras_g} color={AM} />
-      <MacroBar label="Fibra"         actual={totales.fibra}     objetivo={25}                 color={TL} />
-    </div>
-  );
-};
+  // ── HUEVOS ───────────────────────────────────────────────────────────────
+  { id:'hv01', nombre:'Huevo entero',                   categoria:'huevos', porcion_ref:60, tiene_unidad:true, nombre_unidad:'huevo mediano', gramos_por_unidad:60,  proteinas:7.5, carbos:0.4, grasas:5.5, fibra:0, calorias:83,  micro1:{nombre:'Colina',valor:147,unidad:'mg'},       micro2:{nombre:'Vitamina D',valor:2.0,unidad:'µg'} },
+  { id:'hv02', nombre:'Clara de huevo',                 categoria:'huevos', porcion_ref:30, tiene_unidad:true, nombre_unidad:'clara', gramos_por_unidad:30,  proteinas:7,   carbos:0.5, grasas:0,   fibra:0, calorias:30,  micro1:{nombre:'Riboflavina',valor:0.2,unidad:'mg'},  micro2:{nombre:'Selenio',valor:7.5,unidad:'µg'} },
 
-export default function Nutricion({ clients, brand }) {
-  // ── Estado principal ──────────────────────────────────────────────────────
-  const [view, setView]     = useState('planes');    // planes | plan | alimentos | nuevo_cliente
-  const [selClientId, setSelClientId] = useState('');
-  const [planes, setPlanes] = useState([]);          // planes guardados en memoria
-  const [planActivo, setPlanActivo] = useState(null);
-  const [diaActivo, setDiaActivo]   = useState('Lunes');
-  const [comidaActiva, setComidaActiva] = useState('desayuno');
+  // ── CARBOHIDRATOS ────────────────────────────────────────────────────────
+  { id:'ch01', nombre:'Arroz blanco (cocido)',          categoria:'carbohidratos', porcion_ref:150, proteinas:3,   carbos:40,  grasas:0.3, fibra:0.4,calorias:174, micro1:{nombre:'Manganeso',valor:0.6,unidad:'mg'},    micro2:{nombre:'Niacina',valor:1.6,unidad:'mg'} },
+  { id:'ch02', nombre:'Arroz integral (cocido)',        categoria:'carbohidratos', porcion_ref:150, proteinas:3.5, carbos:38,  grasas:0.9, fibra:1.8,calorias:173, micro1:{nombre:'Magnesio',valor:42,unidad:'mg'},      micro2:{nombre:'Manganeso',valor:1.1,unidad:'mg'} },
+  { id:'ch03', nombre:'Avena en copos',                 categoria:'carbohidratos', porcion_ref:50,  proteinas:5,   carbos:27,  grasas:3,   fibra:4,  calorias:155, micro1:{nombre:'Beta-glucano',valor:2,unidad:'g'},    micro2:{nombre:'Magnesio',valor:29,unidad:'mg'} },
+  { id:'ch04', nombre:'Papa (cocida con cáscara)',      categoria:'carbohidratos', porcion_ref:150, proteinas:3,   carbos:26,  grasas:0.2, fibra:2.5,calorias:117, micro1:{nombre:'Vitamina C',valor:21,unidad:'mg'},    micro2:{nombre:'Potasio',valor:897,unidad:'mg'} },
+  { id:'ch05', nombre:'Batata / boniato (cocida)',      categoria:'carbohidratos', porcion_ref:150, proteinas:2,   carbos:27,  grasas:0.1, fibra:3.8,calorias:116, micro1:{nombre:'Vitamina A',valor:961,unidad:'µg'},   micro2:{nombre:'Potasio',valor:475,unidad:'mg'} },
+  { id:'ch06', nombre:'Pan integral',                   categoria:'carbohidratos', porcion_ref:50,  proteinas:4.5, carbos:23,  grasas:1.5, fibra:3,  calorias:122, micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Zinc',valor:0.8,unidad:'mg'} },
+  { id:'ch07', nombre:'Pan blanco',                     categoria:'carbohidratos', porcion_ref:50,  proteinas:4,   carbos:25,  grasas:1,   fibra:1,  calorias:124, micro1:{nombre:'Hierro',valor:1.0,unidad:'mg'},       micro2:{nombre:'Tiamina',valor:0.2,unidad:'mg'} },
+  { id:'ch08', nombre:'Pasta (fideos cocidos)',         categoria:'carbohidratos', porcion_ref:150, proteinas:5,   carbos:37,  grasas:1,   fibra:1.8,calorias:177, micro1:{nombre:'Selenio',valor:26,unidad:'µg'},       micro2:{nombre:'Manganeso',valor:0.4,unidad:'mg'} },
+  { id:'ch09', nombre:'Pasta integral (cocida)',        categoria:'carbohidratos', porcion_ref:150, proteinas:6,   carbos:35,  grasas:1,   fibra:4,  calorias:172, micro1:{nombre:'Magnesio',valor:42,unidad:'mg'},      micro2:{nombre:'Hierro',valor:1.5,unidad:'mg'} },
+  { id:'ch10', nombre:'Quinoa (cocida)',                categoria:'carbohidratos', porcion_ref:150, proteinas:6,   carbos:32,  grasas:3,   fibra:3.5,calorias:178, micro1:{nombre:'Magnesio',valor:60,unidad:'mg'},      micro2:{nombre:'Hierro',valor:2,unidad:'mg'} },
+  { id:'ch11', nombre:'Polenta (cocida)',               categoria:'carbohidratos', porcion_ref:150, proteinas:2,   carbos:21,  grasas:0.5, fibra:1,  calorias:96,  micro1:{nombre:'Vitamina A',valor:57,unidad:'µg'},    micro2:{nombre:'Hierro',valor:0.5,unidad:'mg'} },
+  { id:'ch12', nombre:'Choclo (maíz) desgranado',      categoria:'carbohidratos', porcion_ref:80,  proteinas:3,   carbos:19,  grasas:1.5, fibra:2.7,calorias:100, micro1:{nombre:'Vitamina B1',valor:0.2,unidad:'mg'},  micro2:{nombre:'Magnesio',valor:26,unidad:'mg'} },
+  { id:'ch13', nombre:'Galletas de arroz inflado',      categoria:'carbohidratos', porcion_ref:30,  proteinas:2,   carbos:23,  grasas:0.5, fibra:0.4,calorias:107, micro1:{nombre:'Manganeso',valor:0.5,unidad:'mg'},    micro2:{nombre:'Selenio',valor:5,unidad:'µg'} },
+  { id:'ch14', nombre:'Tostadas de centeno',            categoria:'carbohidratos', porcion_ref:30,  proteinas:3.5, carbos:20,  grasas:1,   fibra:4,  calorias:103, micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Folato',valor:20,unidad:'µg'} },
 
-  // Datos de alimentos (DB + personalizados)
-  const [customAlimentos, setCustomAlimentos] = useState([]);
-  const todosAlimentos = useMemo(() => [...DB_ALIMENTOS, ...customAlimentos], [customAlimentos]);
+  // ── FRUTAS ───────────────────────────────────────────────────────────────
+  { id:'fr01', nombre:'Banana / Plátano',               categoria:'frutas', porcion_ref:120, tiene_unidad:true, nombre_unidad:'banana mediana', gramos_por_unidad:120, proteinas:1.3, carbos:27,  grasas:0.3, fibra:3.1,calorias:107, micro1:{nombre:'Potasio',valor:422,unidad:'mg'},      micro2:{nombre:'Vitamina B6',valor:0.4,unidad:'mg'} },
+  { id:'fr02', nombre:'Manzana',                        categoria:'frutas', porcion_ref:150, tiene_unidad:true, nombre_unidad:'manzana mediana', gramos_por_unidad:150, proteinas:0.4, carbos:20,  grasas:0.2, fibra:3.6,calorias:78,  micro1:{nombre:'Quercetina',valor:4.4,unidad:'mg'},   micro2:{nombre:'Vitamina C',valor:8,unidad:'mg'} },
+  { id:'fr03', nombre:'Naranja',                        categoria:'frutas', porcion_ref:150, tiene_unidad:true, nombre_unidad:'naranja mediana', gramos_por_unidad:150, proteinas:1.5, carbos:18,  grasas:0.2, fibra:3.6,calorias:71,  micro1:{nombre:'Vitamina C',valor:82,unidad:'mg'},    micro2:{nombre:'Folato',valor:40,unidad:'µg'} },
+  { id:'fr04', nombre:'Frutillas / Fresas',             categoria:'frutas', porcion_ref:150, proteinas:1,   carbos:12,  grasas:0.4, fibra:3,  calorias:48,  micro1:{nombre:'Vitamina C',valor:89,unidad:'mg'},    micro2:{nombre:'Manganeso',valor:0.4,unidad:'mg'} },
+  { id:'fr05', nombre:'Uvas',                           categoria:'frutas', porcion_ref:100, proteinas:0.7, carbos:18,  grasas:0.2, fibra:0.9,calorias:69,  micro1:{nombre:'Resveratrol',valor:0.07,unidad:'mg'}, micro2:{nombre:'Vitamina K',valor:14.6,unidad:'µg'} },
+  { id:'fr06', nombre:'Durazno / Melocotón',            categoria:'frutas', porcion_ref:150, proteinas:1.4, carbos:15,  grasas:0.3, fibra:2.4,calorias:58,  micro1:{nombre:'Vitamina C',valor:10,unidad:'mg'},    micro2:{nombre:'Potasio',valor:285,unidad:'mg'} },
+  { id:'fr07', nombre:'Pera',                           categoria:'frutas', porcion_ref:150, proteinas:0.4, carbos:20,  grasas:0.1, fibra:5.5,calorias:80,  micro1:{nombre:'Vitamina C',valor:7,unidad:'mg'},     micro2:{nombre:'Cobre',valor:0.1,unidad:'mg'} },
+  { id:'fr08', nombre:'Mandarina',                      categoria:'frutas', porcion_ref:100, proteinas:0.8, carbos:13,  grasas:0.3, fibra:1.8,calorias:53,  micro1:{nombre:'Vitamina C',valor:27,unidad:'mg'},    micro2:{nombre:'Betacaroteno',valor:155,unidad:'µg'} },
+  { id:'fr09', nombre:'Kiwi',                           categoria:'frutas', porcion_ref:100, proteinas:1,   carbos:14,  grasas:0.5, fibra:3,  calorias:61,  micro1:{nombre:'Vitamina C',valor:93,unidad:'mg'},    micro2:{nombre:'Vitamina K',valor:40,unidad:'µg'} },
+  { id:'fr10', nombre:'Ananá / Piña',                   categoria:'frutas', porcion_ref:150, proteinas:0.9, carbos:19,  grasas:0.2, fibra:2.3,calorias:75,  micro1:{nombre:'Vitamina C',valor:47,unidad:'mg'},    micro2:{nombre:'Manganeso',valor:1.1,unidad:'mg'} },
+  { id:'fr11', nombre:'Arándanos',                      categoria:'frutas', porcion_ref:100, proteinas:0.7, carbos:14,  grasas:0.3, fibra:2.4,calorias:57,  micro1:{nombre:'Antocianinas',valor:165,unidad:'mg'}, micro2:{nombre:'Vitamina C',valor:9.7,unidad:'mg'} },
+  { id:'fr12', nombre:'Mango',                          categoria:'frutas', porcion_ref:150, proteinas:1.4, carbos:28,  grasas:0.6, fibra:3,  calorias:99,  micro1:{nombre:'Vitamina C',valor:57,unidad:'mg'},    micro2:{nombre:'Vitamina A',valor:54,unidad:'µg'} },
 
-  // Estado picker de alimentos
-  const [showPicker, setShowPicker] = useState(false);
-  const [pickerSearch, setPickerSearch] = useState('');
-  const [pickerCat, setPickerCat] = useState('all');
-  const [showNuevoAlimento, setShowNuevoAlimento] = useState(false);
+  // ── VERDURAS ─────────────────────────────────────────────────────────────
+  { id:'ve01', nombre:'Espinaca (cruda)',               categoria:'verduras', porcion_ref:80,  proteinas:2.3, carbos:1,   grasas:0.4, fibra:2.2,calorias:18,  micro1:{nombre:'Vitamina K',valor:402,unidad:'µg'},   micro2:{nombre:'Hierro',valor:2.2,unidad:'mg'} },
+  { id:'ve02', nombre:'Brócoli (cocido)',               categoria:'verduras', porcion_ref:100, proteinas:2.8, carbos:7,   grasas:0.4, fibra:3.3,calorias:35,  micro1:{nombre:'Vitamina C',valor:65,unidad:'mg'},    micro2:{nombre:'Vitamina K',valor:92,unidad:'µg'} },
+  { id:'ve03', nombre:'Zanahoria',                      categoria:'verduras', porcion_ref:80,  proteinas:0.9, carbos:7,   grasas:0.2, fibra:2.3,calorias:33,  micro1:{nombre:'Vitamina A',valor:834,unidad:'µg'},   micro2:{nombre:'Betacaroteno',valor:5003,unidad:'µg'} },
+  { id:'ve04', nombre:'Tomate',                         categoria:'verduras', porcion_ref:100, proteinas:0.9, carbos:3.9, grasas:0.2, fibra:1.2,calorias:18,  micro1:{nombre:'Licopeno',valor:2573,unidad:'µg'},    micro2:{nombre:'Vitamina C',valor:14,unidad:'mg'} },
+  { id:'ve05', nombre:'Pimiento / Morrón rojo',         categoria:'verduras', porcion_ref:80,  proteinas:1,   carbos:6,   grasas:0.3, fibra:2.1,calorias:25,  micro1:{nombre:'Vitamina C',valor:171,unidad:'mg'},   micro2:{nombre:'Vitamina A',valor:157,unidad:'µg'} },
+  { id:'ve06', nombre:'Lechuga romana',                 categoria:'verduras', porcion_ref:60,  proteinas:0.9, carbos:1.9, grasas:0.2, fibra:1.3,calorias:8,   micro1:{nombre:'Vitamina K',valor:48,unidad:'µg'},    micro2:{nombre:'Folato',valor:64,unidad:'µg'} },
+  { id:'ve07', nombre:'Cebolla',                        categoria:'verduras', porcion_ref:80,  proteinas:0.9, carbos:8,   grasas:0.1, fibra:1.5,calorias:36,  micro1:{nombre:'Quercetina',valor:19,unidad:'mg'},    micro2:{nombre:'Vitamina C',valor:7,unidad:'mg'} },
+  { id:'ve08', nombre:'Zapallo (cocido)',               categoria:'verduras', porcion_ref:100, proteinas:0.7, carbos:6,   grasas:0.1, fibra:0.5,calorias:26,  micro1:{nombre:'Vitamina A',valor:426,unidad:'µg'},   micro2:{nombre:'Potasio',valor:230,unidad:'mg'} },
+  { id:'ve09', nombre:'Zucchini / Zapallito',          categoria:'verduras', porcion_ref:100, proteinas:1.2, carbos:3.1, grasas:0.3, fibra:1,  calorias:17,  micro1:{nombre:'Vitamina C',valor:18,unidad:'mg'},    micro2:{nombre:'Potasio',valor:262,unidad:'mg'} },
+  { id:'ve10', nombre:'Apio',                           categoria:'verduras', porcion_ref:80,  proteinas:0.7, carbos:2.4, grasas:0.2, fibra:1.6,calorias:13,  micro1:{nombre:'Vitamina K',valor:29,unidad:'µg'},    micro2:{nombre:'Potasio',valor:208,unidad:'mg'} },
+  { id:'ve11', nombre:'Pepino',                         categoria:'verduras', porcion_ref:100, proteinas:0.7, carbos:3.6, grasas:0.1, fibra:0.5,calorias:16,  micro1:{nombre:'Vitamina K',valor:16,unidad:'µg'},    micro2:{nombre:'Vitamina C',valor:2.8,unidad:'mg'} },
+  { id:'ve12', nombre:'Remolacha (cocida)',             categoria:'verduras', porcion_ref:80,  proteinas:1.7, carbos:10,  grasas:0.2, fibra:2,  calorias:44,  micro1:{nombre:'Folato',valor:80,unidad:'µg'},        micro2:{nombre:'Potasio',valor:305,unidad:'mg'} },
+  { id:'ve13', nombre:'Coliflor',                       categoria:'verduras', porcion_ref:100, proteinas:1.9, carbos:5,   grasas:0.3, fibra:2,  calorias:25,  micro1:{nombre:'Vitamina C',valor:48,unidad:'mg'},    micro2:{nombre:'Vitamina K',valor:16,unidad:'µg'} },
+  { id:'ve14', nombre:'Chauchas / Judías verdes',       categoria:'verduras', porcion_ref:100, proteinas:1.8, carbos:7,   grasas:0.1, fibra:3.4,calorias:31,  micro1:{nombre:'Vitamina K',valor:14,unidad:'µg'},    micro2:{nombre:'Vitamina C',valor:12,unidad:'mg'} },
 
-  // Cliente activo
-  const cliente = useMemo(() => clients.find(c => c.id === selClientId), [clients, selClientId]);
+  // ── GRASAS SALUDABLES ────────────────────────────────────────────────────
+  { id:'gs01', nombre:'Palta / Aguacate',               categoria:'grasas', porcion_ref:80,  proteinas:1.6, carbos:3,   grasas:11,  fibra:5.3,calorias:117, micro1:{nombre:'Vitamina E',valor:2.1,unidad:'mg'},   micro2:{nombre:'Potasio',valor:485,unidad:'mg'} },
+  { id:'gs02', nombre:'Aceite de oliva extra virgen',   categoria:'grasas', porcion_ref:10,  proteinas:0,   carbos:0,   grasas:10,  fibra:0,  calorias:90,  micro1:{nombre:'Vitamina E',valor:1.9,unidad:'mg'},   micro2:{nombre:'Polifenoles',valor:36,unidad:'mg'} },
+  { id:'gs03', nombre:'Aceite de girasol',              categoria:'grasas', porcion_ref:10,  proteinas:0,   carbos:0,   grasas:10,  fibra:0,  calorias:90,  micro1:{nombre:'Vitamina E',valor:5.6,unidad:'mg'},   micro2:{nombre:'Omega-6',valor:6.5,unidad:'g'} },
+  { id:'gs04', nombre:'Nueces',                         categoria:'grasas', porcion_ref:30,  proteinas:4.5, carbos:3.9, grasas:18,  fibra:1.9,calorias:196, micro1:{nombre:'Omega-3 (ALA)',valor:2.5,unidad:'g'},  micro2:{nombre:'Vitamina E',valor:0.7,unidad:'mg'} },
+  { id:'gs05', nombre:'Almendras',                      categoria:'grasas', porcion_ref:30,  proteinas:6,   carbos:6.1, grasas:14,  fibra:3.5,calorias:174, micro1:{nombre:'Vitamina E',valor:7.7,unidad:'mg'},   micro2:{nombre:'Magnesio',valor:77,unidad:'mg'} },
+  { id:'gs06', nombre:'Maní / Cacahuetes',              categoria:'grasas', porcion_ref:30,  proteinas:7,   carbos:5,   grasas:14,  fibra:2.3,calorias:171, micro1:{nombre:'Niacina',valor:4,unidad:'mg'},         micro2:{nombre:'Vitamina E',valor:2.9,unidad:'mg'} },
+  { id:'gs07', nombre:'Semillas de chía',               categoria:'grasas', porcion_ref:20,  proteinas:3.4, carbos:8.5, grasas:5.9, fibra:7.7,calorias:97,  micro1:{nombre:'Omega-3 (ALA)',valor:3.6,unidad:'g'},  micro2:{nombre:'Calcio',valor:126,unidad:'mg'} },
+  { id:'gs08', nombre:'Semillas de lino',               categoria:'grasas', porcion_ref:15,  proteinas:2.7, carbos:4,   grasas:6,   fibra:3.8,calorias:81,  micro1:{nombre:'Omega-3 (ALA)',valor:3.2,unidad:'g'},  micro2:{nombre:'Manganeso',valor:0.5,unidad:'mg'} },
+  { id:'gs09', nombre:'Mantequilla de maní (natural)',  categoria:'grasas', porcion_ref:30,  proteinas:7,   carbos:6,   grasas:16,  fibra:1.5,calorias:188, micro1:{nombre:'Vitamina E',valor:3,unidad:'mg'},     micro2:{nombre:'Magnesio',valor:50,unidad:'mg'} },
+  { id:'gs10', nombre:'Coco rallado (sin azúcar)',      categoria:'grasas', porcion_ref:30,  proteinas:1.8, carbos:4.5, grasas:9.4, fibra:4.6,calorias:99,  micro1:{nombre:'Manganeso',valor:0.6,unidad:'mg'},    micro2:{nombre:'Cobre',valor:0.1,unidad:'mg'} },
 
-  // Objetivo nutricional calculado
-  const objetivoNut = useMemo(() => {
-    if (!planActivo?.perfil) return null;
-    const { peso, talla, edad, sexo, actividad, objetivo_nut } = planActivo.perfil;
-    if (!peso || !talla || !edad) return null;
-    const tdee = calcularTDEE(parseFloat(peso), parseFloat(talla), parseInt(edad), sexo, actividad);
-    return calcularObjetivo(tdee, objetivo_nut, parseFloat(peso));
-  }, [planActivo?.perfil]);
+  // ── BEBIDAS ──────────────────────────────────────────────────────────────
+  { id:'be01', nombre:'Agua',                           categoria:'bebidas', porcion_ref:250, proteinas:0, carbos:0,  grasas:0, fibra:0, calorias:0,  micro1:{nombre:'—',valor:0,unidad:''}, micro2:{nombre:'—',valor:0,unidad:''} },
+  { id:'be02', nombre:'Leche vegetal de avena',         categoria:'bebidas', porcion_ref:250, proteinas:2, carbos:18, grasas:3, fibra:1, calorias:106, micro1:{nombre:'Calcio (fort.)',valor:240,unidad:'mg'}, micro2:{nombre:'Vitamina D (fort.)',valor:2.5,unidad:'µg'} },
+  { id:'be03', nombre:'Jugo de naranja natural',        categoria:'bebidas', porcion_ref:200, proteinas:1.5,carbos:21, grasas:0.2,fibra:0.5,calorias:88, micro1:{nombre:'Vitamina C',valor:93,unidad:'mg'},    micro2:{nombre:'Folato',valor:50,unidad:'µg'} },
+  { id:'be04', nombre:'Mate cocido (infusión)',         categoria:'bebidas', porcion_ref:200, proteinas:0, carbos:0,  grasas:0, fibra:0, calorias:0,  micro1:{nombre:'Antioxidantes',valor:1,unidad:'(alto)'},micro2:{nombre:'Xantinas',valor:30,unidad:'mg'} },
+  { id:'be05', nombre:'Té verde',                       categoria:'bebidas', porcion_ref:200, proteinas:0, carbos:0,  grasas:0, fibra:0, calorias:0,  micro1:{nombre:'EGCG',valor:50,unidad:'mg'},          micro2:{nombre:'Cafeína',valor:30,unidad:'mg'} },
 
-  // Totales del día activo
-  const totalesDia = useMemo(() => {
-    if (!planActivo) return { proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0 };
-    const diaData = planActivo.semana[diaActivo] || {};
-    const items = Object.values(diaData).flat();
-    return sumarMacrosDia(items);
-  }, [planActivo, diaActivo]);
+  // ── SNACKS / COLACIONES ──────────────────────────────────────────────────
+  { id:'sn01', nombre:'Granola sin azúcar',             categoria:'snacks', porcion_ref:40,  proteinas:5,   carbos:25,  grasas:7,   fibra:3.5,calorias:181, micro1:{nombre:'Hierro',valor:2,unidad:'mg'},         micro2:{nombre:'Magnesio',valor:45,unidad:'mg'} },
+  { id:'sn02', nombre:'Barrita de proteína (promedio)', categoria:'snacks', porcion_ref:55,  proteinas:20,  carbos:20,  grasas:5,   fibra:2,  calorias:209, micro1:{nombre:'Calcio',valor:150,unidad:'mg'},       micro2:{nombre:'BCAA',valor:4,unidad:'g'} },
+  { id:'sn03', nombre:'Arroz inflado',                  categoria:'snacks', porcion_ref:30,  proteinas:2,   carbos:24,  grasas:0.3, fibra:0.3,calorias:108, micro1:{nombre:'Tiamina',valor:0.1,unidad:'mg'},      micro2:{nombre:'Hierro',valor:0.5,unidad:'mg'} },
+  { id:'sn04', nombre:'Hummus',                         categoria:'snacks', porcion_ref:50,  proteinas:3.7, carbos:8,   grasas:5.5, fibra:2,  calorias:95,  micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Folato',valor:57,unidad:'µg'} },
+  { id:'sn05', nombre:'Cacao en polvo sin azúcar',      categoria:'snacks', porcion_ref:10,  proteinas:2,   carbos:3.5, grasas:1.5, fibra:2.7,calorias:24,  micro1:{nombre:'Magnesio',valor:53,unidad:'mg'},      micro2:{nombre:'Hierro',valor:1.7,unidad:'mg'} },
+  { id:'sn06', nombre:'Chocolate negro 70%',            categoria:'snacks', porcion_ref:20,  proteinas:2,   carbos:10,  grasas:8,   fibra:2,  calorias:112, micro1:{nombre:'Magnesio',valor:50,unidad:'mg'},      micro2:{nombre:'Hierro',valor:2.3,unidad:'mg'} },
+  { id:'sn07', nombre:'Tortitas de maíz',               categoria:'snacks', porcion_ref:30,  proteinas:1.5, carbos:24,  grasas:0.5, fibra:0.5,calorias:107, micro1:{nombre:'Hierro',valor:0.3,unidad:'mg'},       micro2:{nombre:'Sodio',valor:95,unidad:'mg'} },
+  // ── CAFÉ ─────────────────────────────────────────────────────────────────
+  { id:'be06', nombre:'Café espresso / negro',        categoria:'bebidas', porcion_ref:60,  proteinas:0.3, carbos:0.5, grasas:0.1, fibra:0, calorias:6,   micro1:{nombre:'Cafeína',valor:60,unidad:'mg'},        micro2:{nombre:'Antioxidantes',valor:1,unidad:'(alto)'} },
+  { id:'be07', nombre:'Café con leche (50/50)',        categoria:'bebidas', porcion_ref:200, proteinas:4,   carbos:7,   grasas:4,   fibra:0, calorias:78,  micro1:{nombre:'Calcio',valor:140,unidad:'mg'},        micro2:{nombre:'Cafeína',valor:40,unidad:'mg'} },
+  { id:'be08', nombre:'Café instantáneo (solo)',       categoria:'bebidas', porcion_ref:200, proteinas:0.4, carbos:0.8, grasas:0,   fibra:0, calorias:8,   micro1:{nombre:'Cafeína',valor:55,unidad:'mg'},        micro2:{nombre:'Magnesio',valor:6,unidad:'mg'} },
 
-  // ── Crear nuevo plan ──────────────────────────────────────────────────────
-  const crearPlan = (nombre, perfil) => {
-    const semana = {};
-    DIAS_SEMANA.forEach(d => {
-      semana[d] = {};
-      COMIDAS.forEach(c => { semana[d][c.id] = []; });
-    });
-    const plan = { id: genNutId('pl'), nombre, clienteId: selClientId, perfil, semana, notas:'', fechaCreacion: new Date().toISOString().split('T')[0] };
-    setPlanes(p => [...p, plan]);
-    setPlanActivo(plan);
-    setView('plan');
+  // ── MILANESAS ────────────────────────────────────────────────────────────
+  { id:'pa13', nombre:'Milanesa de carne (peceto)',    categoria:'proteina_animal', porcion_ref:130, tiene_unidad:true, nombre_unidad:'milanesa mediana', gramos_por_unidad:130, proteinas:27, carbos:12, grasas:12, fibra:0.5,calorias:264, micro1:{nombre:'Hierro',valor:3,unidad:'mg'},         micro2:{nombre:'Zinc',valor:4,unidad:'mg'} },
+  { id:'pa14', nombre:'Milanesa de pollo (pechuga)',   categoria:'proteina_animal', porcion_ref:130, tiene_unidad:true, nombre_unidad:'milanesa mediana', gramos_por_unidad:130, proteinas:28, carbos:11, grasas:8,  fibra:0.5,calorias:232, micro1:{nombre:'Niacina',valor:10,unidad:'mg'},        micro2:{nombre:'Selenio',valor:22,unidad:'µg'} },
+  { id:'pa15', nombre:'Milanesa de cerdo',             categoria:'proteina_animal', porcion_ref:130, tiene_unidad:true, nombre_unidad:'milanesa mediana', gramos_por_unidad:130, proteinas:26, carbos:11, grasas:14, fibra:0.5,calorias:274, micro1:{nombre:'Tiamina (B1)',valor:0.6,unidad:'mg'},  micro2:{nombre:'Zinc',valor:3,unidad:'mg'} },
+  { id:'pa16', nombre:'Milanesa de soja',              categoria:'proteina_vegetal', porcion_ref:100, proteinas:14, carbos:20, grasas:5,  fibra:4,  calorias:181, micro1:{nombre:'Hierro',valor:4,unidad:'mg'},         micro2:{nombre:'Calcio',valor:120,unidad:'mg'} },
+
+  // ── QUESOS URUGUAYOS ─────────────────────────────────────────────────────
+  { id:'lc09', nombre:'Queso Dambo',                   categoria:'lacteos', porcion_ref:40,  proteinas:10,  carbos:0.5, grasas:11,  fibra:0, calorias:141, micro1:{nombre:'Calcio',valor:310,unidad:'mg'},       micro2:{nombre:'Vitamina A',valor:90,unidad:'µg'} },
+  { id:'lc10', nombre:'Queso Colonia',                 categoria:'lacteos', porcion_ref:40,  proteinas:9,   carbos:0.5, grasas:12,  fibra:0, calorias:144, micro1:{nombre:'Calcio',valor:290,unidad:'mg'},       micro2:{nombre:'Vitamina B12',valor:0.6,unidad:'µg'} },
+  { id:'lc11', nombre:'Queso Cheddar',                 categoria:'lacteos', porcion_ref:30,  proteinas:7.5, carbos:0.4, grasas:10,  fibra:0, calorias:120, micro1:{nombre:'Calcio',valor:200,unidad:'mg'},       micro2:{nombre:'Vitamina A',valor:87,unidad:'µg'} },
+  { id:'lc12', nombre:'Queso Parmesano rallado',       categoria:'lacteos', porcion_ref:20,  proteinas:7,   carbos:0.3, grasas:5.5, fibra:0, calorias:79,  micro1:{nombre:'Calcio',valor:220,unidad:'mg'},       micro2:{nombre:'Fósforo',valor:170,unidad:'mg'} },
+  { id:'lc13', nombre:'Ricota',                        categoria:'lacteos', porcion_ref:100, proteinas:11,  carbos:3,   grasas:8,   fibra:0, calorias:130, micro1:{nombre:'Calcio',valor:207,unidad:'mg'},       micro2:{nombre:'Vitamina A',valor:60,unidad:'µg'} },
+
+  // ── MERMELADAS / DULCES ──────────────────────────────────────────────────
+  { id:'sn08', nombre:'Mermelada común (frutilla)',    categoria:'snacks', porcion_ref:20,  proteinas:0.1, carbos:14,  grasas:0,   fibra:0.3,calorias:56,  micro1:{nombre:'Vitamina C',valor:3,unidad:'mg'},     micro2:{nombre:'Azúcar añadida',valor:13,unidad:'g'} },
+  { id:'sn09', nombre:'Mermelada diet (stevia)',       categoria:'snacks', porcion_ref:20,  proteinas:0.1, carbos:4,   grasas:0,   fibra:0.5,calorias:16,  micro1:{nombre:'Vitamina C',valor:2,unidad:'mg'},     micro2:{nombre:'Fibra pectina',valor:0.5,unidad:'g'} },
+  { id:'sn10', nombre:'Dulce de leche (clásico)',      categoria:'snacks', porcion_ref:25,  proteinas:2,   carbos:18,  grasas:2.5, fibra:0, calorias:101, micro1:{nombre:'Calcio',valor:75,unidad:'mg'},        micro2:{nombre:'Vitamina B2',valor:0.1,unidad:'mg'} },
+  { id:'sn11', nombre:'Dulce de leche light',          categoria:'snacks', porcion_ref:25,  proteinas:2.5, carbos:12,  grasas:1,   fibra:0, calorias:66,  micro1:{nombre:'Calcio',valor:85,unidad:'mg'},        micro2:{nombre:'Proteína',valor:2.5,unidad:'g'} },
+  { id:'sn12', nombre:'Miel',                          categoria:'snacks', porcion_ref:20,  proteinas:0.1, carbos:17,  grasas:0,   fibra:0, calorias:64,  micro1:{nombre:'Antioxidantes',valor:1,unidad:'(sí)'},micro2:{nombre:'Potasio',valor:11,unidad:'mg'} },
+
+  // ── GELATINA ─────────────────────────────────────────────────────────────
+  { id:'sn13', nombre:'Gelatina diet (preparada)',     categoria:'snacks', porcion_ref:120, proteinas:2,   carbos:0.4, grasas:0,   fibra:0, calorias:10,  micro1:{nombre:'Colágeno hidrolizado',valor:2,unidad:'g'},micro2:{nombre:'Sodio',valor:50,unidad:'mg'} },
+  { id:'sn14', nombre:'Gelatina común (preparada)',    categoria:'snacks', porcion_ref:120, proteinas:2,   carbos:16,  grasas:0,   fibra:0, calorias:72,  micro1:{nombre:'Colágeno hidrolizado',valor:2,unidad:'g'},micro2:{nombre:'Azúcar',valor:16,unidad:'g'} },
+
+  // ── BARRAS Y CHOCOLATES ──────────────────────────────────────────────────
+  { id:'sn15', nombre:'Barra de chocolate con leche',  categoria:'snacks', porcion_ref:40,  proteinas:3,   carbos:24,  grasas:12,  fibra:0.7,calorias:214, micro1:{nombre:'Calcio',valor:80,unidad:'mg'},        micro2:{nombre:'Magnesio',valor:18,unidad:'mg'} },
+  { id:'sn16', nombre:'Barra de cereal (avena y miel)',categoria:'snacks', porcion_ref:30,  proteinas:2.5, carbos:20,  grasas:3,   fibra:1.5,calorias:115, micro1:{nombre:'Hierro',valor:1,unidad:'mg'},         micro2:{nombre:'Vitamina B1',valor:0.1,unidad:'mg'} },
+  { id:'sn17', nombre:'Oblea de chocolate',            categoria:'snacks', porcion_ref:25,  proteinas:1.5, carbos:16,  grasas:7,   fibra:0.4,calorias:132, micro1:{nombre:'Calcio',valor:30,unidad:'mg'},        micro2:{nombre:'Magnesio',valor:8,unidad:'mg'} },
+
+  // ── FIAMBRES / EMBUTIDOS ─────────────────────────────────────────────────
+  { id:'fi01', nombre:'Jamón cocido',                  categoria:'fiambres', porcion_ref:50,  proteinas:9,  carbos:0.5, grasas:4,   fibra:0, calorias:74,  micro1:{nombre:'Vitamina B1',valor:0.3,unidad:'mg'},  micro2:{nombre:'Sodio',valor:560,unidad:'mg'} },
+  { id:'fi02', nombre:'Salame',                        categoria:'fiambres', porcion_ref:30,  proteinas:7,  carbos:0.5, grasas:11,  fibra:0, calorias:126, micro1:{nombre:'Hierro',valor:0.9,unidad:'mg'},       micro2:{nombre:'Sodio',valor:480,unidad:'mg'} },
+  { id:'fi03', nombre:'Mortadela',                     categoria:'fiambres', porcion_ref:40,  proteinas:6,  carbos:2,   grasas:10,  fibra:0, calorias:121, micro1:{nombre:'Hierro',valor:0.7,unidad:'mg'},       micro2:{nombre:'Sodio',valor:520,unidad:'mg'} },
+  { id:'fi04', nombre:'Paleta cocida',                 categoria:'fiambres', porcion_ref:50,  proteinas:9,  carbos:1,   grasas:6,   fibra:0, calorias:93,  micro1:{nombre:'Vitamina B12',valor:0.4,unidad:'µg'}, micro2:{nombre:'Zinc',valor:1.2,unidad:'mg'} },
+  { id:'fi05', nombre:'Salchicha tipo Viena',          categoria:'fiambres', porcion_ref:40, tiene_unidad:true, nombre_unidad:'salchicha', gramos_por_unidad:40,  proteinas:5,  carbos:2,   grasas:9,   fibra:0, calorias:109, micro1:{nombre:'Sodio',valor:480,unidad:'mg'},        micro2:{nombre:'Hierro',valor:0.6,unidad:'mg'} },
+  { id:'fi06', nombre:'Panceta ahumada',               categoria:'fiambres', porcion_ref:30,  proteinas:5,  carbos:0,   grasas:14,  fibra:0, calorias:143, micro1:{nombre:'Vitamina B1',valor:0.2,unidad:'mg'},  micro2:{nombre:'Sodio',valor:400,unidad:'mg'} },
+
+  // ── PANIFICADOS / HARINAS ────────────────────────────────────────────────
+  { id:'pan01', nombre:'Harina de avena',              categoria:'panificados', porcion_ref:40,  proteinas:5,  carbos:26,  grasas:2.5, fibra:3.5,calorias:147, micro1:{nombre:'Magnesio',valor:35,unidad:'mg'},      micro2:{nombre:'Hierro',valor:2,unidad:'mg'} },
+  { id:'pan02', nombre:'Harina integral de trigo',     categoria:'panificados', porcion_ref:40,  proteinas:5.5,carbos:27,  grasas:1,   fibra:4,  calorias:139, micro1:{nombre:'Hierro',valor:2.5,unidad:'mg'},       micro2:{nombre:'Zinc',valor:1.4,unidad:'mg'} },
+  { id:'pan03', nombre:'Medialunas (2 unidades)',       categoria:'panificados', porcion_ref:80,  proteinas:5,  carbos:38,  grasas:12,  fibra:1,  calorias:280, micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Calcio',valor:35,unidad:'mg'} },
+  { id:'pan04', nombre:'Facturas / Bizcocho',          categoria:'panificados', porcion_ref:70,  proteinas:4,  carbos:33,  grasas:10,  fibra:0.8,calorias:238, micro1:{nombre:'Hierro',valor:1.2,unidad:'mg'},       micro2:{nombre:'Calcio',valor:28,unidad:'mg'} },
+  { id:'pan05', nombre:'Pan de molde blanco (1 rebanada)',categoria:'panificados', porcion_ref:25, proteinas:2, carbos:12,  grasas:0.6, fibra:0.5,calorias:62,  micro1:{nombre:'Hierro',valor:0.7,unidad:'mg'},       micro2:{nombre:'Calcio',valor:18,unidad:'mg'} },
+  { id:'pan06', nombre:'Bizcochos salados (4 unidades)',categoria:'panificados', porcion_ref:40,  proteinas:3,  carbos:20,  grasas:7,   fibra:0.5,calorias:155, micro1:{nombre:'Sodio',valor:280,unidad:'mg'},        micro2:{nombre:'Hierro',valor:0.8,unidad:'mg'} },
+
+  // ── CONDIMENTOS / EXTRAS ─────────────────────────────────────────────────
+  { id:'co01', nombre:'Azúcar blanca',                 categoria:'condimentos', porcion_ref:10, proteinas:0, carbos:10, grasas:0, fibra:0, calorias:40,  micro1:{nombre:'—',valor:0,unidad:''}, micro2:{nombre:'—',valor:0,unidad:''} },
+  { id:'co02', nombre:'Edulcorante (stevia)',           categoria:'condimentos', porcion_ref:2,  proteinas:0, carbos:0,  grasas:0, fibra:0, calorias:0,   micro1:{nombre:'Esteviósidos',valor:1,unidad:'g'},  micro2:{nombre:'—',valor:0,unidad:''} },
+  { id:'co03', nombre:'Sal común',                     categoria:'condimentos', porcion_ref:5,  proteinas:0, carbos:0,  grasas:0, fibra:0, calorias:0,   micro1:{nombre:'Sodio',valor:2000,unidad:'mg'},     micro2:{nombre:'Cloro',valor:3000,unidad:'mg'} },
+  { id:'co04', nombre:'Mayonesa',                      categoria:'condimentos', porcion_ref:20, proteinas:0.3,carbos:0.5,grasas:15,fibra:0, calorias:134, micro1:{nombre:'Vitamina E',valor:1.5,unidad:'mg'}, micro2:{nombre:'Vitamina K',valor:17,unidad:'µg'} },
+  { id:'co05', nombre:'Ketchup',                       categoria:'condimentos', porcion_ref:20, proteinas:0.4,carbos:5, grasas:0.1,fibra:0.2,calorias:22, micro1:{nombre:'Licopeno',valor:4700,unidad:'µg'},  micro2:{nombre:'Vitamina A',valor:21,unidad:'µg'} },
+  { id:'co06', nombre:'Mostaza',                       categoria:'condimentos', porcion_ref:15, proteinas:0.9,carbos:1.5,grasas:1.8,fibra:0.4,calorias:26, micro1:{nombre:'Selenio',valor:1.3,unidad:'µg'},   micro2:{nombre:'Sodio',valor:190,unidad:'mg'} },
+
+  // ── MÁS FRUTAS Y VERDURAS ────────────────────────────────────────────────
+  { id:'fr13', nombre:'Sandía',                        categoria:'frutas', porcion_ref:200, proteinas:1.2, carbos:15,  grasas:0.2, fibra:0.6,calorias:60,  micro1:{nombre:'Licopeno',valor:9200,unidad:'µg'},    micro2:{nombre:'Vitamina C',valor:18,unidad:'mg'} },
+  { id:'fr14', nombre:'Melón',                         categoria:'frutas', porcion_ref:200, proteinas:1.4, carbos:16,  grasas:0.2, fibra:0.8,calorias:68,  micro1:{nombre:'Vitamina A',valor:169,unidad:'µg'},   micro2:{nombre:'Vitamina C',valor:36,unidad:'mg'} },
+  { id:'fr15', nombre:'Ciruela',                       categoria:'frutas', porcion_ref:80,  proteinas:0.5, carbos:9,   grasas:0.1, fibra:1.4,calorias:38,  micro1:{nombre:'Vitamina K',valor:4.2,unidad:'µg'},   micro2:{nombre:'Sorbitol',valor:1.7,unidad:'g'} },
+  { id:'ve15', nombre:'Espárrago',                     categoria:'verduras', porcion_ref:100, proteinas:2.2, carbos:3.9, grasas:0.1, fibra:2.1,calorias:20,  micro1:{nombre:'Folato',valor:52,unidad:'µg'},        micro2:{nombre:'Vitamina K',valor:42,unidad:'µg'} },
+  { id:'ve16', nombre:'Berenjena',                     categoria:'verduras', porcion_ref:100, proteinas:1,   carbos:6,   grasas:0.2, fibra:3,  calorias:25,  micro1:{nombre:'Nasunina',valor:750,unidad:'µg'},     micro2:{nombre:'Manganeso',valor:0.2,unidad:'mg'} },
+  { id:'ve17', nombre:'Acelga',                        categoria:'verduras', porcion_ref:100, proteinas:1.8, carbos:3.7, grasas:0.2, fibra:1.6,calorias:19,  micro1:{nombre:'Vitamina K',valor:830,unidad:'µg'},   micro2:{nombre:'Vitamina A',valor:306,unidad:'µg'} },
+  { id:'ve18', nombre:'Choclo (chipa / humita)',       categoria:'verduras', porcion_ref:100, proteinas:3,   carbos:19,  grasas:1.5, fibra:2.7,calorias:96,  micro1:{nombre:'Luteína',valor:820,unidad:'µg'},      micro2:{nombre:'Vitamina B1',valor:0.2,unidad:'mg'} },
+  { id:'ve19', nombre:'Arvejas (cocidas)',              categoria:'verduras', porcion_ref:100, proteinas:5,   carbos:14,  grasas:0.4, fibra:5.1,calorias:81,  micro1:{nombre:'Vitamina K',valor:24,unidad:'µg'},    micro2:{nombre:'Manganeso',valor:0.4,unidad:'mg'} },
+  { id:'ve20', nombre:'Puerro',                        categoria:'verduras', porcion_ref:80,  proteinas:1.1, carbos:7.5, grasas:0.2, fibra:1.5,calorias:35,  micro1:{nombre:'Vitamina K',valor:38,unidad:'µg'},    micro2:{nombre:'Folato',valor:30,unidad:'µg'} },
+
+  // ── MÁS PROTEÍNAS ────────────────────────────────────────────────────────
+  { id:'pa17', nombre:'Asado de tira',                 categoria:'proteina_animal', porcion_ref:150, proteinas:30, carbos:0,  grasas:22, fibra:0, calorias:322, micro1:{nombre:'Hierro',valor:2.8,unidad:'mg'},       micro2:{nombre:'Zinc',valor:5,unidad:'mg'} },
+  { id:'pa18', nombre:'Bife de chorizo',               categoria:'proteina_animal', porcion_ref:180, proteinas:36, carbos:0,  grasas:18, fibra:0, calorias:308, micro1:{nombre:'Hierro',valor:3.2,unidad:'mg'},       micro2:{nombre:'Zinc',valor:5.5,unidad:'mg'} },
+  { id:'pa19', nombre:'Molleja vacuna',                categoria:'proteina_animal', porcion_ref:100, proteinas:17, carbos:0,  grasas:22, fibra:0, calorias:270, micro1:{nombre:'Vitamina B12',valor:1.5,unidad:'µg'}, micro2:{nombre:'Zinc',valor:2,unidad:'mg'} },
+  { id:'pa20', nombre:'Chorizo parrillero',            categoria:'proteina_animal', porcion_ref:90,  proteinas:15, carbos:2,  grasas:22, fibra:0, calorias:269, micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Sodio',valor:650,unidad:'mg'} },
+  { id:'pv08', nombre:'Tempeh',                        categoria:'proteina_vegetal', porcion_ref:100, proteinas:19, carbos:9,  grasas:11, fibra:4, calorias:193, micro1:{nombre:'Calcio',valor:111,unidad:'mg'},       micro2:{nombre:'Manganeso',valor:1.3,unidad:'mg'} },
+
+  // ── MÁS CARBOHIDRATOS ────────────────────────────────────────────────────
+  { id:'ch15', nombre:'Ñoquis (cocidos)',               categoria:'carbohidratos', porcion_ref:200, proteinas:6,  carbos:40,  grasas:3,   fibra:2,  calorias:211, micro1:{nombre:'Vitamina B6',valor:0.3,unidad:'mg'},  micro2:{nombre:'Potasio',valor:350,unidad:'mg'} },
+  { id:'ch16', nombre:'Risotto / Arroz con leche',     categoria:'carbohidratos', porcion_ref:200, proteinas:5,  carbos:34,  grasas:3,   fibra:0.5,calorias:183, micro1:{nombre:'Calcio',valor:90,unidad:'mg'},        micro2:{nombre:'Vitamina B2',valor:0.2,unidad:'mg'} },
+  { id:'ch17', nombre:'Burrito / Tortilla de trigo',   categoria:'carbohidratos', porcion_ref:50,  proteinas:3.5,carbos:24,  grasas:3,   fibra:1.5,calorias:135, micro1:{nombre:'Hierro',valor:1.5,unidad:'mg'},       micro2:{nombre:'Calcio',valor:65,unidad:'mg'} },
+  { id:'ch18', nombre:'Cous cous (cocido)',             categoria:'carbohidratos', porcion_ref:150, proteinas:5,  carbos:30,  grasas:0.3, fibra:1.8,calorias:143, micro1:{nombre:'Selenio',valor:20,unidad:'µg'},       micro2:{nombre:'Manganeso',valor:0.5,unidad:'mg'} },
+
+  // ── HUEVOS — FORMAS DE COCCIÓN ────────────────────────────────────────────
+  { id:'hv03', nombre:'Huevo duro (cocido)',            categoria:'huevos', porcion_ref:60,  proteinas:7.5, carbos:0.6, grasas:5.3, fibra:0, calorias:78,  tiene_unidad:true, nombre_unidad:'huevo', gramos_por_unidad:60,  micro1:{nombre:'Colina',valor:147,unidad:'mg'},       micro2:{nombre:'Vitamina D',valor:2.0,unidad:'µg'} },
+  { id:'hv04', nombre:'Huevo revuelto (sin aceite)',    categoria:'huevos', porcion_ref:60,  proteinas:7.3, carbos:0.7, grasas:5.5, fibra:0, calorias:80,  tiene_unidad:true, nombre_unidad:'huevo', gramos_por_unidad:60,  micro1:{nombre:'Colina',valor:140,unidad:'mg'},       micro2:{nombre:'Selenio',valor:15,unidad:'µg'} },
+  { id:'hv05', nombre:'Huevo revuelto (con leche y manteca)', categoria:'huevos', porcion_ref:80, proteinas:8, carbos:1.5, grasas:9, fibra:0, calorias:119, tiene_unidad:true, nombre_unidad:'huevo preparado', gramos_por_unidad:80, micro1:{nombre:'Colina',valor:150,unidad:'mg'}, micro2:{nombre:'Calcio',valor:50,unidad:'mg'} },
+  { id:'hv06', nombre:'Huevo frito (aceite de oliva)',  categoria:'huevos', porcion_ref:70,  proteinas:7,   carbos:0.5, grasas:11,  fibra:0, calorias:128, tiene_unidad:true, nombre_unidad:'huevo frito', gramos_por_unidad:70,  micro1:{nombre:'Vitamina D',valor:2,unidad:'µg'},     micro2:{nombre:'Vitamina E',valor:2,unidad:'mg'} },
+  { id:'hv07', nombre:'Huevo pochado / escalfado',     categoria:'huevos', porcion_ref:60,  proteinas:7.5, carbos:0.5, grasas:5.2, fibra:0, calorias:76,  tiene_unidad:true, nombre_unidad:'huevo', gramos_por_unidad:60,  micro1:{nombre:'Colina',valor:147,unidad:'mg'},       micro2:{nombre:'Vitamina B12',valor:0.5,unidad:'µg'} },
+  { id:'hv08', nombre:'Omelette (2 huevos, sin relleno)',categoria:'huevos', porcion_ref:120, proteinas:14, carbos:1,   grasas:11,  fibra:0, calorias:159, tiene_unidad:true, nombre_unidad:'omelette', gramos_por_unidad:120, micro1:{nombre:'Colina',valor:290,unidad:'mg'},      micro2:{nombre:'Vitamina A',valor:150,unidad:'µg'} },
+  { id:'hv09', nombre:'Huevo a la copa (pasado por agua)',categoria:'huevos', porcion_ref:60, proteinas:7, carbos:0.5, grasas:5,   fibra:0, calorias:74,  tiene_unidad:true, nombre_unidad:'huevo', gramos_por_unidad:60,  micro1:{nombre:'Colina',valor:130,unidad:'mg'},       micro2:{nombre:'Vitamina D',valor:1.5,unidad:'µg'} },
+
+  // ── PLATOS CALIENTES / DE OLLA ────────────────────────────────────────────
+  { id:'pc01', nombre:'Empanada de carne (al horno)',   categoria:'platos_calientes', porcion_ref:90,  proteinas:10, carbos:22, grasas:12, fibra:1.5,calorias:236, tiene_unidad:true, nombre_unidad:'empanada', gramos_por_unidad:90,  micro1:{nombre:'Hierro',valor:2,unidad:'mg'},         micro2:{nombre:'Zinc',valor:2,unidad:'mg'} },
+  { id:'pc02', nombre:'Empanada de jamón y queso',     categoria:'platos_calientes', porcion_ref:80,  proteinas:9,  carbos:22, grasas:11, fibra:1,  calorias:222, tiene_unidad:true, nombre_unidad:'empanada', gramos_por_unidad:80,  micro1:{nombre:'Calcio',valor:90,unidad:'mg'},        micro2:{nombre:'Sodio',valor:380,unidad:'mg'} },
+  { id:'pc03', nombre:'Empanada de verdura y queso',   categoria:'platos_calientes', porcion_ref:80,  proteinas:7,  carbos:24, grasas:9,  fibra:2,  calorias:201, tiene_unidad:true, nombre_unidad:'empanada', gramos_por_unidad:80,  micro1:{nombre:'Vitamina A',valor:120,unidad:'µg'},   micro2:{nombre:'Calcio',valor:110,unidad:'mg'} },
+  { id:'pc04', nombre:'Empanada de pollo',             categoria:'platos_calientes', porcion_ref:85,  proteinas:11, carbos:22, grasas:10, fibra:1.5,calorias:222, tiene_unidad:true, nombre_unidad:'empanada', gramos_por_unidad:85,  micro1:{nombre:'Niacina',valor:4,unidad:'mg'},        micro2:{nombre:'Hierro',valor:1.5,unidad:'mg'} },
+  { id:'pc05', nombre:'Estofado de carne con papas',   categoria:'platos_calientes', porcion_ref:300, proteinas:22, carbos:24, grasas:10, fibra:3,  calorias:274, tiene_unidad:true, nombre_unidad:'porción plato', gramos_por_unidad:300, micro1:{nombre:'Hierro',valor:3,unidad:'mg'},       micro2:{nombre:'Vitamina C',valor:18,unidad:'mg'} },
+  { id:'pc06', nombre:'Guiso de lentejas',             categoria:'platos_calientes', porcion_ref:300, proteinas:14, carbos:38, grasas:5,  fibra:10, calorias:253, tiene_unidad:true, nombre_unidad:'plato hondo', gramos_por_unidad:300, micro1:{nombre:'Hierro',valor:4.5,unidad:'mg'},     micro2:{nombre:'Folato',valor:200,unidad:'µg'} },
+  { id:'pc07', nombre:'Guiso de porotos',              categoria:'platos_calientes', porcion_ref:300, proteinas:13, carbos:40, grasas:4,  fibra:12, calorias:248, tiene_unidad:true, nombre_unidad:'plato hondo', gramos_por_unidad:300, micro1:{nombre:'Hierro',valor:3.5,unidad:'mg'},     micro2:{nombre:'Potasio',valor:600,unidad:'mg'} },
+  { id:'pc08', nombre:'Cazuela de pollo con verduras', categoria:'platos_calientes', porcion_ref:350, proteinas:28, carbos:20, grasas:8,  fibra:3.5,calorias:264, tiene_unidad:true, nombre_unidad:'porción cazuela', gramos_por_unidad:350, micro1:{nombre:'Vitamina A',valor:280,unidad:'µg'}, micro2:{nombre:'Zinc',valor:3,unidad:'mg'} },
+  { id:'pc09', nombre:'Sopa de verduras con fideos',   categoria:'platos_calientes', porcion_ref:350, proteinas:7,  carbos:28, grasas:3,  fibra:4,  calorias:167, tiene_unidad:true, nombre_unidad:'plato hondo', gramos_por_unidad:350, micro1:{nombre:'Vitamina A',valor:180,unidad:'µg'}, micro2:{nombre:'Vitamina C',valor:14,unidad:'mg'} },
+  { id:'pc10', nombre:'Locro criollo',                 categoria:'platos_calientes', porcion_ref:400, proteinas:20, carbos:42, grasas:12, fibra:8,  calorias:356, tiene_unidad:true, nombre_unidad:'plato hondo', gramos_por_unidad:400, micro1:{nombre:'Hierro',valor:3,unidad:'mg'},       micro2:{nombre:'Zinc',valor:2.5,unidad:'mg'} },
+  { id:'pc11', nombre:'Puchero de carne y verduras',   categoria:'platos_calientes', porcion_ref:400, proteinas:28, carbos:26, grasas:10, fibra:5,  calorias:306, tiene_unidad:true, nombre_unidad:'plato hondo', gramos_por_unidad:400, micro1:{nombre:'Hierro',valor:3.5,unidad:'mg'},     micro2:{nombre:'Vitamina C',valor:20,unidad:'mg'} },
+  { id:'pc12', nombre:'Fideos con salsa bolognesa',    categoria:'platos_calientes', porcion_ref:320, proteinas:20, carbos:46, grasas:12, fibra:3,  calorias:372, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:320,        micro1:{nombre:'Hierro',valor:2.5,unidad:'mg'},     micro2:{nombre:'Licopeno',valor:4000,unidad:'µg'} },
+  { id:'pc13', nombre:'Arroz con pollo',               categoria:'platos_calientes', porcion_ref:320, proteinas:22, carbos:38, grasas:7,  fibra:1.5,calorias:307, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:320,        micro1:{nombre:'Niacina',valor:8,unidad:'mg'},       micro2:{nombre:'Zinc',valor:2.5,unidad:'mg'} },
+  { id:'pc14', nombre:'Tarta de verduras (porción)',   categoria:'platos_calientes', porcion_ref:150, proteinas:8,  carbos:24, grasas:12, fibra:2,  calorias:232, tiene_unidad:true, nombre_unidad:'porción', gramos_por_unidad:150,        micro1:{nombre:'Vitamina A',valor:200,unidad:'µg'},  micro2:{nombre:'Calcio',valor:100,unidad:'mg'} },
+  { id:'pc15', nombre:'Churrasco a la plancha',        categoria:'platos_calientes', porcion_ref:150, proteinas:32, carbos:0,  grasas:10, fibra:0,  calorias:218, tiene_unidad:true, nombre_unidad:'churrasco', gramos_por_unidad:150,      micro1:{nombre:'Hierro',valor:3,unidad:'mg'},       micro2:{nombre:'Zinc',valor:5,unidad:'mg'} },
+  { id:'pc16', nombre:'Polenta con queso y tuco',      categoria:'platos_calientes', porcion_ref:250, proteinas:10, carbos:32, grasas:8,  fibra:1.5,calorias:240, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:250,        micro1:{nombre:'Calcio',valor:140,unidad:'mg'},     micro2:{nombre:'Vitamina A',valor:120,unidad:'µg'} },
+
+  // ── ENSALADAS ─────────────────────────────────────────────────────────────
+  { id:'es01', nombre:'Ensalada mixta (lechuga, tomate, cebolla)', categoria:'ensaladas', porcion_ref:200, proteinas:2, carbos:8, grasas:4, fibra:3, calorias:72,  tiene_unidad:true, nombre_unidad:'bowl/ensaladera', gramos_por_unidad:200, micro1:{nombre:'Vitamina C',valor:22,unidad:'mg'}, micro2:{nombre:'Vitamina K',valor:60,unidad:'µg'} },
+  { id:'es02', nombre:'Ensalada César (sin pollo)',                categoria:'ensaladas', porcion_ref:200, proteinas:5, carbos:10,grasas:12,fibra:2, calorias:164, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:200,             micro1:{nombre:'Vitamina K',valor:90,unidad:'µg'}, micro2:{nombre:'Calcio',valor:100,unidad:'mg'} },
+  { id:'es03', nombre:'Ensalada César con pollo',                  categoria:'ensaladas', porcion_ref:300, proteinas:28,carbos:12,grasas:14,fibra:2, calorias:284, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:300,             micro1:{nombre:'Vitamina K',valor:90,unidad:'µg'}, micro2:{nombre:'Niacina',valor:9,unidad:'mg'} },
+  { id:'es04', nombre:'Ensalada de papa',                          categoria:'ensaladas', porcion_ref:200, proteinas:3, carbos:28,grasas:6, fibra:2.5,calorias:175, tiene_unidad:true, nombre_unidad:'porción', gramos_por_unidad:200,           micro1:{nombre:'Vitamina C',valor:16,unidad:'mg'}, micro2:{nombre:'Potasio',valor:500,unidad:'mg'} },
+  { id:'es05', nombre:'Ensalada de zanahoria rallada',             categoria:'ensaladas', porcion_ref:150, proteinas:1, carbos:10,grasas:4, fibra:3.5,calorias:76,  tiene_unidad:true, nombre_unidad:'bol', gramos_por_unidad:150,               micro1:{nombre:'Vitamina A',valor:1000,unidad:'µg'},micro2:{nombre:'Vitamina E',valor:2,unidad:'mg'} },
+  { id:'es06', nombre:'Ensalada caprese (mozarella + tomate)',     categoria:'ensaladas', porcion_ref:200, proteinas:14,carbos:6, grasas:14,fibra:1.2,calorias:206, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:200,             micro1:{nombre:'Calcio',valor:380,unidad:'mg'},    micro2:{nombre:'Licopeno',valor:3000,unidad:'µg'} },
+  { id:'es07', nombre:'Ensalada de quinoa con vegetales',          categoria:'ensaladas', porcion_ref:250, proteinas:8, carbos:32,grasas:5, fibra:5,  calorias:205, tiene_unidad:true, nombre_unidad:'bol', gramos_por_unidad:250,               micro1:{nombre:'Hierro',valor:2.5,unidad:'mg'},    micro2:{nombre:'Magnesio',valor:55,unidad:'mg'} },
+  { id:'es08', nombre:'Ensalada rusa',                             categoria:'ensaladas', porcion_ref:200, proteinas:4, carbos:22,grasas:8, fibra:3,  calorias:172, tiene_unidad:true, nombre_unidad:'porción', gramos_por_unidad:200,           micro1:{nombre:'Vitamina C',valor:18,unidad:'mg'}, micro2:{nombre:'Vitamina A',valor:180,unidad:'µg'} },
+  { id:'es09', nombre:'Ensalada de remolachas cocidas',            categoria:'ensaladas', porcion_ref:150, proteinas:2, carbos:16,grasas:1, fibra:3.5,calorias:80,  tiene_unidad:true, nombre_unidad:'porción', gramos_por_unidad:150,           micro1:{nombre:'Folato',valor:100,unidad:'µg'},    micro2:{nombre:'Potasio',valor:380,unidad:'mg'} },
+  { id:'es10', nombre:'Taboulé (bulgur, perejil, tomate)',         categoria:'ensaladas', porcion_ref:200, proteinas:5, carbos:30,grasas:4, fibra:5,  calorias:176, tiene_unidad:true, nombre_unidad:'bol', gramos_por_unidad:200,               micro1:{nombre:'Vitamina C',valor:15,unidad:'mg'}, micro2:{nombre:'Hierro',valor:2,unidad:'mg'} },
+  { id:'es11', nombre:'Ensalada de atún con choclo y arvejas',    categoria:'ensaladas', porcion_ref:250, proteinas:20,carbos:18,grasas:4, fibra:4,  calorias:188, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:250,             micro1:{nombre:'Selenio',valor:60,unidad:'µg'},    micro2:{nombre:'Vitamina B12',valor:1.5,unidad:'µg'} },
+  { id:'es12', nombre:'Ensalada tibia de pollo y vegetales asados',categoria:'ensaladas', porcion_ref:300, proteinas:25,carbos:16,grasas:8, fibra:4,  calorias:236, tiene_unidad:true, nombre_unidad:'plato', gramos_por_unidad:300,             micro1:{nombre:'Vitamina C',valor:25,unidad:'mg'}, micro2:{nombre:'Vitamina A',valor:250,unidad:'µg'} },
+
+];
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────
+export const getAlimentoById = (id, extra = []) => DB_ALIMENTOS.find(a => a.id === id) || extra.find(a => a.id === id) || null;
+
+// Calcular macros para una cantidad dada de un alimento
+export const calcularMacros = (alimento, gramos) => {
+  const factor = gramos / 100;
+  return {
+    proteinas: Math.round(alimento.proteinas * factor * 10) / 10,
+    carbos:    Math.round(alimento.carbos    * factor * 10) / 10,
+    grasas:    Math.round(alimento.grasas    * factor * 10) / 10,
+    fibra:     Math.round(alimento.fibra     * factor * 10) / 10,
+    calorias:  Math.round(alimento.calorias  * factor),
   };
+};
 
-  // ── Agregar alimento a comida ─────────────────────────────────────────────
-  const agregarAlimento = useCallback((alimentoId, gramos) => {
-    if (!planActivo) return;
-    const item = { id: genNutId('it'), alimentoId, gramos: parseFloat(gramos) || 100 };
-    setPlanActivo(p => {
-      const newPlan = { ...p, semana: { ...p.semana, [diaActivo]: { ...p.semana[diaActivo], [comidaActiva]: [...(p.semana[diaActivo][comidaActiva]||[]), item] } } };
-      setPlanes(ps => ps.map(pl => pl.id === p.id ? newPlan : pl));
-      return newPlan;
-    });
-    onClose();
-  }, [planActivo, diaActivo, comidaActiva]);
-
-  // ── Eliminar alimento ─────────────────────────────────────────────────────
-  const eliminarAlimento = useCallback((itemId) => {
-    setPlanActivo(p => {
-      const newComida = (p.semana[diaActivo][comidaActiva]||[]).filter(i => i.id !== itemId);
-      const newPlan = { ...p, semana: { ...p.semana, [diaActivo]: { ...p.semana[diaActivo], [comidaActiva]: newComida } } };
-      setPlanes(ps => ps.map(pl => pl.id === p.id ? newPlan : pl));
-      return newPlan;
-    });
-  }, [planActivo, diaActivo, comidaActiva]);
-
-  // ── Actualizar gramos ─────────────────────────────────────────────────────
-  const actualizarGramos = useCallback((itemId, gramos) => {
-    setPlanActivo(p => {
-      const newComida = (p.semana[diaActivo][comidaActiva]||[]).map(i => i.id===itemId ? {...i,gramos:parseFloat(gramos)||100} : i);
-      const newPlan = { ...p, semana: { ...p.semana, [diaActivo]: { ...p.semana[diaActivo], [comidaActiva]: newComida } } };
-      setPlanes(ps => ps.map(pl => pl.id === p.id ? newPlan : pl));
-      return newPlan;
-    });
-  }, [planActivo, diaActivo, comidaActiva]);
-
-  // ─── PDF EXPORT ────────────────────────────────────────────────────────────
-  const applyAIPlan = (aiResult) => {
-    if (!planActivo) return;
-    const nuevaSemana = { ...planActivo.semana };
-    (aiResult.dias || []).forEach(diaData => {
-      const diaNombre = diaData.dia;
-      if (!nuevaSemana[diaNombre]) return;
-      const comidas = {};
-      COMIDAS.forEach(c => {
-        const items = (diaData.comidas?.[c.id] || [])
-          .filter(it => todosAlimentos.find(a => a.id === it.alimentoId))
-          .map(it => ({ id: genNutId('it'), alimentoId: it.alimentoId, gramos: parseFloat(it.gramos) || 100 }));
-        comidas[c.id] = items;
-      });
-      nuevaSemana[diaNombre] = comidas;
-    });
-    const nuevoPlan = { ...planActivo, semana: nuevaSemana, notas: (aiResult.consejos || []).join(' · ') || planActivo.notas };
-    setPlanActivo(nuevoPlan);
-    setPlanes(ps => ps.map(pl => pl.id === nuevoPlan.id ? nuevoPlan : pl));
-  };
-
-  const exportarPDF = () => {
-    if (!planActivo) return;
-    const brandColor = brand?.colorPrimary || '#CC0000';
-    const gymName = brand?.gymName || 'ACTIVA';
-    const gymSub = brand?.gymSub || 'FITNESS CLUB';
-
-    const macroColor = (actual, obj) => {
-      const s = calcSemaforo(actual, obj);
-      return s==='verde'?GN:s==='amarillo'?AM:RJ;
+// Sumar macros de un array de {alimentoId, gramos}
+export const sumarMacrosDia = (items, extra = []) => {
+  return items.reduce((acc, item) => {
+    const al = getAlimentoById(item.alimentoId, extra);
+    if (!al) return acc;
+    const m = calcularMacros(al, item.gramos || 100);
+    return {
+      proteinas: Math.round((acc.proteinas + m.proteinas) * 10) / 10,
+      carbos:    Math.round((acc.carbos    + m.carbos)    * 10) / 10,
+      grasas:    Math.round((acc.grasas    + m.grasas)    * 10) / 10,
+      fibra:     Math.round((acc.fibra     + m.fibra)     * 10) / 10,
+      calorias:  acc.calorias + m.calorias,
     };
+  }, { proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0 });
+};
 
-    const diasHtml = DIAS_SEMANA.map(dia => {
-      const diaData = planActivo.semana[dia] || {};
-      const totDia = sumarMacrosDia(Object.values(diaData).flat());
-      const semDia = calcSemaforo(totDia.calorias, objetivoNut?.kcal);
-      const comidasHtml = COMIDAS.map(com => {
-        const items = diaData[com.id] || [];
-        if (items.length === 0) return `<tr><td style="padding:5px 10px;color:#aaa;font-style:italic;font-size:10px;" colspan="5">${com.emoji} ${com.label} — sin alimentos</td></tr>`;
-        const itemsHtml = items.map((item, idx) => {
-          const al = getAlimentoById(item.alimentoId);
-          if (!al) return '';
-          const m = calcularMacros(al, item.gramos);
-          return `<tr style="background:${idx%2===0?'#fff':'#f9f9f9'}">
-            ${idx===0?`<td rowspan="${items.length}" style="padding:5px 8px;font-size:10px;font-weight:700;background:#f0f4f8;vertical-align:middle;border-right:1px solid #e0e0e0;">${com.emoji} ${com.label}<br/><span style="font-size:8px;color:#888;">${com.hora}</span></td>`:''}
-            <td style="padding:4px 8px;font-size:11px;">${al.nombre}</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;">${item.gramos}g</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;">${m.proteinas}g P / ${m.carbos}g C / ${m.grasas}g G</td>
-            <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;">${m.calorias} kcal</td>
-          </tr>`;
-        }).join('');
-        return itemsHtml;
-      }).join('');
+// Mifflin-St Jeor
+export const calcularTDEE = (peso, talla, edad, sexo, actividad) => {
+  const TMB = sexo === 'M'
+    ? 10 * peso + 6.25 * talla - 5 * edad + 5
+    : 10 * peso + 6.25 * talla - 5 * edad - 161;
+  const factores = { sedentario:1.40, moderado:1.55, activo:1.65, muy_activo:1.75 };
+  return Math.round(TMB * (factores[actividad] || 1.55));
+};
 
-      return `
-        <div style="page-break-inside:avoid;margin-bottom:20px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;background:${BK};color:#fff;padding:8px 14px;border-radius:6px 6px 0 0;border-left:4px solid ${brandColor}">
-            <span style="font-weight:800;font-size:13px;">${dia}</span>
-            <span style="font-size:11px;">${emojiSem[semDia]} ${totDia.calorias} kcal · ${totDia.proteinas}g Prot · ${totDia.carbos}g Carb · ${totDia.grasas}g Gras</span>
-          </div>
-          <table style="width:100%;border-collapse:collapse;border:1px solid #e0e0e0;border-top:none;">
-            <thead><tr style="background:#f0f0f0">
-              <th style="padding:5px 8px;font-size:9px;text-align:left;width:110px">Comida</th>
-              <th style="padding:5px 8px;font-size:9px;text-align:left">Alimento</th>
-              <th style="padding:5px 8px;font-size:9px;text-align:center;width:50px">Gramos</th>
-              <th style="padding:5px 8px;font-size:9px;text-align:center;width:170px">Macros</th>
-              <th style="padding:5px 8px;font-size:9px;text-align:center;width:70px">Calorías</th>
-            </tr></thead>
-            <tbody>${comidasHtml}</tbody>
-          </table>
-        </div>`;
-    }).join('');
-
-    const perfilHtml = objetivoNut ? `
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;">
-        ${[['Objetivo','font-weight:700;color:'+brandColor,objetivoNut.label],['Calorías','',''+objetivoNut.kcal+' kcal'],['Proteínas','',''+objetivoNut.prot_g+'g'],['Carbos','',''+objetivoNut.carb_g+'g / Grasas '+objetivoNut.gras_g+'g']].map(([t,st,v])=>`
-          <div style="background:#f4f4f4;border-radius:5px;padding:8px;text-align:center">
-            <div style="font-size:9px;color:#999;margin-bottom:3px">${t}</div>
-            <div style="font-size:12px;${st}">${v}</div>
-          </div>`).join('')}
-      </div>` : '';
-
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-      <title>Plan Nutricional — ${planActivo.nombre}</title>
-      <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:20px}
-      @media print{body{padding:10px}@page{size:A4;margin:15mm}}</style>
-    </head><body>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brandColor};padding-bottom:12px;margin-bottom:16px">
-        <div><div style="font-size:22px;font-weight:900;color:${brandColor};letter-spacing:2px">${gymName}</div>
-          <div style="font-size:10px;color:#888;letter-spacing:4px">${gymSub}</div></div>
-        <div style="text-align:right"><div style="font-size:16px;font-weight:800">Plan Nutricional</div>
-          <div style="font-size:12px;color:#555;margin-top:2px">${planActivo.nombre}</div>
-          <div style="font-size:10px;color:#888">Cliente: ${cliente?.nombre||'—'} ${cliente?.apellido||''} · ${planActivo.fechaCreacion}</div></div>
-      </div>
-      ${perfilHtml}
-      ${diasHtml}
-      ${planActivo.notas?`<div style="margin-top:14px;background:#f9f9f9;border-left:4px solid ${brandColor};padding:10px 14px;font-size:11px;color:#555"><strong>Notas:</strong> ${planActivo.notas}</div>`:''}
-      <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${gymName} · ${gymSub} · Plan generado: ${new Date().toLocaleDateString('es-ES')}</div>
-      <script>window.onload=()=>window.print()<\/script>
-    </body></html>`;
-
-    const w = window.open('','_blank');
-    w.document.write(html);
-    w.document.close();
+// Calcular objetivo calórico y macros según objetivo
+export const calcularObjetivo = (tdee, objetivo, peso) => {
+  const objetivos = {
+    mantenimiento:    { kcal: tdee,        label:'Mantenimiento',    color:'#0284C7' },
+    hipertrofia:      { kcal: tdee + 300,  label:'Hipertrofia',      color:'#7C3AED' },
+    perdida_leve:     { kcal: tdee - 300,  label:'Pérdida leve',     color:'#D97706' },
+    perdida_moderada: { kcal: tdee - 500,  label:'Pérdida moderada', color:'#CC0000' },
+    recomposicion:    { kcal: tdee - 200,  label:'Recomposición',    color:'#16A34A' },
   };
+  const obj = objetivos[objetivo] || objetivos.mantenimiento;
+  // Macros según objetivo
+  let prot_g, gras_g, carb_g;
+  if (objetivo === 'hipertrofia') {
+    prot_g = Math.round(peso * 2.2);
+    gras_g = Math.round(peso * 0.9);
+    carb_g = Math.round((obj.kcal - prot_g*4 - gras_g*9) / 4);
+  } else if (objetivo === 'perdida_leve' || objetivo === 'perdida_moderada') {
+    prot_g = Math.round(peso * 2.2); // Alto en proteína para preservar músculo
+    gras_g = Math.round(peso * 0.8);
+    carb_g = Math.round((obj.kcal - prot_g*4 - gras_g*9) / 4);
+  } else {
+    prot_g = Math.round(peso * 1.8);
+    gras_g = Math.round(peso * 0.8);
+    carb_g = Math.round((obj.kcal - prot_g*4 - gras_g*9) / 4);
+  }
+  return { ...obj, prot_g, gras_g: Math.max(gras_g,0), carb_g: Math.max(carb_g,0) };
+};
 
-  // ─── NUEVO ALIMENTO FORM ──────────────────────────────────────────────────
-  const NuevoAlimentoFormComp = ({onClose, onSave}) => {
-    const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg' });
-    const set = (k,v) => setF(f=>({...f,[k]:v}));
-    const calAuto = Math.round(form.proteinas*4 + form.carbos*4 + form.grasas*9);
-    return (
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:480,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo alimento</div>
-            <button onClick={onClose} style={ns.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            <div><span style={ns.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={ns.inp}/></div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-              <div><span style={ns.lbl}>Categoría</span>
-                <select value={form.categoria} onChange={e=>set('categoria',e.target.value)} style={{...ns.sel,width:'100%'}}>
-                  {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
-                </select>
-              </div>
-              <div><span style={ns.lbl}>Porción ref. (g)</span><input type="number" value={form.porcion_ref} onChange={e=>set('porcion_ref',e.target.value)} style={ns.inp}/></div>
-            </div>
-            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Macros por 100g</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5}}>
-                {[['proteinas','Proteínas (g)'],['carbos','Carbos (g)'],['grasas','Grasas (g)'],['fibra','Fibra (g)']].map(([k,lbl])=>(
-                  <div key={k}><span style={ns.lbl}>{lbl}</span><input type="number" value={form[k]} onChange={e=>set(k,parseFloat(e.target.value)||0)} style={ns.inp}/></div>
-                ))}
-              </div>
-              <div style={{marginTop:6}}>
-                <span style={ns.lbl}>Calorías (kcal/100g)</span>
-                <div style={{display:'flex',gap:6,alignItems:'center'}}>
-                  <input type="number" value={form.calorias} onChange={e=>set('calorias',parseFloat(e.target.value)||0)} style={{...ns.inp,flex:1}}/>
-                  <button onClick={()=>set('calorias',calAuto)} style={{...ns.btnG,fontSize:10,whiteSpace:'nowrap'}}>Auto ({calAuto})</button>
-                </div>
-              </div>
-            </div>
-            <div style={{background:G1,borderRadius:6,padding:'10px'}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Micronutrientes (opcional)</div>
-              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5,marginBottom:5}}>
-                <div><span style={ns.lbl}>Micro 1 nombre</span><input value={form.micro1_nombre} onChange={e=>set('micro1_nombre',e.target.value)} placeholder="Ej: Vitamina C" style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro1_valor} onChange={e=>set('micro1_valor',e.target.value)} style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Unidad</span><input value={form.micro1_unidad} onChange={e=>set('micro1_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:5}}>
-                <div><span style={ns.lbl}>Micro 2 nombre</span><input value={form.micro2_nombre} onChange={e=>set('micro2_nombre',e.target.value)} placeholder="Ej: Hierro" style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Valor</span><input type="number" value={form.micro2_valor} onChange={e=>set('micro2_valor',e.target.value)} style={ns.inp}/></div>
-                <div><span style={ns.lbl}>Unidad</span><input value={form.micro2_unidad} onChange={e=>set('micro2_unidad',e.target.value)} placeholder="mg" style={ns.inp}/></div>
-              </div>
-            </div>
-          </div>
-          <button onClick={()=>{
-            if(!form.nombre.trim())return;
-            onSave({...form,id:'ca_'+genNutId(),micro1:{nombre:form.micro1_nombre,valor:parseFloat(form.micro1_valor)||0,unidad:form.micro1_unidad},micro2:{nombre:form.micro2_nombre,valor:parseFloat(form.micro2_valor)||0,unidad:form.micro2_unidad},custom:true});
-            onClose();
-          }} disabled={!form.nombre.trim()} style={{...ns.btnR,width:'100%',padding:'9px',marginTop:10}}>Guardar alimento</button>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
-  const PickerAlimentosComp = ({onClose, onAdd, comidaActiva, todosAlimentos, onNuevoAlimento}) => {
-    const [localSearch, setLocalSearch] = useState(pickerSearch);
-    const [localCat, setLocalCat] = useState(pickerCat);
-    const [inputVal, setInputVal] = useState('');   // cantidad ingresada
-    const [modoUnidad, setModoUnidad] = useState(false); // false=gramos, true=unidades
-    const [selAl, setSelAl] = useState(null);
-    const filtered = useMemo(() => todosAlimentos.filter(a =>
-      (localCat === 'all' || a.categoria === localCat) &&
-      (!localSearch || a.nombre.toLowerCase().includes(localSearch.toLowerCase()))
-    ), [localSearch, localCat]);
-    // Calcular gramos reales según modo
-    const gramosReales = useMemo(() => {
-      if (!selAl || !inputVal) return 0;
-      if (modoUnidad && selAl.tiene_unidad) {
-        return Math.round((parseFloat(inputVal)||1) * selAl.gramos_por_unidad);
-      }
-      return parseFloat(inputVal)||0;
-    }, [selAl, inputVal, modoUnidad]);
-    const preview = selAl && gramosReales > 0 ? calcularMacros(selAl, gramosReales) : null;
-    // When selecting a food, auto-switch mode and set default qty
-    const handleSelAl = (al) => {
-      if (selAl?.id === al.id) { setSelAl(null); return; }
-      setSelAl(al);
-      if (al.tiene_unidad) {
-        setModoUnidad(true);
-        setInputVal('1');
-      } else {
-        setModoUnidad(false);
-        setInputVal(String(al.porcion_ref||100));
-      }
-    };
-    return (
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,width:'100%',maxWidth:520,marginBottom:20}}>
-          <div style={{background:BK,borderRadius:'10px 10px 0 0',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div style={{color:WH,fontWeight:800,fontSize:13}}>🥗 Agregar alimento — {COMIDAS.find(c=>c.id===comidaActiva)?.label}</div>
-            <button onClick={()=>setShowPicker(false)} style={{...ns.btnG,background:'transparent',color:WH,border:'1px solid #555'}}>✕</button>
-          </div>
-          <div style={{padding:'12px 14px'}}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:6,marginBottom:8}}>
-              <input value={localSearch} onChange={e=>setLocalSearch(e.target.value)} placeholder="Buscar alimento..." style={ns.inp}/>
-              <select value={localCat} onChange={e=>setLocalCat(e.target.value)} style={ns.sel}>
-                <option value="all">Todas las categorías</option>
-                {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label}</option>)}
-              </select>
-            </div>
-            <div style={{maxHeight:'38vh',overflowY:'auto',marginBottom:10}}>
-              {filtered.map(al => {
-                const cat = CATEGORIAS_ALIMENTOS[al.categoria];
-                return (
-                  <div key={al.id} onClick={()=>handleSelAl(al)}
-                    style={{padding:'7px 10px',borderBottom:`1px solid ${G2}`,cursor:'pointer',background:selAl?.id===al.id?'#EFF6FF':WH,borderLeft:selAl?.id===al.id?`3px solid ${TL}`:'3px solid transparent'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                      <div>
-                        <span style={{fontSize:11,fontWeight:600}}>{al.nombre}</span>
-                        {al.custom&&<span style={{...ns.tag('#7C3AED'),marginLeft:5,fontSize:7}}>CUSTOM</span>}
-                        <div style={{fontSize:9,color:G3,marginTop:1}}>{cat?.emoji} {cat?.label} · por 100g: P {al.proteinas}g · C {al.carbos}g · G {al.grasas}g · {al.calorias} kcal</div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {filtered.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin resultados</div>}
-            </div>
-            {selAl&&(
-              <div style={{background:G1,borderRadius:7,padding:'10px',marginBottom:10,border:`1px solid ${TL}`}}>
-                <div style={{fontSize:11,fontWeight:700,marginBottom:6}}>{selAl.nombre}</div>
-                {/* Toggle gramos / unidades */}
-                {selAl.tiene_unidad&&(
-                  <div style={{display:'flex',gap:4,marginBottom:8}}>
-                    <button onClick={()=>{setModoUnidad(false);setInputVal(String(selAl.porcion_ref||100));}}
-                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${!modoUnidad?TL:G2}`,background:!modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:!modoUnidad?700:400,color:!modoUnidad?NV:G4}}>
-                      ⚖️ Por gramos
-                    </button>
-                    <button onClick={()=>{setModoUnidad(true);setInputVal('1');}}
-                      style={{flex:1,padding:'5px',borderRadius:5,border:`2px solid ${modoUnidad?TL:G2}`,background:modoUnidad?'#EFF6FF':WH,fontSize:10,cursor:'pointer',fontWeight:modoUnidad?700:400,color:modoUnidad?NV:G4}}>
-                      🔢 Por unidad ({selAl.nombre_unidad})
-                    </button>
-                  </div>
-                )}
-                <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
-                  <span style={{...ns.lbl,whiteSpace:'nowrap'}}>
-                    {modoUnidad&&selAl.tiene_unidad?`Cantidad (${selAl.nombre_unidad}):`:'Cantidad (gramos):'}
-                  </span>
-                  <input type="number" value={inputVal} onChange={e=>setInputVal(e.target.value)}
-                    placeholder={modoUnidad&&selAl.tiene_unidad?'1':`${selAl.porcion_ref}g`}
-                    min="0.5" step={modoUnidad&&selAl.tiene_unidad?'0.5':'10'}
-                    style={{...ns.inp,width:90,textAlign:'center'}}/>
-                  {modoUnidad&&selAl.tiene_unidad&&gramosReales>0&&(
-                    <span style={{fontSize:10,color:G3,whiteSpace:'nowrap'}}>= {gramosReales}g</span>
-                  )}
-                  {!modoUnidad&&(
-                    <button onClick={()=>setInputVal(String(selAl.porcion_ref))} style={{...ns.btnG,fontSize:9,whiteSpace:'nowrap'}}>Porción ref. ({selAl.porcion_ref}g)</button>
-                  )}
-                </div>
-                {preview&&<div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,color:G4,background:G1,padding:'5px 8px',borderRadius:5,marginBottom:3}}>
-                  <span>P: <strong>{preview.proteinas}g</strong></span>
-                  <span>C: <strong>{preview.carbos}g</strong></span>
-                  <span>G: <strong>{preview.grasas}g</strong></span>
-                  <span>F: <strong>{preview.fibra}g</strong></span>
-                  <span style={{fontWeight:700,color:NV}}>🔥 {preview.calorias} kcal</span>
-                </div>}
-                {selAl.micro1?.nombre&&gramosReales>0&&<div style={{fontSize:9,color:G3}}>{selAl.micro1.nombre}: {Math.round(selAl.micro1.valor*gramosReales/100*10)/10}{selAl.micro1.unidad}{selAl.micro2?.nombre?` · ${selAl.micro2.nombre}: ${Math.round(selAl.micro2.valor*gramosReales/100*10)/10}${selAl.micro2.unidad}`:''}</div>}
-              </div>
-            )}
-            <div style={{display:'flex',gap:6}}>
-              <button onClick={onNuevoAlimento} style={{...ns.btnG,flex:1,fontSize:10}}>➕ Nuevo alimento</button>
-              <button onClick={()=>{if(selAl&&gramosReales>0)onAdd(selAl.id,gramosReales);}} disabled={!selAl||gramosReales<=0} style={{...ns.btnTl,flex:2,opacity:(!selAl||gramosReales<=0)?.5:1}}>Agregar al menú</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
-  const NuevoPlanFormComp = ({cliente, onCrear}) => {
-    const [nombre, setNombre] = useState(cliente?`Plan ${cliente.nombre} ${new Date().toLocaleDateString('es-ES')}`:'');
-    const [perfil, setPerfil] = useState({
-      peso:'', talla:'', edad:'', sexo:'M',
-      actividad: cliente?.screening?.actividad||'moderado',
-      objetivo_nut: cliente?.objetivo?.toLowerCase().includes('grasa')||cliente?.objetivo?.toLowerCase().includes('bajar')?'perdida_leve':
-                   cliente?.objetivo?.toLowerCase().includes('masa')||cliente?.objetivo?.toLowerCase().includes('volumen')?'hipertrofia':'mantenimiento',
-    });
-    const set = (k,v) => setPerfil(p=>({...p,[k]:v}));
-    const tdee = perfil.peso&&perfil.talla&&perfil.edad ? calcularTDEE(parseFloat(perfil.peso),parseFloat(perfil.talla),parseInt(perfil.edad),perfil.sexo,perfil.actividad) : null;
-    const obj = tdee ? calcularObjetivo(tdee, perfil.objetivo_nut, parseFloat(perfil.peso)) : null;
-    return (
-      <div style={{...ns.card,border:`2px solid ${TL}`}}>
-        <div style={{fontSize:14,fontWeight:800,marginBottom:12}}>📋 Configurar nuevo plan nutricional</div>
-        <div style={{marginBottom:8}}><span style={ns.lbl}>Nombre del plan *</span><input value={nombre} onChange={e=>setNombre(e.target.value)} style={ns.inp}/></div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6,marginBottom:8}}>
-          <div><span style={ns.lbl}>Peso corporal (kg) *</span><input type="number" value={perfil.peso} onChange={e=>set('peso',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Talla (cm) *</span><input type="number" value={perfil.talla} onChange={e=>set('talla',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Edad (años) *</span><input type="number" value={perfil.edad} onChange={e=>set('edad',e.target.value)} style={ns.inp}/></div>
-          <div><span style={ns.lbl}>Sexo</span>
-            <select value={perfil.sexo} onChange={e=>set('sexo',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="M">Masculino</option><option value="F">Femenino</option>
-            </select>
-          </div>
-          <div><span style={ns.lbl}>Nivel de actividad</span>
-            <select value={perfil.actividad} onChange={e=>set('actividad',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="sedentario">Sedentario (×1.40)</option>
-              <option value="moderado">Moderado (×1.55)</option>
-              <option value="activo">Activo 4×/sem (×1.65)</option>
-              <option value="muy_activo">Muy activo (×1.75)</option>
-            </select>
-          </div>
-          <div><span style={ns.lbl}>Objetivo nutricional</span>
-            <select value={perfil.objetivo_nut} onChange={e=>set('objetivo_nut',e.target.value)} style={{...ns.sel,width:'100%'}}>
-              <option value="mantenimiento">Mantenimiento</option>
-              <option value="hipertrofia">Hipertrofia (+300 kcal)</option>
-              <option value="perdida_leve">Pérdida leve (-300 kcal)</option>
-              <option value="perdida_moderada">Pérdida moderada (-500 kcal)</option>
-              <option value="recomposicion">Recomposición (-200 kcal)</option>
-            </select>
-          </div>
-        </div>
-        {obj&&(
-          <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'10px 14px',marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:NV,marginBottom:4}}>📊 Resultado Mifflin-St Jeor</div>
-            <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:11}}>
-              <span>TDEE: <strong>{tdee} kcal</strong></span>
-              <span style={{color:obj.color}}>Objetivo: <strong>{obj.kcal} kcal</strong> ({obj.label})</span>
-              <span>Proteínas: <strong>{obj.prot_g}g</strong></span>
-              <span>Carbos: <strong>{obj.carb_g}g</strong></span>
-              <span>Grasas: <strong>{obj.gras_g}g</strong></span>
-            </div>
-          </div>
-        )}
-        <button onClick={()=>{if(nombre&&perfil.peso&&perfil.talla&&perfil.edad)crearPlan(nombre,perfil);}}
-          disabled={!nombre||!perfil.peso||!perfil.talla||!perfil.edad}
-          style={{...ns.btnTl,width:'100%',padding:'9px',opacity:(!nombre||!perfil.peso||!perfil.talla||!perfil.edad)?.4:1}}>
-          Crear plan y abrir constructor →
-        </button>
-      </div>
-    );
-  };
-
-  // ─── VISTA: LISTA DE PLANES ────────────────────────────────────────────────
-  const VistaPlanes = () => (
-    <div style={{padding:'12px 14px'}}>
-      <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${TL}`}}>
-        <div style={{fontSize:14,fontWeight:800,color:WH}}>🥗 Planes Nutricionales</div>
-        <div style={{fontSize:11,color:G3}}>Fórmula Mifflin-St Jeor · 7 días · 5 comidas · {todosAlimentos.length} alimentos</div>
-      </div>
-      <div style={{...ns.card,marginBottom:12}}>
-        <span style={ns.lbl}>Cliente</span>
-        <select value={selClientId} onChange={e=>{setSelClientId(e.target.value);setPlanActivo(null);}} style={{...ns.sel,width:'100%'}}>
-          <option value="">— Seleccionar cliente —</option>
-          {clients.map(c=><option key={c.id} value={c.id}>{c.nombre} {c.apellido}</option>)}
-        </select>
-      </div>
-      {selClientId&&(
-        <>
-          {planes.filter(p=>p.clienteId===selClientId).length>0&&(
-            <div style={{marginBottom:12}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Planes del cliente ({planes.filter(p=>p.clienteId===selClientId).length})</div>
-              {planes.filter(p=>p.clienteId===selClientId).map(plan=>(
-                <div key={plan.id} style={{...ns.card,display:'flex',justifyContent:'space-between',alignItems:'center',borderLeft:`3px solid ${TL}`}}>
-                  <div>
-                    <div style={{fontSize:12,fontWeight:700}}>{plan.nombre}</div>
-                    <div style={{fontSize:10,color:G3}}>Creado: {plan.fechaCreacion}</div>
-                  </div>
-                  <div style={{display:'flex',gap:5}}>
-                    <button onClick={()=>{setPlanActivo(plan);setView('plan');}} style={{...ns.btnTl,fontSize:10}}>Abrir</button>
-                    <button onClick={()=>setPlanes(p=>p.filter(pl=>pl.id!==plan.id))} style={{...ns.btnG,fontSize:10,color:RJ,borderColor:RJ}}>Eliminar</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          <NuevoPlanFormComp cliente={cliente} onCrear={crearPlan}/>
-        </>
-      )}
-    </div>
-  );
-
-  // ─── VISTA: CONSTRUCTOR DEL PLAN ──────────────────────────────────────────
-  const VistaConstructor = () => {
-    if (!planActivo) return <div style={{padding:28,textAlign:'center',color:G3}}>No hay plan activo</div>;
-    const comidaData = planActivo.semana[diaActivo]?.[comidaActiva] || [];
-    const totalesComida = sumarMacrosDia(comidaData);
-
-    return (
-      <div style={{padding:'12px 14px'}}>
-        {/* Header plan */}
-        <div style={{background:BK,borderRadius:10,padding:'12px 16px',marginBottom:10,borderLeft:`3px solid ${TL}`}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:6}}>
-            <div>
-              <div style={{fontSize:13,fontWeight:800,color:WH}}>{planActivo.nombre}</div>
-              <div style={{fontSize:10,color:G3}}>{cliente?.nombre} {cliente?.apellido}</div>
-            </div>
-            <div style={{display:'flex',gap:5}}>
-              <button onClick={exportarPDF} style={{...ns.btnR,fontSize:10,background:brand?.colorPrimary||R}}>📄 Exportar PDF</button>
-              <button onClick={()=>setView('planes')} style={{...ns.btnG,fontSize:10}}>← Volver</button>
-            </div>
-          </div>
-          {objetivoNut&&(
-            <div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:8,fontSize:10}}>
-              {[['🎯',objetivoNut.label,objetivoNut.color],['🔥',`${objetivoNut.kcal} kcal`,'#fff'],['💪',`P ${objetivoNut.prot_g}g`,'#fff'],['🌾',`C ${objetivoNut.carb_g}g`,'#fff'],['🥑',`G ${objetivoNut.gras_g}g`,'#fff']].map(([e,v,c])=>(
-                <span key={v} style={{color:c,fontWeight:700}}>{e} {v}</span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* GENERADOR IA */}
-        <AIGeneradorNutricion cliente={cliente} objetivoNut={objetivoNut} todosAlimentos={todosAlimentos} onApply={applyAIPlan}/>
-
-        <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:10}}>
-          {/* Navegación días */}
-          <div style={{display:'flex',flexDirection:'column',gap:3,minWidth:88}}>
-            {DIAS_SEMANA.map(dia=>{
-              const totDia = sumarMacrosDia(Object.values(planActivo.semana[dia]||{}).flat());
-              const semDia = calcSemaforo(totDia.calorias, objetivoNut?.kcal);
-              return(
-                <div key={dia} onClick={()=>setDiaActivo(dia)} style={{cursor:'pointer',padding:'6px 8px',borderRadius:6,background:dia===diaActivo?BK:WH,border:`1px solid ${dia===diaActivo?TL:G2}`,transition:'all .15s'}}>
-                  <div style={{fontSize:10,fontWeight:dia===diaActivo?700:400,color:dia===diaActivo?WH:G4,lineHeight:1.2}}>{dia.slice(0,3)}</div>
-                  <div style={{fontSize:9,color:dia===diaActivo?G3:'#aaa'}}>{emojiSem[semDia]} {totDia.calorias>0?totDia.calorias+'k':'-'}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Panel central */}
-          <div>
-            {/* Selector de comidas */}
-            <div style={{display:'flex',gap:4,marginBottom:8,flexWrap:'wrap'}}>
-              {COMIDAS.map(com=>{
-                const items = planActivo.semana[diaActivo]?.[com.id]||[];
-                const tot = sumarMacrosDia(items);
-                const isActive = com.id===comidaActiva;
-                return(
-                  <div key={com.id} onClick={()=>setComidaActiva(com.id)} style={{cursor:'pointer',flex:1,padding:'6px 6px',borderRadius:6,border:`1px solid ${isActive?TL:G2}`,background:isActive?'#EFF6FF':WH,textAlign:'center',minWidth:70}}>
-                    <div style={{fontSize:14}}>{com.emoji}</div>
-                    <div style={{fontSize:9,fontWeight:isActive?700:400,color:isActive?NV:G4,lineHeight:1.2}}>{com.label}</div>
-                    <div style={{fontSize:8,color:G3}}>{tot.calorias>0?tot.calorias+' kcal':'—'}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Alimentos de la comida activa */}
-            <div style={{...ns.card}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={{fontSize:12,fontWeight:700}}>{COMIDAS.find(c=>c.id===comidaActiva)?.emoji} {COMIDAS.find(c=>c.id===comidaActiva)?.label} — {diaActivo}</div>
-                <button onClick={()=>setShowPicker(true)} style={{...ns.btnTl,fontSize:10}}>+ Agregar</button>
-              </div>
-              {comidaData.length===0&&<div style={{textAlign:'center',padding:16,color:G3,fontSize:11,borderStyle:'dashed',border:`1px dashed ${G2}`,borderRadius:6}}>Sin alimentos. Tocá "+ Agregar" para comenzar.</div>}
-              {comidaData.map((item,i)=>{
-                const al = getAlimentoById(item.alimentoId);
-                if (!al) return null;
-                const m = calcularMacros(al, item.gramos);
-                const cat = CATEGORIAS_ALIMENTOS[al.categoria];
-                return(
-                  <div key={item.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 8px',background:i%2===0?WH:G1,borderRadius:5,marginBottom:3,border:`1px solid ${G2}`}}>
-                    <div style={{flex:1}}>
-                      <div style={{fontSize:11,fontWeight:600}}>{cat?.emoji} {al.nombre}</div>
-                      <div style={{fontSize:9,color:G3,display:'flex',gap:8,flexWrap:'wrap',marginTop:1}}>
-                        <span>P: <strong>{m.proteinas}g</strong></span><span>C: <strong>{m.carbos}g</strong></span><span>G: <strong>{m.grasas}g</strong></span>
-                        <span style={{color:NV,fontWeight:700}}>🔥 {m.calorias} kcal</span>
-                      </div>
-                    </div>
-                    <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                      <input type="number" value={item.gramos} onChange={e=>actualizarGramos(item.id,e.target.value)}
-                        style={{...ns.inp,width:55,textAlign:'center'}} min="1" max="2000"/>
-                      <div>
-                        <div style={{fontSize:9,color:G3}}>g</div>
-                        {al.tiene_unidad&&<div style={{fontSize:8,color:TL,whiteSpace:'nowrap'}}>≈{(item.gramos/al.gramos_por_unidad).toFixed(1)} {al.nombre_unidad}</div>}
-                      </div>
-                      <button onClick={()=>eliminarAlimento(item.id)} style={{...ns.btnG,color:RJ,borderColor:RJ,padding:'3px 6px',fontSize:12}}>×</button>
-                    </div>
-                  </div>
-                );
-              })}
-              {comidaData.length>0&&(
-                <div style={{marginTop:6,background:G1,borderRadius:5,padding:'6px 8px',display:'flex',gap:12,flexWrap:'wrap',fontSize:10}}>
-                  <span style={{fontWeight:700}}>Total comida:</span>
-                  <span>P: <strong>{totalesComida.proteinas}g</strong></span><span>C: <strong>{totalesComida.carbos}g</strong></span><span>G: <strong>{totalesComida.grasas}g</strong></span>
-                  <span style={{color:NV,fontWeight:700}}>🔥 {totalesComida.calorias} kcal</span>
-                </div>
-              )}
-            </div>
-
-            {/* Resumen del día */}
-            <ResumenDia totales={totalesDia} objetivoNut={objetivoNut}/>
-
-            {/* Notas del plan */}
-            <div style={{...ns.card}}>
-              <span style={ns.lbl}>Notas del plan</span>
-              <textarea value={planActivo.notas||''} onChange={e=>{const n={...planActivo,notas:e.target.value};setPlanActivo(n);setPlanes(p=>p.map(pl=>pl.id===n.id?n:pl));}}
-                rows={2} style={{...ns.inp,resize:'vertical'}} placeholder="Instrucciones, restricciones, preferencias del cliente..."/>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── VISTA: BASE DE ALIMENTOS ─────────────────────────────────────────────
-  const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento}) => {
-    const [search, setSearch] = useState('');
-    const [cat, setCat] = useState('all');
-    const filtered = todosAlimentos.filter(a =>
-      (cat==='all'||a.categoria===cat) &&
-      (!search||a.nombre.toLowerCase().includes(search.toLowerCase()))
-    );
-    return(
-      <div style={{padding:'12px 14px'}}>
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${TL}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>📚 Base de alimentos</div>
-          <div style={{fontSize:11,color:G3}}>{todosAlimentos.length} alimentos · Uruguay y región</div>
-        </div>
-        <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar..." style={{...ns.inp,flex:1,minWidth:150}}/>
-          <select value={cat} onChange={e=>setCat(e.target.value)} style={ns.sel}>
-            <option value="all">Todas las categorías ({todosAlimentos.length})</option>
-            {Object.entries(CATEGORIAS_ALIMENTOS).map(([k,v])=><option key={k} value={k}>{v.emoji} {v.label} ({todosAlimentos.filter(a=>a.categoria===k).length})</option>)}
-          </select>
-          <button onClick={onNuevoAlimento} style={ns.btnTl}>➕ Nuevo</button>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
-            <thead>
-              <tr style={{background:BK,color:WH}}>
-                {['Alimento','Categoría','P (g)','C (g)','G (g)','F (g)','Kcal','Micro 1','Micro 2'].map(h=>(
-                  <th key={h} style={{padding:'7px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,whiteSpace:'nowrap'}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((al,i)=>{
-                const cat2=CATEGORIAS_ALIMENTOS[al.categoria];
-                return(
-                  <tr key={al.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
-                    <td style={{padding:'5px 8px',fontWeight:600,maxWidth:200}}>{al.nombre} {al.custom&&<span style={{...ns.tag('#7C3AED'),fontSize:7}}>CUSTOM</span>}</td>
-                    <td style={{padding:'5px 8px',whiteSpace:'nowrap'}}><span style={ns.tag(cat2?.color||G4)}>{cat2?.emoji} {cat2?.label}</span></td>
-                    <td style={{padding:'5px 8px',color:'#CC0000',fontWeight:700}}>{al.proteinas}</td>
-                    <td style={{padding:'5px 8px',color:'#7C3AED',fontWeight:700}}>{al.carbos}</td>
-                    <td style={{padding:'5px 8px',color:AM,fontWeight:700}}>{al.grasas}</td>
-                    <td style={{padding:'5px 8px',color:TL}}>{al.fibra}</td>
-                    <td style={{padding:'5px 8px',fontWeight:700,color:NV}}>{al.calorias}</td>
-                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro1?.nombre&&`${al.micro1.nombre}: ${al.micro1.valor}${al.micro1.unidad}`}</td>
-                    <td style={{padding:'5px 8px',color:G4,fontSize:9}}>{al.micro2?.nombre&&`${al.micro2.nombre}: ${al.micro2.valor}${al.micro2.unidad}`}</td>
-                  </tr>
-                );
-              })}
-              {filtered.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
-
-  // ─── RENDER PRINCIPAL ─────────────────────────────────────────────────────
-  return(
-    <div style={{minHeight:'100vh',background:G1}}>
-      {showPicker && <PickerAlimentosComp onClose={()=>setShowPicker(false)} onAdd={agregarAlimento} comidaActiva={comidaActiva} todosAlimentos={todosAlimentos} onNuevoAlimento={()=>{setShowPicker(false);setShowNuevoAlimento(true);}}/>}
-      {showNuevoAlimento && <NuevoAlimentoFormComp onClose={()=>setShowNuevoAlimento(false)} onSave={al=>{setCustomAlimentos(p=>[...p,al]);setShowNuevoAlimento(false);}}/>}
-      {/* Sub-tabs */}
-      <div style={{display:'flex',borderBottom:`2px solid ${G2}`,background:WH,overflowX:'auto'}}>
-        {[['planes','📋 Planes'],['plan','🏗️ Constructor'],['alimentos','📚 Alimentos']].map(([v,lbl])=>(
-          <button key={v} onClick={()=>setView(v)} style={{padding:'9px 14px',border:'none',background:'none',fontWeight:view===v?700:400,fontSize:11,color:view===v?TL:G4,borderBottom:view===v?`2px solid ${TL}`:'2px solid transparent',cursor:'pointer',whiteSpace:'nowrap',marginBottom:-2}}>
-            {lbl}
-          </button>
-        ))}
-      </div>
-      {view==='planes'    && VistaPlanes()}
-      {view==='plan'      && VistaConstructor()}
-      {view==='alimentos' && <VistaAlimentosComp todosAlimentos={todosAlimentos} onNuevoAlimento={()=>setShowNuevoAlimento(true)}/>}
-    </div>
-  );
-}
+export const DIAS_SEMANA = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+export const COMIDAS = [
+  { id:'desayuno',    label:'Desayuno',           emoji:'🌅', hora:'07:00–09:00' },
+  { id:'colacion_am', label:'Colación mañana',    emoji:'🍎', hora:'10:00–11:00' },
+  { id:'almuerzo',    label:'Almuerzo',            emoji:'🍽️', hora:'12:00–14:00' },
+  { id:'merienda',   label:'Merienda',            emoji:'☕', hora:'16:00–17:00' },
+  { id:'cena',       label:'Cena',                emoji:'🌙', hora:'19:00–21:00' },
+];

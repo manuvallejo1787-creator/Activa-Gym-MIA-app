@@ -1,10 +1,13 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import FisioActiva from "./FisioActiva.jsx";
-import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, genId } from "./db.js";
+import PoseROM from "./PoseROM.jsx";
+import { getPrintCSS, footerHTML } from "./printStyles.js";
+import DateInput from "./DateInput.jsx";
+import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline } from "./planificacion.js";
+import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -26,6 +29,10 @@ const NIVEL={
   potencia:{label:'POTENCIA',badge:'N2',color:'#7C3AED',desc:'Desarrollo de capacidades'},
   rinde:   {label:'RINDE',   badge:'N3',color:'#CC0000',desc:'Alto rendimiento'},
 };
+// Orden de progresión del Método — usado para trabar el avance de fase.
+const ORDEN_FASES=['restaura','activa','potencia','rinde'];
+const siguienteFase=(fase)=>{const i=ORDEN_FASES.indexOf(fase);return i>=0&&i<ORDEN_FASES.length-1?ORDEN_FASES[i+1]:null;};
+const esAvanceDeFase=(actual,propuesta)=>ORDEN_FASES.indexOf(propuesta)>ORDEN_FASES.indexOf(actual);
 
 // ─── OBJETIVOS (mapeados al continuum) ──────────────────────────────────────
 const OBJS={
@@ -36,7 +43,7 @@ const OBJS={
   potencia:{label:'POTENCIA · N2',icon:'◆',desc:'Desarrollo de capacidades',nivelKey:'potencia',
     blocks:['activacion','fuerza','accesorios','cardio','flex_recovery']},
   rinde:   {label:'RINDE · N3',icon:'◐',desc:'Potencia y rendimiento',nivelKey:'rinde',
-    blocks:['movilidad','activacion','potencia','fuerza','funcional','propiocepcion']},
+    blocks:['movilidad','activacion','potencia','pliometria','fuerza','funcional','propiocepcion']},
 };
 
 // ─── BLOQUES ────────────────────────────────────────────────────────────────
@@ -45,7 +52,8 @@ const BLOCKS={
   activacion:   {label:'Activación',        pos:[1,2],       tag:'ACT',color:'#CC0000'},
   zona_media:   {label:'Zona Media',        pos:[2,3,5,6,7], tag:'ZM', color:'#7a0000'},
   prev_rehab:   {label:'Prev/Rehab',        pos:[2,3,5,6,7], tag:'PR', color:'#374151'},
-  potencia:     {label:'Potencia/Plio.',    pos:[3,4],       tag:'POT',color:'#111111'},
+  potencia:     {label:'Potencia',         pos:[3,4],       tag:'POT',color:'#111111'},
+  pliometria:   {label:'Pliometría/Saltos',pos:[3,4],       tag:'PLIO',color:'#7C2D12'},
   fuerza:       {label:'Fuerza',            pos:[3,4],       tag:'FZA',color:'#CC0000'},
   accesorios:   {label:'Accesorios',        pos:[3,4,5],     tag:'ACC',color:'#4B5563'},
   cardio:       {label:'Cardio',            pos:[5,6,7],     tag:'CAR',color:'#990000'},
@@ -76,6 +84,17 @@ function checkRestriction(ex, client){
 }
 
 const NIVEL_COLOR={Principiante:'#16A34A',Intermedio:'#D97706',Avanzado:'#CC0000'};
+const GRUPO_COL={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
+const GRUPO_LBL={bi:'Biserie',tri:'Triserie',circuito:'Circuito'};
+const GRUPO_SHORT={bi:'Bi',tri:'Tri',circuito:'Circ'};
+const grupoTagTxt=(g)=>g?`${GRUPO_SHORT[g.tipo]||''} ${g.id}`:'';
+// Conteo fraccionado de series por grupo muscular (estándar RP):
+// 1er músculo listado = principal (1 serie), 2do = secundario (0.5), 3ro en adelante = terciario (0.25)
+const FRAC_POR_ORDEN=[1,0.5,0.25];
+const parseMusculosFraccion=(musculosStr)=>{
+  if(!musculosStr)return[];
+  return musculosStr.split(',').map(m=>m.trim()).filter(Boolean).map((nombre,i)=>({nombre,fraccion:FRAC_POR_ORDEN[i]??0.25}));
+};
 const NIVEL_EMOJI={Principiante:'🌱',Intermedio:'🌿',Avanzado:'🔥'};
 
 // ─── LOGO ───────────────────────────────────────────────────────────────────
@@ -438,282 +457,298 @@ const REHAB_DB={
 
 // ─── BASE DE EJERCICIOS ─────────────────────────────────────────────────────
 const DB0=[
-  {id:'m01',nombre:'Rotación torácica en cuadrupedia',bloque:'movilidad',musculos:'Columna torácica, intercostales',contraccion:'Dinámica activa',patron:'Rotación',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Rotación torácica con carga'},
-  {id:'m02',nombre:'Hip 90/90 stretch',bloque:'movilidad',musculos:'Cadera, piriforme, aductores',contraccion:'Estiramiento pasivo',patron:'Movilidad de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Hip 90/90 con inclinación'},
-  {id:'m03',nombre:"World's greatest stretch",bloque:'movilidad',musculos:'Cadera, pectoral, columna',contraccion:'Dinámica activa',patron:'Movilidad global',nivel:'Intermedio',equipo:'Suelo',regresion:'Lunge estático con rotación',progresion:"World's greatest con peso"},
-  {id:'m04',nombre:'Cat-camel',bloque:'movilidad',musculos:'Columna lumbar y torácica',contraccion:'Dinámica activa',patron:'Flexo-extensión columna',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Cat-camel con carga distal'},
-  {id:'m05',nombre:'Apertura de cadera en decúbito',bloque:'movilidad',musculos:'Cadera, aductores, glúteo',contraccion:'Estiramiento activo',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'m02'},
-  {id:'m06',nombre:'Movilidad glenohumeral con banda',bloque:'movilidad',musculos:'Hombro, manguito rotador',contraccion:'Dinámica activa',patron:'Rotación de hombro',nivel:'Principiante',equipo:'Banda elástica',regresion:'Círculos libres de hombro',progresion:'m12'},
-  {id:'m07',nombre:'Círculos de cadera bipedestación',bloque:'movilidad',musculos:'Cadera, glúteo, lumbar',contraccion:'Dinámica activa',patron:'Circunducción de cadera',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Círculos con carga'},
-  {id:'m08',nombre:'Estiramiento de tobillo en pared',bloque:'movilidad',musculos:'Gemelo, sóleo, tobillo',contraccion:'Estiramiento pasivo',patron:'Dorsiflexión',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Sentadilla profunda talones libres'},
-  {id:'m09',nombre:'Extensión columna en foam roller',bloque:'movilidad',musculos:'Columna torácica, intercostales',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'Extensión con mancuerna overhead'},
-  {id:'m10',nombre:'Pass-through con palo',bloque:'movilidad',musculos:'Hombros, pectoral, dorsal',contraccion:'Dinámica activa',patron:'Tirón/Empuje overhead',nivel:'Principiante',equipo:'Palo/bastón',regresion:'Apertura hombros en pared',progresion:'Pass-through con banda'},
-  {id:'m11',nombre:'Movilidad de muñeca en cuadrupedia',bloque:'movilidad',musculos:'Muñeca, antebrazo',contraccion:'Dinámica activa',patron:'Flexo-extensión de muñeca',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Carga progresiva en muñeca'},
-  {id:'m12',nombre:'Rotación externa glenohumeral pared',bloque:'movilidad',musculos:'Infraespinoso, redondo menor',contraccion:'Dinámica activa',patron:'Rotación externa',nivel:'Intermedio',equipo:'Pared',regresion:'m06',progresion:'Rotación externa con banda'},
-  {id:'a01',nombre:'Puente de glúteo isométrico',bloque:'activacion',musculos:'Glúteo mayor, isquiotibiales',contraccion:'Isométrica',patron:'Empuje de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'a02'},
-  {id:'a02',nombre:'Puente de glúteo dinámico',bloque:'activacion',musculos:'Glúteo mayor, isquiotibiales, core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'a01',progresion:'Hip thrust con carga'},
-  {id:'a03',nombre:'Clamshell con banda',bloque:'activacion',musculos:'Glúteo medio, piriforme',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Banda elástica',regresion:'Clamshell sin banda',progresion:'Monster walk'},
-  {id:'a04',nombre:'Monster walk con banda',bloque:'activacion',musculos:'Glúteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción en carga',nivel:'Principiante',equipo:'Banda elástica',regresion:'a03',progresion:'Lateral band walk con squat'},
-  {id:'a05',nombre:'Bird dog',bloque:'activacion',musculos:'Core, glúteo, estabilizadores columna',contraccion:'Isométrica-concéntrica',patron:'Estabilización anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Bird dog parcial',progresion:'Bird dog con carga distal'},
-  {id:'a06',nombre:'Dead bug',bloque:'activacion',musculos:'Core profundo, transverso abdominal',contraccion:'Isométrica-concéntrica',patron:'Estabilización anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Dead bug rodilla flex.',progresion:'Dead bug con banda'},
-  {id:'a07',nombre:'Face pull con banda',bloque:'activacion',musculos:'Deltoides posterior, manguito rotador',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Principiante',equipo:'Banda elástica',regresion:'Retracción escapular pared',progresion:'Face pull en polea'},
-  {id:'a08',nombre:'Rotación externa con banda',bloque:'activacion',musculos:'Infraespinoso, redondo menor',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa',nivel:'Principiante',equipo:'Banda elástica',regresion:'Rotación externa isométrica',progresion:'Face pull con polea'},
+  {id:'m01',nombre:'Rotación torácica en cuadrupedia',bloque:'movilidad',musculos:'Columna toracica, Intercostal',contraccion:'Dinámica activa',patron:'Rotación',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Rotación torácica con carga'},
+  {id:'m02',nombre:'Hip 90/90 stretch',bloque:'movilidad',musculos:'Cadera, Piriforme, Aductor',contraccion:'Estiramiento pasivo',patron:'Movilidad de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Hip 90/90 con inclinación'},
+  {id:'m03',nombre:"World's greatest stretch",bloque:'movilidad',musculos:'Cadera, Pectoral, Columna',contraccion:'Dinámica activa',patron:'Movilidad global',nivel:'Intermedio',equipo:'Suelo',regresion:'Lunge estático con rotación',progresion:"World's greatest con peso"},
+  {id:'m04',nombre:'Cat-camel',bloque:'movilidad',musculos:'Columna lumbar y toracica',contraccion:'Dinámica activa',patron:'Flexo-extensión columna',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Cat-camel con carga distal'},
+  {id:'m05',nombre:'Apertura de cadera en decúbito',bloque:'movilidad',musculos:'Cadera, Aductor, Gluteo',contraccion:'Estiramiento activo',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'m02'},
+  {id:'m06',nombre:'Movilidad glenohumeral con banda',bloque:'movilidad',musculos:'Hombro, Manguito rotador',contraccion:'Dinámica activa',patron:'Rotación de hombro',nivel:'Principiante',equipo:'Banda elástica',regresion:'Círculos libres de hombro',progresion:'m12'},
+  {id:'m07',nombre:'Círculos de cadera bipedestación',bloque:'movilidad',musculos:'Cadera, Gluteo, Lumbar',contraccion:'Dinámica activa',patron:'Circunducción de cadera',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Círculos con carga'},
+  {id:'m08',nombre:'Estiramiento de tobillo en pared',bloque:'movilidad',musculos:'Gemelo, Soleo, Tobillo',contraccion:'Estiramiento pasivo',patron:'Dorsiflexión',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Sentadilla profunda talones libres'},
+  {id:'m09',nombre:'Extensión columna en foam roller',bloque:'movilidad',musculos:'Columna toracica, Intercostal',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'Extensión con mancuerna overhead'},
+  {id:'m10',nombre:'Pass-through con palo',bloque:'movilidad',musculos:'Hombro, Pectoral, Dorsal',contraccion:'Dinámica activa',patron:'Tirón/Empuje overhead',nivel:'Principiante',equipo:'Palo/bastón',regresion:'Apertura hombros en pared',progresion:'Pass-through con banda'},
+  {id:'m11',nombre:'Movilidad de muñeca en cuadrupedia',bloque:'movilidad',musculos:'Muñeca, Antebrazo',contraccion:'Dinámica activa',patron:'Flexo-extensión de muñeca',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Carga progresiva en muñeca'},
+  {id:'m12',nombre:'Rotación externa glenohumeral pared',bloque:'movilidad',musculos:'Infraespinoso, Redondo menor',contraccion:'Dinámica activa',patron:'Rotación externa',nivel:'Intermedio',equipo:'Pared',regresion:'m06',progresion:'Rotación externa con banda'},
+  {id:'a01',nombre:'Puente de glúteo isométrico',bloque:'activacion',musculos:'Gluteo mayor, Isquiotibial',contraccion:'Isométrica',patron:'Empuje de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'a02'},
+  {id:'a02',nombre:'Puente de glúteo dinámico',bloque:'activacion',musculos:'Gluteo mayor, Isquiotibial, Core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'a01',progresion:'Hip thrust con carga'},
+  {id:'a03',nombre:'Clamshell con banda',bloque:'activacion',musculos:'Gluteo medio, Piriforme',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Banda elástica',regresion:'Clamshell sin banda',progresion:'Monster walk'},
+  {id:'a04',nombre:'Monster walk con banda',bloque:'activacion',musculos:'Gluteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción en carga',nivel:'Principiante',equipo:'Banda elástica',regresion:'a03',progresion:'Lateral band walk con squat'},
+  {id:'a05',nombre:'Bird dog',bloque:'activacion',musculos:'Core, Gluteo, Estabilizador de columna',contraccion:'Isométrica-concéntrica',patron:'Estabilización anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Bird dog parcial',progresion:'Bird dog con carga distal'},
+  {id:'a06',nombre:'Dead bug',bloque:'activacion',musculos:'Core profundo, Transverso abdominal',contraccion:'Isométrica-concéntrica',patron:'Estabilización anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Dead bug rodilla flex.',progresion:'Dead bug con banda'},
+  {id:'a07',nombre:'Face pull con banda',bloque:'activacion',musculos:'Deltoide posterior, Manguito rotador',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Principiante',equipo:'Banda elástica',regresion:'Retracción escapular pared',progresion:'Face pull en polea'},
+  {id:'a08',nombre:'Rotación externa con banda',bloque:'activacion',musculos:'Infraespinoso, Redondo menor',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa',nivel:'Principiante',equipo:'Banda elástica',regresion:'Rotación externa isométrica',progresion:'Face pull con polea'},
   {id:'a09',nombre:'Activación de serrato en pared',bloque:'activacion',musculos:'Serrato anterior',contraccion:'Concéntrica-isométrica',patron:'Protracción escapular',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Serratus push-up'},
-  {id:'a10',nombre:'Plank shoulder tap',bloque:'activacion',musculos:'Core, deltoides, estabilizadores',contraccion:'Isométrica-dinámica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Suelo',regresion:'Plank estático',progresion:'Shoulder tap con carga'},
-  {id:'a11',nombre:'Activación glúteo medio lateral',bloque:'activacion',musculos:'Glúteo medio, TFL',contraccion:'Isométrica',patron:'Abducción en decúbito',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'a03'},
-  {id:'a12',nombre:'Squat to stand',bloque:'activacion',musculos:'Isquiotibiales, cadera, columna',contraccion:'Dinámica activa',patron:'Bisagra + sentadilla',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Squat to stand con rotación'},
-  {id:'zm01',nombre:'Plancha frontal',bloque:'zona_media',musculos:'Transverso abdominal, recto, glúteo',contraccion:'Isométrica',patron:'Anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Plancha en rodillas',progresion:'Plancha con elevación de pierna'},
-  {id:'zm02',nombre:'Plancha lateral',bloque:'zona_media',musculos:'Oblicuo, cuadrado lumbar, glúteo medio',contraccion:'Isométrica',patron:'Anti-flexión lateral',nivel:'Principiante',equipo:'Suelo',regresion:'Plancha lateral rodillas',progresion:'Plancha lateral con rotación'},
-  {id:'zm03',nombre:'Dead bug extensión completa',bloque:'zona_media',musculos:'Transverso abdominal, psoas, core',contraccion:'Isométrica-concéntrica',patron:'Anti-extensión',nivel:'Intermedio',equipo:'Suelo',regresion:'a06',progresion:'Dead bug con KB'},
-  {id:'zm04',nombre:'Rueda abdominal (rollout)',bloque:'zona_media',musculos:'Recto abdominal, dorsal, serrato',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión dinámica',nivel:'Avanzado',equipo:'Rueda abdominal',regresion:'Rollout en fitball',progresion:'Rollout de pie'},
-  {id:'zm05',nombre:'Hollow body hold',bloque:'zona_media',musculos:'Core completo, psoas, recto abdominal',contraccion:'Isométrica',patron:'Flexión lumbar activa',nivel:'Intermedio',equipo:'Suelo',regresion:'Hollow body con rodillas',progresion:'Hollow body rock'},
-  {id:'zm06',nombre:'Pallof press dinámico',bloque:'zona_media',musculos:'Oblicuos, transverso, estabilizadores',contraccion:'Concéntrica-isométrica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Polea/banda',regresion:'Pallof press isométrico',progresion:'Pallof press overhead'},
-  {id:'zm07',nombre:'Russian twist con carga',bloque:'zona_media',musculos:'Oblicuos, recto abdominal',contraccion:'Concéntrica-excéntrica',patron:'Rotación',nivel:'Intermedio',equipo:'Mancuerna/disco',regresion:'Russian twist sin carga',progresion:'Russian twist balón medicinal'},
-  {id:'zm08',nombre:'Dragon flag',bloque:'zona_media',musculos:'Core completo, serrato, glúteo',contraccion:'Excéntrica-isométrica',patron:'Anti-extensión extrema',nivel:'Avanzado',equipo:'Banco',regresion:'zm05',progresion:'Dragon flag completo'},
-  {id:'zm09',nombre:'L-sit en paralelas',bloque:'zona_media',musculos:'Psoas, recto abdominal, tríceps',contraccion:'Isométrica',patron:'Compresión de cadera',nivel:'Avanzado',equipo:'Paralelas',regresion:'L-sit en suelo',progresion:'L-sit en argollas'},
-  {id:'zm10',nombre:'Rollout en fitball',bloque:'zona_media',musculos:'Core, dorsal, serrato',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión',nivel:'Intermedio',equipo:'Fitball',regresion:'Rollout parcial',progresion:'zm04'},
-  {id:'zm11',nombre:'Anti-rotación con cable',bloque:'zona_media',musculos:'Oblicuos, transverso, erector',contraccion:'Isométrica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Polea',regresion:'zm06',progresion:'Anti-rot. overhead'},
-  {id:'zm12',nombre:'Stir the pot en fitball',bloque:'zona_media',musculos:'Core completo, hombros',contraccion:'Isométrica-dinámica',patron:'Anti-ext. con rotación',nivel:'Avanzado',equipo:'Fitball',regresion:'zm01',progresion:'Stir the pot con carga'},
-  {id:'pr01',nombre:'Nordic curl',bloque:'prev_rehab',musculos:'Isquiotibiales',contraccion:'Excéntrica',patron:'Bisagra',nivel:'Avanzado',equipo:'Banco/sujeción',regresion:'Excéntrico parcial',progresion:'Nordic curl completo'},
-  {id:'pr02',nombre:'Elevación de talón excéntrica',bloque:'prev_rehab',musculos:'Gemelo, sóleo',contraccion:'Excéntrica',patron:'Plantar-flexión',nivel:'Principiante',equipo:'Escalón',regresion:'Excéntrico bilateral',progresion:'Excéntrico con carga'},
+  {id:'a10',nombre:'Plank shoulder tap',bloque:'activacion',musculos:'Core, Deltoide, Estabilizador',contraccion:'Isométrica-dinámica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Suelo',regresion:'Plank estático',progresion:'Shoulder tap con carga'},
+  {id:'a11',nombre:'Activación glúteo medio lateral',bloque:'activacion',musculos:'Gluteo medio, TFL',contraccion:'Isométrica',patron:'Abducción en decúbito',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'a03'},
+  {id:'a12',nombre:'Squat to stand',bloque:'activacion',musculos:'Isquiotibiales, Cadera, Columna',contraccion:'Dinámica activa',patron:'Bisagra + sentadilla',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Squat to stand con rotación'},
+  {id:'zm01',nombre:'Plancha frontal',bloque:'zona_media',musculos:'Transverso abdominal, Recto, Gluteo',contraccion:'Isométrica',patron:'Anti-extensión',nivel:'Principiante',equipo:'Suelo',regresion:'Plancha en rodillas',progresion:'Plancha con elevación de pierna'},
+  {id:'zm02',nombre:'Plancha lateral',bloque:'zona_media',musculos:'Oblicuo, Cuadrado lumbar, Gluteo medio',contraccion:'Isométrica',patron:'Anti-flexión lateral',nivel:'Principiante',equipo:'Suelo',regresion:'Plancha lateral rodillas',progresion:'Plancha lateral con rotación'},
+  {id:'zm03',nombre:'Dead bug extensión completa',bloque:'zona_media',musculos:'Transverso abdominal, Psoas, Core',contraccion:'Isométrica-concéntrica',patron:'Anti-extensión',nivel:'Intermedio',equipo:'Suelo',regresion:'a06',progresion:'Dead bug con KB'},
+  {id:'zm04',nombre:'Rueda abdominal (rollout)',bloque:'zona_media',musculos:'Recto abdominal, Dorsal, Serrato',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión dinámica',nivel:'Avanzado',equipo:'Rueda abdominal',regresion:'Rollout en fitball',progresion:'Rollout de pie'},
+  {id:'zm05',nombre:'Hollow body hold',bloque:'zona_media',musculos:'Core completo, Psoas, Recto abdominal',contraccion:'Isométrica',patron:'Flexión lumbar activa',nivel:'Intermedio',equipo:'Suelo',regresion:'Hollow body con rodillas',progresion:'Hollow body rock'},
+  {id:'zm06',nombre:'Pallof press dinámico',bloque:'zona_media',musculos:'Oblicuo, Transverso, Estabilizador',contraccion:'Concéntrica-isométrica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Polea/banda',regresion:'Pallof press isométrico',progresion:'Pallof press overhead'},
+  {id:'zm07',nombre:'Russian twist con carga',bloque:'zona_media',musculos:'Oblicuo, Recto abdominal',contraccion:'Concéntrica-excéntrica',patron:'Rotación',nivel:'Intermedio',equipo:'Mancuerna/disco',regresion:'Russian twist sin carga',progresion:'Russian twist balón medicinal'},
+  {id:'zm08',nombre:'Dragon flag',bloque:'zona_media',musculos:'Core completo, Serrato, Gluteo',contraccion:'Excéntrica-isométrica',patron:'Anti-extensión extrema',nivel:'Avanzado',equipo:'Banco',regresion:'zm05',progresion:'Dragon flag completo'},
+  {id:'zm09',nombre:'L-sit en paralelas',bloque:'zona_media',musculos:'Psoas, Recto abdominal, Triceps',contraccion:'Isométrica',patron:'Compresión de cadera',nivel:'Avanzado',equipo:'Paralelas',regresion:'L-sit en suelo',progresion:'L-sit en argollas'},
+  {id:'zm10',nombre:'Rollout en fitball',bloque:'zona_media',musculos:'Core, Dorsal, Serrato',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión',nivel:'Intermedio',equipo:'Fitball',regresion:'Rollout parcial',progresion:'zm04'},
+  {id:'zm11',nombre:'Anti-rotación con cable',bloque:'zona_media',musculos:'Oblicuo, Transverso, Erector',contraccion:'Isométrica',patron:'Anti-rotación',nivel:'Intermedio',equipo:'Polea',regresion:'zm06',progresion:'Anti-rot. overhead'},
+  {id:'zm12',nombre:'Stir the pot en fitball',bloque:'zona_media',musculos:'Core completo, Hombro',contraccion:'Isométrica-dinámica',patron:'Anti-ext. con rotación',nivel:'Avanzado',equipo:'Fitball',regresion:'zm01',progresion:'Stir the pot con carga'},
+  {id:'pr01',nombre:'Nordic curl',bloque:'prev_rehab',musculos:'Isquiotibial',contraccion:'Excéntrica',patron:'Bisagra',nivel:'Avanzado',equipo:'Banco/sujeción',regresion:'Excéntrico parcial',progresion:'Nordic curl completo'},
+  {id:'pr02',nombre:'Elevación de talón excéntrica',bloque:'prev_rehab',musculos:'Gemelo, Soleo',contraccion:'Excéntrica',patron:'Plantar-flexión',nivel:'Principiante',equipo:'Escalón',regresion:'Excéntrico bilateral',progresion:'Excéntrico con carga'},
   {id:'pr03',nombre:'Fortalecimiento VMO terminal',bloque:'prev_rehab',musculos:'Vasto medial oblicuo',contraccion:'Concéntrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Banda elástica',regresion:'Isométrico cuádriceps',progresion:'Extensión máquina'},
   {id:'pr04',nombre:'Rotación de hombro isométrica',bloque:'prev_rehab',musculos:'Manguito rotador',contraccion:'Isométrica',patron:'Rotación de hombro',nivel:'Principiante',equipo:'Pared/banda',regresion:'',progresion:'Rotación con carga externa'},
-  {id:'pr05',nombre:'Ejercicio de Copenhague',bloque:'prev_rehab',musculos:'Aductores, core',contraccion:'Isométrica-concéntrica',patron:'Aducción de cadera',nivel:'Intermedio',equipo:'Banco',regresion:'Copenhague parcial',progresion:'Copenhague con carga'},
-  {id:'pr06',nombre:'Y/T/W en fitball o inclinado',bloque:'prev_rehab',musculos:'Deltoides post., romboides, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Retracción escapular',nivel:'Principiante',equipo:'Fitball/banco',regresion:'Y/T/W en pared',progresion:'Y/T/W con mancuernas'},
-  {id:'pr07',nombre:'Hip hinge con palo',bloque:'prev_rehab',musculos:'Glúteo, isquiotibiales, erector',contraccion:'Excéntrica-concéntrica',patron:'Bisagra',nivel:'Principiante',equipo:'Palo',regresion:'',progresion:'Peso muerto rumano sin carga'},
-  {id:'pr08',nombre:'Retracción escapular con banda',bloque:'prev_rehab',musculos:'Romboides, trapecio medio',contraccion:'Concéntrica-isométrica',patron:'Retracción escapular',nivel:'Principiante',equipo:'Banda elástica',regresion:'Retracción en pared',progresion:'Remo énfasis escapular'},
-  {id:'pr09',nombre:'Isométrico cuádriceps arco limitado',bloque:'prev_rehab',musculos:'Cuádriceps, VMO',contraccion:'Isométrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'pr03'},
-  {id:'pr10',nombre:'Abducción de cadera en decúbito',bloque:'prev_rehab',musculos:'Glúteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Abducción con banda'},
-  {id:'pr11',nombre:'Reeducación patrón de marcha',bloque:'prev_rehab',musculos:'Cadena cinética global',contraccion:'Dinámica funcional',patron:'Marcha',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Marcha con carga'},
-  {id:'pr12',nombre:'Apertura de hombro en pared',bloque:'prev_rehab',musculos:'Pectoral, bíceps, cápsula ant.',contraccion:'Estiramiento pasivo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Estiramiento con banda'},
-  {id:'pt01',nombre:'Jump squat',bloque:'potencia',musculos:'Cuádriceps, glúteo, gemelo',contraccion:'Explosiva concéntrica',patron:'Empuje de piernas con salto',nivel:'Intermedio',equipo:'Ninguno',regresion:'Squat elevación puntillas',progresion:'Jump squat con carga'},
-  {id:'pt02',nombre:'Box jump',bloque:'potencia',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Explosiva concéntrica',patron:'Empuje vertical pliométrico',nivel:'Intermedio',equipo:'Cajón pliométrico',regresion:'pt01',progresion:'Depth jump'},
-  {id:'pt03',nombre:'Broad jump',bloque:'potencia',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Explosiva concéntrica',patron:'Empuje horizontal pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'pt01',progresion:'Triple broad jump'},
-  {id:'pt04',nombre:'Burpee con salto',bloque:'potencia',musculos:'Cuerpo completo',contraccion:'Explosiva-dinámica',patron:'Movimiento global con salto',nivel:'Intermedio',equipo:'Ninguno',regresion:'Burpee sin salto',progresion:'Burpee con box jump'},
-  {id:'pt05',nombre:'Salto al cajón unilateral',bloque:'potencia',musculos:'Cuádriceps, glúteo, estabilizadores',contraccion:'Explosiva unilateral',patron:'Empuje unilateral con salto',nivel:'Avanzado',equipo:'Cajón',regresion:'pt01',progresion:'Depth jump unilateral'},
-  {id:'pt06',nombre:'Lanzamiento balón medicinal',bloque:'potencia',musculos:'Core, pectoral, hombros',contraccion:'Explosiva rotacional',patron:'Empuje con rotación',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'Pase de pecho estático',progresion:'Slam overhead'},
-  {id:'pt07',nombre:'Push-up explosivo (clapping)',bloque:'potencia',musculos:'Pectoral, tríceps, hombros',contraccion:'Explosiva concéntrica',patron:'Empuje horizontal pliométrico',nivel:'Avanzado',equipo:'Suelo',regresion:'Push-up con elevación',progresion:'Clapping con déficit'},
-  {id:'pt08',nombre:'KB swing',bloque:'potencia',musculos:'Glúteo, isquiotibiales, core, hombros',contraccion:'Explosiva-bisagra',patron:'Bisagra de cadera potente',nivel:'Intermedio',equipo:'Kettlebell',regresion:'Hip hinge sin carga',progresion:'KB swing americano'},
-  {id:'pt09',nombre:'Power clean desde suelo',bloque:'potencia',musculos:'Cadena posterior, trapecio',contraccion:'Explosiva multiarticular',patron:'Triple extensión bilateral',nivel:'Avanzado',equipo:'Barra',regresion:'Clean desde colgante',progresion:'Power clean + push press'},
-  {id:'pt10',nombre:'Drop jump',bloque:'potencia',musculos:'Cuádriceps, gemelo, isquiotibiales',contraccion:'Reactiva pliométrica',patron:'Ciclo estiramiento-acortamiento pliométrico',nivel:'Avanzado',equipo:'Cajón',regresion:'pt02',progresion:'Depth jump con rebote'},
-  {id:'pt11',nombre:'Sprint de aceleración 10-20m',bloque:'potencia',musculos:'Cuádriceps, isquiotibiales, glúteo',contraccion:'Explosiva reactiva',patron:'Carrera de velocidad',nivel:'Intermedio',equipo:'Espacio abierto',regresion:'Aceleración de marcha',progresion:'Sprint resistido con trineo'},
-  {id:'pt12',nombre:'Salto lateral pliométrico (skaters)',bloque:'potencia',musculos:'Glúteo medio, aductores, cuádriceps',contraccion:'Explosiva lateral',patron:'Empuje lateral pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'Paso lateral controlado',progresion:'Skaters con carga'},
-  {id:'f01',nombre:'Sentadilla trasera con barra',bloque:'fuerza',musculos:'Cuádriceps, glúteo, isquiotibiales, core',contraccion:'Concéntrica-excéntrica',patron:'Empuje bilateral piernas carga axial',nivel:'Intermedio',equipo:'Barra, rack',regresion:'Sentadilla goblet',progresion:'Sentadilla con pausa'},
-  {id:'f02',nombre:'Peso muerto convencional',bloque:'fuerza',musculos:'Isquiotibiales, glúteo, erector, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Bisagra bilateral carga axial',nivel:'Intermedio',equipo:'Barra',regresion:'Peso muerto rumano',progresion:'Peso muerto déficit'},
-  {id:'f03',nombre:'Press banca plano con barra',bloque:'fuerza',musculos:'Pectoral mayor, tríceps, deltoides ant.',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal',nivel:'Intermedio',equipo:'Barra, banco, rack',regresion:'Press con mancuernas',progresion:'Press banca con pausa'},
-  {id:'f04',nombre:'Press militar con barra',bloque:'fuerza',musculos:'Deltoides, tríceps, trapecio, core',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical overhead',nivel:'Intermedio',equipo:'Barra, rack',regresion:'Press con mancuernas',progresion:'Press jerk'},
-  {id:'f05',nombre:'Dominada lastrada',bloque:'fuerza',musculos:'Dorsal, bíceps, romboides, core',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical',nivel:'Avanzado',equipo:'Barra + lastre',regresion:'Dominada asistida',progresion:'Dominada con resistencia'},
-  {id:'f06',nombre:'Remo con barra Pendlay',bloque:'fuerza',musculos:'Dorsal, romboides, bíceps, core',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Intermedio',equipo:'Barra',regresion:'Remo con mancuerna',progresion:'Remo Yates'},
-  {id:'f07',nombre:'Sentadilla frontal',bloque:'fuerza',musculos:'Cuádriceps, core, glúteo',contraccion:'Concéntrica-excéntrica',patron:'Empuje bilateral piernas carga axial',nivel:'Avanzado',equipo:'Barra, rack',regresion:'f01',progresion:'Sentadilla frontal con pausa'},
-  {id:'f08',nombre:'Hip thrust con barra',bloque:'fuerza',musculos:'Glúteo mayor, isquiotibiales, core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera',nivel:'Intermedio',equipo:'Barra, banco',regresion:'Puente de glúteo',progresion:'Hip thrust unilateral'},
-  {id:'f09',nombre:'Peso muerto rumano',bloque:'fuerza',musculos:'Isquiotibiales, glúteo, erector',contraccion:'Excéntrica-concéntrica',patron:'Bisagra bilateral',nivel:'Intermedio',equipo:'Barra/mancuernas',regresion:'Hip hinge con palo',progresion:'f02'},
-  {id:'f10',nombre:'Press inclinado con barra',bloque:'fuerza',musculos:'Pectoral superior, deltoides, tríceps',contraccion:'Concéntrica-excéntrica',patron:'Empuje diagonal',nivel:'Intermedio',equipo:'Barra, banco inclinado',regresion:'f03',progresion:'Press inclinado con pausa'},
-  {id:'f11',nombre:'Zancada búlgara con barra',bloque:'fuerza',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Empuje unilateral',nivel:'Avanzado',equipo:'Barra, banco',regresion:'Zancada con mancuernas',progresion:'Zancada búlgara con pausa'},
-  {id:'f12',nombre:'Fondos lastrados en paralelas',bloque:'fuerza',musculos:'Pectoral inf., tríceps, deltoides',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical descendente',nivel:'Avanzado',equipo:'Paralelas + lastre',regresion:'Fondos sin lastre',progresion:'Fondos con déficit'},
-  {id:'ac01',nombre:'Curl de bíceps con barra',bloque:'accesorios',musculos:'Bíceps, braquial, braquiorradial',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo',nivel:'Principiante',equipo:'Barra',regresion:'Curl con mancuernas',progresion:'Curl predicador barra EZ'},
-  {id:'ac02',nombre:'Extensión de tríceps en polea',bloque:'accesorios',musculos:'Tríceps (tres cabezas)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo',nivel:'Principiante',equipo:'Polea alta, cuerda',regresion:'Press francés mancuerna',progresion:'Extensión overhead polea'},
+  {id:'pr05',nombre:'Ejercicio de Copenhague',bloque:'prev_rehab',musculos:'Aductor, Core',contraccion:'Isométrica-concéntrica',patron:'Aducción de cadera',nivel:'Intermedio',equipo:'Banco',regresion:'Copenhague parcial',progresion:'Copenhague con carga'},
+  {id:'pr06',nombre:'Y/T/W en fitball o inclinado',bloque:'prev_rehab',musculos:'Deltoide posterior, Romboide, Trapecio',contraccion:'Concéntrica-excéntrica',patron:'Retracción escapular',nivel:'Principiante',equipo:'Fitball/banco',regresion:'Y/T/W en pared',progresion:'Y/T/W con mancuernas'},
+  {id:'pr07',nombre:'Hip hinge con palo',bloque:'prev_rehab',musculos:'Gluteo, Isquiotibial, Erector',contraccion:'Excéntrica-concéntrica',patron:'Bisagra',nivel:'Principiante',equipo:'Palo',regresion:'',progresion:'Peso muerto rumano sin carga'},
+  {id:'pr08',nombre:'Retracción escapular con banda',bloque:'prev_rehab',musculos:'Romboide, Trapecio medio',contraccion:'Concéntrica-isométrica',patron:'Retracción escapular',nivel:'Principiante',equipo:'Banda elástica',regresion:'Retracción en pared',progresion:'Remo énfasis escapular'},
+  {id:'pr09',nombre:'Isométrico cuádriceps arco limitado',bloque:'prev_rehab',musculos:'Cuadriceps, VMO',contraccion:'Isométrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'pr03'},
+  {id:'pr10',nombre:'Abducción de cadera en decúbito',bloque:'prev_rehab',musculos:'Gluteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Abducción con banda'},
+  {id:'pr11',nombre:'Reeducación patrón de marcha',bloque:'prev_rehab',musculos:'Cadena cinetica global',contraccion:'Dinámica funcional',patron:'Marcha',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Marcha con carga'},
+  {id:'pr12',nombre:'Apertura de hombro en pared',bloque:'prev_rehab',musculos:'Pectoral, Biceps, Capsula anterior',contraccion:'Estiramiento pasivo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Estiramiento con banda'},
+  {id:'pt01',nombre:'Jump squat',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Explosiva concéntrica',patron:'Empuje de piernas con salto',nivel:'Intermedio',equipo:'Ninguno',regresion:'Squat elevación puntillas',progresion:'Jump squat con carga'},
+  {id:'pt02',nombre:'Box jump',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Explosiva concéntrica',patron:'Empuje vertical pliométrico',nivel:'Intermedio',equipo:'Cajón pliométrico',regresion:'pt01',progresion:'Depth jump'},
+  {id:'pt03',nombre:'Broad jump',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Explosiva concéntrica',patron:'Empuje horizontal pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'pt01',progresion:'Triple broad jump'},
+  {id:'pt04',nombre:'Burpee con salto',bloque:'pliometria',musculos:'Cuerpo completo',contraccion:'Explosiva-dinámica',patron:'Movimiento global con salto',nivel:'Intermedio',equipo:'Ninguno',regresion:'Burpee sin salto',progresion:'Burpee con box jump'},
+  {id:'pt05',nombre:'Salto al cajón unilateral',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Estabilizador',contraccion:'Explosiva unilateral',patron:'Empuje unilateral con salto',nivel:'Avanzado',equipo:'Cajón',regresion:'pt01',progresion:'Depth jump unilateral'},
+  {id:'pt06',nombre:'Lanzamiento balón medicinal',bloque:'potencia',musculos:'Core, Pectoral, Hombro',contraccion:'Explosiva rotacional',patron:'Empuje con rotación',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'Pase de pecho estático',progresion:'Slam overhead'},
+  {id:'pt07',nombre:'Push-up explosivo (clapping)',bloque:'pliometria',musculos:'Pectoral, Triceps, Hombro',contraccion:'Explosiva concéntrica',patron:'Empuje horizontal pliométrico',nivel:'Avanzado',equipo:'Suelo',regresion:'Push-up con elevación',progresion:'Clapping con déficit'},
+  {id:'pt08',nombre:'KB swing',bloque:'potencia',musculos:'Gluteo, Isquiotibial, Core, Hombro',contraccion:'Explosiva-bisagra',patron:'Bisagra de cadera potente',nivel:'Intermedio',equipo:'Kettlebell',regresion:'Hip hinge sin carga',progresion:'KB swing americano'},
+  {id:'pt09',nombre:'Power clean desde suelo',bloque:'potencia',musculos:'Cadena posterior, Trapecio',contraccion:'Explosiva multiarticular',patron:'Triple extensión bilateral',nivel:'Avanzado',equipo:'Barra',regresion:'Clean desde colgante',progresion:'Power clean + push press'},
+  {id:'pt10',nombre:'Drop jump',bloque:'pliometria',musculos:'Cuadriceps, Gemelo, Isquiotibial',contraccion:'Reactiva pliométrica',patron:'Ciclo estiramiento-acortamiento pliométrico',nivel:'Avanzado',equipo:'Cajón',regresion:'pt02',progresion:'Depth jump con rebote'},
+  {id:'pt11',nombre:'Sprint de aceleración 10-20m',bloque:'potencia',musculos:'Cuadriceps, Isquiotibial, Gluteo',contraccion:'Explosiva reactiva',patron:'Carrera de velocidad',nivel:'Intermedio',equipo:'Espacio abierto',regresion:'Aceleración de marcha',progresion:'Sprint resistido con trineo'},
+  {id:'pt12',nombre:'Salto lateral pliométrico (skaters)',bloque:'pliometria',musculos:'Gluteo medio, Aductor, Cuadriceps',contraccion:'Explosiva lateral',patron:'Empuje lateral pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'Paso lateral controlado',progresion:'Skaters con carga'},
+  {id:'f01',nombre:'Sentadilla trasera con barra',bloque:'fuerza',musculos:'Cuádriceps, Glúteo, Isquiotibiales, Core',contraccion:'Concéntrica-excéntrica',patron:'Empuje bilateral piernas carga axial',nivel:'Intermedio',equipo:'Barra, rack',regresion:'Sentadilla goblet',progresion:'Sentadilla con pausa'},
+  {id:'f02',nombre:'Peso muerto convencional',bloque:'fuerza',musculos:'Isquiotibial, Gluteo, Erector, Trapecio',contraccion:'Concéntrica-excéntrica',patron:'Bisagra bilateral carga axial',nivel:'Intermedio',equipo:'Barra',regresion:'Peso muerto rumano',progresion:'Peso muerto déficit'},
+  {id:'f03',nombre:'Press banca plano con barra',bloque:'fuerza',musculos:'Pectoral mayor, Triceps, Deltoide anterior',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal',nivel:'Intermedio',equipo:'Barra, banco, rack',regresion:'Press con mancuernas',progresion:'Press banca con pausa'},
+  {id:'f04',nombre:'Press militar con barra',bloque:'fuerza',musculos:'Deltoide, Triceps, Trapecio, Core',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical overhead',nivel:'Intermedio',equipo:'Barra, rack',regresion:'Press con mancuernas',progresion:'Press jerk'},
+  {id:'f05',nombre:'Dominada lastrada',bloque:'fuerza',musculos:'Dorsal, Biceps, Romboide, Core',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical',nivel:'Avanzado',equipo:'Barra + lastre',regresion:'Dominada asistida',progresion:'Dominada con resistencia'},
+  {id:'f06',nombre:'Remo con barra Pendlay',bloque:'fuerza',musculos:'Dorsal, Romboide, Biceps, Core',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Intermedio',equipo:'Barra',regresion:'Remo con mancuerna',progresion:'Remo Yates'},
+  {id:'f07',nombre:'Sentadilla frontal',bloque:'fuerza',musculos:'Cuádriceps, Core, Glúteo',contraccion:'Concéntrica-excéntrica',patron:'Empuje bilateral piernas carga axial',nivel:'Avanzado',equipo:'Barra, rack',regresion:'f01',progresion:'Sentadilla frontal con pausa'},
+  {id:'f08',nombre:'Hip thrust con barra',bloque:'fuerza',musculos:'Gluteo mayor, Isquiotibial, Core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera',nivel:'Intermedio',equipo:'Barra, banco',regresion:'Puente de glúteo',progresion:'Hip thrust unilateral'},
+  {id:'f09',nombre:'Peso muerto rumano',bloque:'fuerza',musculos:'Isquiotibial, Gluteo, Erector',contraccion:'Excéntrica-concéntrica',patron:'Bisagra bilateral',nivel:'Intermedio',equipo:'Barra/mancuernas',regresion:'Hip hinge con palo',progresion:'f02'},
+  {id:'f10',nombre:'Press inclinado con barra',bloque:'fuerza',musculos:'Pectoral superior, Deltoide, Triceps',contraccion:'Concéntrica-excéntrica',patron:'Empuje diagonal',nivel:'Intermedio',equipo:'Barra, banco inclinado',regresion:'f03',progresion:'Press inclinado con pausa'},
+  {id:'f11',nombre:'Zancada búlgara con barra',bloque:'fuerza',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Empuje unilateral',nivel:'Avanzado',equipo:'Barra, banco',regresion:'Zancada con mancuernas',progresion:'Zancada búlgara con pausa'},
+  {id:'f12',nombre:'Fondos lastrados en paralelas',bloque:'fuerza',musculos:'Pectoral inferior, Triceps, Deltoide',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical descendente',nivel:'Avanzado',equipo:'Paralelas + lastre',regresion:'Fondos sin lastre',progresion:'Fondos con déficit'},
+  {id:'ac01',nombre:'Curl de bíceps con barra',bloque:'accesorios',musculos:'Biceps, Braquial, Braquiorradial',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo',nivel:'Principiante',equipo:'Barra',regresion:'Curl con mancuernas',progresion:'Curl predicador barra EZ'},
+  {id:'ac02',nombre:'Extensión de tríceps en polea',bloque:'accesorios',musculos:'Triceps (tres cabezas)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo',nivel:'Principiante',equipo:'Polea alta, cuerda',regresion:'Press francés mancuerna',progresion:'Extensión overhead polea'},
   {id:'ac03',nombre:'Elevaciones laterales mancuerna',bloque:'accesorios',musculos:'Deltoides medial',contraccion:'Concéntrica-excéntrica',patron:'Abducción de hombro',nivel:'Principiante',equipo:'Mancuernas',regresion:'Elevaciones con banda',progresion:'Laterales en cable'},
-  {id:'ac04',nombre:'Remo en polea baja con cuerda',bloque:'accesorios',musculos:'Romboides, trapecio medio, bíceps',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Principiante',equipo:'Polea baja',regresion:'Remo con banda',progresion:'Remo con pausa'},
+  {id:'ac04',nombre:'Remo en polea baja con cuerda',bloque:'accesorios',musculos:'Romboide, Trapecio medio, Biceps',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal',nivel:'Principiante',equipo:'Polea baja',regresion:'Remo con banda',progresion:'Remo con pausa'},
   {id:'ac05',nombre:'Aperturas en cable cruzado',bloque:'accesorios',musculos:'Pectoral mayor (fibras mediales)',contraccion:'Concéntrica-excéntrica',patron:'Aducción horizontal',nivel:'Principiante',equipo:'Cables cruzados',regresion:'Aperturas mancuernas',progresion:'Aperturas con pausa'},
-  {id:'ac06',nombre:'Curl femoral acostado en máquina',bloque:'accesorios',musculos:'Isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Flexión de rodilla',nivel:'Principiante',equipo:'Máquina curl femoral',regresion:'Curl femoral banda',progresion:'Curl femoral excéntrico'},
-  {id:'ac07',nombre:'Extensión de cuádriceps en máquina',bloque:'accesorios',musculos:'Cuádriceps (4 cabezas)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Máquina extensión',regresion:'pr03',progresion:'Extensión unilateral'},
+  {id:'ac06',nombre:'Curl femoral acostado en máquina',bloque:'accesorios',musculos:'Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Flexión de rodilla',nivel:'Principiante',equipo:'Máquina curl femoral',regresion:'Curl femoral banda',progresion:'Curl femoral excéntrico'},
+  {id:'ac07',nombre:'Extensión de cuádriceps en máquina',bloque:'accesorios',musculos:'Cuadriceps (4 cabezas)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Máquina extensión',regresion:'pr03',progresion:'Extensión unilateral'},
   {id:'ac08',nombre:'Gemelo parado en máquina',bloque:'accesorios',musculos:'Gastrocnemio',contraccion:'Concéntrica-excéntrica',patron:'Plantar-flexión',nivel:'Principiante',equipo:'Máquina gemelo',regresion:'Gemelo en escalón',progresion:'Gemelo unilateral'},
-  {id:'ac09',nombre:'Jalón al pecho agarre neutro',bloque:'accesorios',musculos:'Dorsal, bíceps, romboides',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical',nivel:'Principiante',equipo:'Polea alta',regresion:'Jalón con banda',progresion:'Dominada agarre neutro'},
-  {id:'ac10',nombre:'Press francés con mancuerna',bloque:'accesorios',musculos:'Tríceps (cabeza larga)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo overhead',nivel:'Principiante',equipo:'Mancuerna',regresion:'ac02',progresion:'Press francés barra EZ'},
-  {id:'ac11',nombre:'Pull-over en cable',bloque:'accesorios',musculos:'Dorsal, serrato, pectoral inferior',contraccion:'Concéntrica-excéntrica',patron:'Extensión de hombro',nivel:'Intermedio',equipo:'Polea alta',regresion:'Pull-over mancuerna',progresion:'Pull-over con pausa'},
-  {id:'ac12',nombre:'Curl de bíceps en predicador',bloque:'accesorios',musculos:'Bíceps (pico de contracción)',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo',nivel:'Principiante',equipo:'Banco predicador, barra',regresion:'ac01',progresion:'Predicador excéntrico'},
-  {id:'c01',nombre:'HIIT en cinta (30s/30s)',bloque:'cardio',musculos:'Cadena inf., cardiovascular',contraccion:'Dinámica cíclica',patron:'Carrera intervalada',nivel:'Intermedio',equipo:'Cinta',regresion:'Intervalos 20s/40s',progresion:'Intervalos 40s/20s'},
-  {id:'c02',nombre:'Cardio estacionario en bicicleta',bloque:'cardio',musculos:'Cuádriceps, isquiotibiales, glúteo',contraccion:'Dinámica cíclica',patron:'Pedaleo',nivel:'Principiante',equipo:'Bicicleta estática',regresion:'',progresion:'Bicicleta en intervalos'},
+  {id:'ac09',nombre:'Jalón al pecho agarre neutro',bloque:'accesorios',musculos:'Dorsal, Biceps, Romboide',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical',nivel:'Principiante',equipo:'Polea alta',regresion:'Jalón con banda',progresion:'Dominada agarre neutro'},
+  {id:'ac10',nombre:'Press francés con mancuerna',bloque:'accesorios',musculos:'Triceps (cabeza larga)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo overhead',nivel:'Principiante',equipo:'Mancuerna',regresion:'ac02',progresion:'Press francés barra EZ'},
+  {id:'ac11',nombre:'Pull-over en cable',bloque:'accesorios',musculos:'Dorsal, Serrato, Pectoral inferior',contraccion:'Concéntrica-excéntrica',patron:'Extensión de hombro',nivel:'Intermedio',equipo:'Polea alta',regresion:'Pull-over mancuerna',progresion:'Pull-over con pausa'},
+  {id:'ac12',nombre:'Curl de bíceps en predicador',bloque:'accesorios',musculos:'Biceps (pico de contraccion)',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo',nivel:'Principiante',equipo:'Banco predicador, barra',regresion:'ac01',progresion:'Predicador excéntrico'},
+  {id:'c01',nombre:'HIIT en cinta (30s/30s)',bloque:'cardio',musculos:'Cadena inferior, Cardiovascular',contraccion:'Dinámica cíclica',patron:'Carrera intervalada',nivel:'Intermedio',equipo:'Cinta',regresion:'Intervalos 20s/40s',progresion:'Intervalos 40s/20s'},
+  {id:'c02',nombre:'Cardio estacionario en bicicleta',bloque:'cardio',musculos:'Cuadriceps, Isquiotibial, Gluteo',contraccion:'Dinámica cíclica',patron:'Pedaleo',nivel:'Principiante',equipo:'Bicicleta estática',regresion:'',progresion:'Bicicleta en intervalos'},
   {id:'c03',nombre:'Remo en ergómetro',bloque:'cardio',musculos:'Cuerpo completo',contraccion:'Dinámica cíclica',patron:'Remo',nivel:'Intermedio',equipo:'Rowing machine',regresion:'Remo con pausas',progresion:'Intervalos en remo'},
-  {id:'c04',nombre:'Saltar la cuerda',bloque:'cardio',musculos:'Gemelo, coordinación, cardiovascular',contraccion:'Reactiva pliométrica',patron:'Salto cíclico con impacto',nivel:'Intermedio',equipo:'Cuerda',regresion:'Saltos sin cuerda',progresion:'Double under'},
+  {id:'c04',nombre:'Saltar la cuerda',bloque:'cardio',musculos:'Gemelo, Coordinacion, Cardiovascular',contraccion:'Reactiva pliométrica',patron:'Salto cíclico con impacto',nivel:'Intermedio',equipo:'Cuerda',regresion:'Saltos sin cuerda',progresion:'Double under'},
   {id:'c05',nombre:'Assault bike / AirBike',bloque:'cardio',musculos:'Cuerpo completo',contraccion:'Dinámica total',patron:'Ciclo push-pull + piernas',nivel:'Intermedio',equipo:'Assault bike',regresion:'c02',progresion:'Tabata assault bike'},
-  {id:'c06',nombre:'LISS caminata inclinada',bloque:'cardio',musculos:'Cuádriceps, glúteo, cardiovascular',contraccion:'Dinámica baja intensidad',patron:'Marcha',nivel:'Principiante',equipo:'Cinta',regresion:'Caminata plana',progresion:'c01'},
-  {id:'c07',nombre:'Escaladora (stepmill)',bloque:'cardio',musculos:'Glúteo, cuádriceps, cardiovascular',contraccion:'Concéntrica cíclica',patron:'Escalada',nivel:'Intermedio',equipo:'Stepmill',regresion:'c06',progresion:'Stepmill con intervalos'},
-  {id:'c08',nombre:'Tabata (20s/10s x8)',bloque:'cardio',musculos:'Variable según ejercicio',contraccion:'Explosiva-dinámica',patron:'HIIT protocolo',nivel:'Avanzado',equipo:'Variable',regresion:'c01',progresion:'Tabata doble'},
+  {id:'c06',nombre:'LISS caminata inclinada',bloque:'cardio',musculos:'Cuadriceps, Gluteo, Cardiovascular',contraccion:'Dinámica baja intensidad',patron:'Marcha',nivel:'Principiante',equipo:'Cinta',regresion:'Caminata plana',progresion:'c01'},
+  {id:'c07',nombre:'Escaladora (stepmill)',bloque:'cardio',musculos:'Gluteo, Cuadriceps, Cardiovascular',contraccion:'Concéntrica cíclica',patron:'Escalada',nivel:'Intermedio',equipo:'Stepmill',regresion:'c06',progresion:'Stepmill con intervalos'},
+  {id:'c08',nombre:'Tabata (20s/10s x8)',bloque:'cardio',musculos:'Variable segun ejercicio',contraccion:'Explosiva-dinámica',patron:'HIIT protocolo',nivel:'Avanzado',equipo:'Variable',regresion:'c01',progresion:'Tabata doble'},
   {id:'c09',nombre:'Circuito metabólico',bloque:'cardio',musculos:'Cuerpo completo',contraccion:'Dinámica multiarticular',patron:'Circuito',nivel:'Intermedio',equipo:'Variable',regresion:'Circuito con descanso',progresion:'AMRAP'},
-  {id:'c10',nombre:'Sprints en cinta (10x20m)',bloque:'cardio',musculos:'Cuádriceps, isquiotibiales, glúteo',contraccion:'Explosiva-reactiva',patron:'Sprint con impacto',nivel:'Avanzado',equipo:'Cinta',regresion:'c01',progresion:'Sprint resistido'},
-  {id:'c11',nombre:'Ciclo 30/30 en remo',bloque:'cardio',musculos:'Cuerpo completo, cardiovascular',contraccion:'Alta intensidad cíclica',patron:'Remo intervalado',nivel:'Intermedio',equipo:'Rowing machine',regresion:'c03',progresion:'Ciclo 40/20'},
+  {id:'c10',nombre:'Sprints en cinta (10x20m)',bloque:'cardio',musculos:'Cuadriceps, Isquiotibial, Gluteo',contraccion:'Explosiva-reactiva',patron:'Sprint con impacto',nivel:'Avanzado',equipo:'Cinta',regresion:'c01',progresion:'Sprint resistido'},
+  {id:'c11',nombre:'Ciclo 30/30 en remo',bloque:'cardio',musculos:'Cuerpo completo, Cardiovascular',contraccion:'Alta intensidad cíclica',patron:'Remo intervalado',nivel:'Intermedio',equipo:'Rowing machine',regresion:'c03',progresion:'Ciclo 40/20'},
   {id:'c12',nombre:'EMOM (every minute on the minute)',bloque:'cardio',musculos:'Variable',contraccion:'Dinámica intermitente',patron:'Protocolo de densidad',nivel:'Intermedio',equipo:'Variable',regresion:'AMRAP con descanso',progresion:'EMOM doble'},
-  {id:'fr01',nombre:'Estiramiento psoas en lunge',bloque:'flex_recovery',musculos:'Psoas, recto femoral',contraccion:'Estiramiento pasivo',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Estiramiento cadera decúbito',progresion:'Psoas con rotación torácica'},
-  {id:'fr02',nombre:'Estiramiento isquiotibiales con banda',bloque:'flex_recovery',musculos:'Isquiotibiales, gemelo',contraccion:'Estiramiento pasivo',patron:'Flexión de cadera',nivel:'Principiante',equipo:'Banda, suelo',regresion:'Isquios sentado',progresion:'Isquios de pie'},
-  {id:'fr03',nombre:'Estiramiento cuádriceps de pie',bloque:'flex_recovery',musculos:'Cuádriceps, recto femoral',contraccion:'Estiramiento pasivo',patron:'Flexión de rodilla',nivel:'Principiante',equipo:'Ninguno',regresion:'Estiramiento en suelo',progresion:'Unilateral con equilibrio'},
-  {id:'fr04',nombre:'Estiramiento pectoral en marco',bloque:'flex_recovery',musculos:'Pectoral mayor, deltoides ant.',contraccion:'Estiramiento pasivo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Marco/poste',regresion:'Estiramiento cruzado',progresion:'Estiramiento con rotación'},
-  {id:'fr05',nombre:'Estiramiento glúteo figura 4',bloque:'flex_recovery',musculos:'Glúteo mayor, piriforme',contraccion:'Estiramiento pasivo',patron:'Rotación externa de cadera',nivel:'Principiante',equipo:'Suelo/silla',regresion:'',progresion:'m02'},
-  {id:'fr06',nombre:'Estiramiento de dorsal en polea',bloque:'flex_recovery',musculos:'Dorsal, serrato, intercostales',contraccion:'Estiramiento activo asistido',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Polea',regresion:'Estiramiento dorsal en barra',progresion:'Estiramiento con rotación'},
-  {id:'fr07',nombre:'Foam rolling cuádriceps',bloque:'flex_recovery',musculos:'Cuádriceps, fascia anterior',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento',nivel:'Principiante',equipo:'Foam roller',regresion:'Automasaje manual',progresion:'FR focalizado en puntos'},
-  {id:'fr08',nombre:'Foam rolling columna dorsal',bloque:'flex_recovery',musculos:'Erector espinal, fascia toracolumbar',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'m09'},
-  {id:'fr09',nombre:'Foam rolling banda iliotibial',bloque:'flex_recovery',musculos:'TFL, banda iliotibial',contraccion:'Liberación miofascial',patron:'Compresión lateral',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'FR con pausa en puntos'},
-  {id:'fr10',nombre:'Estiramiento de trapecio',bloque:'flex_recovery',musculos:'Trapecio superior, escalenos',contraccion:'Estiramiento pasivo',patron:'Flexión lateral de cuello',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Estiramiento asistido'},
-  {id:'fr11',nombre:'Respiración diafragmática',bloque:'flex_recovery',musculos:'Diafragma, core profundo',contraccion:'Dinámica baja intensidad',patron:'Respiración',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Respiración con carga'},
-  {id:'fr12',nombre:"Child's pose con respiración",bloque:'flex_recovery',musculos:'Dorsal, glúteo, columna',contraccion:'Estiramiento pasivo',patron:'Flexión global',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:"Child's pose con rotación"},
-  {id:'po01',nombre:'Equilibrio monopodal estático',bloque:'propiocepcion',musculos:'Estabilizadores tobillo, glúteo, core',contraccion:'Isométrica',patron:'Estabilización unipodal',nivel:'Principiante',equipo:'Ninguno',regresion:'Equilibrio bipodal inestable',progresion:'po02'},
-  {id:'po02',nombre:'Equilibrio monopodal con perturbación',bloque:'propiocepcion',musculos:'Cadena cinética inferior, core',contraccion:'Reactiva',patron:'Estabilización reactiva',nivel:'Intermedio',equipo:'Ninguno',regresion:'po01',progresion:'Equilibrio ojos cerrados'},
-  {id:'po03',nombre:'BOSU squat',bloque:'propiocepcion',musculos:'Cuádriceps, glúteo, estabilizadores',contraccion:'Concéntrica-excéntrica',patron:'Empuje en superficie inestable',nivel:'Intermedio',equipo:'BOSU',regresion:'Squat convencional',progresion:'BOSU squat con carga'},
-  {id:'po04',nombre:'Disco de equilibrio bipedestación',bloque:'propiocepcion',musculos:'Tobillo, rodilla, cadera',contraccion:'Isométrica reactiva',patron:'Estabilización global',nivel:'Principiante',equipo:'Disco de equilibrio',regresion:'po01',progresion:'po03'},
-  {id:'po05',nombre:'Single-leg RDL sin carga',bloque:'propiocepcion',musculos:'Isquiotibiales, glúteo, estabilizadores',contraccion:'Excéntrica-concéntrica',patron:'Bisagra unilateral',nivel:'Intermedio',equipo:'Ninguno',regresion:'po01',progresion:'Single-leg RDL con mancuerna'},
-  {id:'po06',nombre:'Perturbación lateral con banda',bloque:'propiocepcion',musculos:'Glúteo medio, estabilizadores rodilla',contraccion:'Reactiva',patron:'Estabilización lateral',nivel:'Intermedio',equipo:'Banda elástica',regresion:'po04',progresion:'Perturbación con carga'},
-  {id:'po07',nombre:'Equilibrio en fitball sentado',bloque:'propiocepcion',musculos:'Core, cadera, columna',contraccion:'Isométrica',patron:'Estabilización de tronco',nivel:'Principiante',equipo:'Fitball',regresion:'Sentado en silla',progresion:'Fitball con movimiento brazos'},
-  {id:'po08',nombre:'Catch and stabilize con pelota',bloque:'propiocepcion',musculos:'Miembro superior, hombro, core',contraccion:'Reactiva',patron:'Estabilización de hombro',nivel:'Intermedio',equipo:'Pelota',regresion:'Apoyo estático en pared',progresion:'Lanzamiento en inestable'},
-  {id:'po09',nombre:'Tandem walk',bloque:'propiocepcion',musculos:'Tobillo, rodilla, cadera',contraccion:'Dinámica controlada',patron:'Marcha en línea',nivel:'Principiante',equipo:'Ninguno',regresion:'Caminata amplia',progresion:'Tandem ojos cerrados'},
-  {id:'po10',nombre:'Step-up lento con equilibrio final',bloque:'propiocepcion',musculos:'Cuádriceps, glúteo, estabilizadores',contraccion:'Concéntrica lenta',patron:'Empuje unilateral controlado',nivel:'Intermedio',equipo:'Cajón',regresion:'po01',progresion:'Step-up con carga y equilibrio'},
-  {id:'po11',nombre:'Estabilización dinámica de cadera',bloque:'propiocepcion',musculos:'Cadera, glúteo, core',contraccion:'Reactiva-isométrica',patron:'Control de cadera',nivel:'Intermedio',equipo:'Banda elástica',regresion:'Isométrico de cadera',progresion:'po06'},
-  {id:'po12',nombre:'Equilibrio inestable + perturbación visual',bloque:'propiocepcion',musculos:'Sistema vestibular, cadena cinética',contraccion:'Reactiva global',patron:'Estabilización multisensorial',nivel:'Avanzado',equipo:'BOSU/disco',regresion:'po02',progresion:'Perturbación + tarea cognitiva'},
-  {id:'fi01',nombre:'Turkish get-up',bloque:'funcional',musculos:'Hombro, core, cadera, cuádriceps',contraccion:'Dinámica multiplanar',patron:'Levantamiento del suelo',nivel:'Avanzado',equipo:'Kettlebell',regresion:'TGU sin carga',progresion:'TGU con mayor carga'},
+  {id:'fr01',nombre:'Estiramiento psoas en lunge',bloque:'flex_recovery',musculos:'Psoas, Recto femoral',contraccion:'Estiramiento pasivo',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Estiramiento cadera decúbito',progresion:'Psoas con rotación torácica'},
+  {id:'fr02',nombre:'Estiramiento isquiotibiales con banda',bloque:'flex_recovery',musculos:'Isquiotibial, Gemelo',contraccion:'Estiramiento pasivo',patron:'Flexión de cadera',nivel:'Principiante',equipo:'Banda, suelo',regresion:'Isquios sentado',progresion:'Isquios de pie'},
+  {id:'fr03',nombre:'Estiramiento cuádriceps de pie',bloque:'flex_recovery',musculos:'Cuadriceps, Recto femoral',contraccion:'Estiramiento pasivo',patron:'Flexión de rodilla',nivel:'Principiante',equipo:'Ninguno',regresion:'Estiramiento en suelo',progresion:'Unilateral con equilibrio'},
+  {id:'fr04',nombre:'Estiramiento pectoral en marco',bloque:'flex_recovery',musculos:'Pectoral mayor, Deltoide anterior',contraccion:'Estiramiento pasivo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Marco/poste',regresion:'Estiramiento cruzado',progresion:'Estiramiento con rotación'},
+  {id:'fr05',nombre:'Estiramiento glúteo figura 4',bloque:'flex_recovery',musculos:'Gluteo mayor, Piriforme',contraccion:'Estiramiento pasivo',patron:'Rotación externa de cadera',nivel:'Principiante',equipo:'Suelo/silla',regresion:'',progresion:'m02'},
+  {id:'fr06',nombre:'Estiramiento de dorsal en polea',bloque:'flex_recovery',musculos:'Dorsal, Serrato, Intercostal',contraccion:'Estiramiento activo asistido',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Polea',regresion:'Estiramiento dorsal en barra',progresion:'Estiramiento con rotación'},
+  {id:'fr07',nombre:'Foam rolling cuádriceps',bloque:'flex_recovery',musculos:'Cuadriceps, Fascia anterior',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento',nivel:'Principiante',equipo:'Foam roller',regresion:'Automasaje manual',progresion:'FR focalizado en puntos'},
+  {id:'fr08',nombre:'Foam rolling columna dorsal',bloque:'flex_recovery',musculos:'Erector espinal, Fascia toracolumbar',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'m09'},
+  {id:'fr09',nombre:'Foam rolling banda iliotibial',bloque:'flex_recovery',musculos:'TFL, Banda iliotibial',contraccion:'Liberación miofascial',patron:'Compresión lateral',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'FR con pausa en puntos'},
+  {id:'fr10',nombre:'Estiramiento de trapecio',bloque:'flex_recovery',musculos:'Trapecio superior, Escaleno',contraccion:'Estiramiento pasivo',patron:'Flexión lateral de cuello',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Estiramiento asistido'},
+  {id:'fr11',nombre:'Respiración diafragmática',bloque:'flex_recovery',musculos:'Diafragma, Core profundo',contraccion:'Dinámica baja intensidad',patron:'Respiración',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Respiración con carga'},
+  {id:'fr12',nombre:"Child's pose con respiración",bloque:'flex_recovery',musculos:'Dorsal, Gluteo, Columna',contraccion:'Estiramiento pasivo',patron:'Flexión global',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:"Child's pose con rotación"},
+  {id:'po01',nombre:'Equilibrio monopodal estático',bloque:'propiocepcion',musculos:'Estabilizador de tobillo, Gluteo, Core',contraccion:'Isométrica',patron:'Estabilización unipodal',nivel:'Principiante',equipo:'Ninguno',regresion:'Equilibrio bipodal inestable',progresion:'po02'},
+  {id:'po02',nombre:'Equilibrio monopodal con perturbación',bloque:'propiocepcion',musculos:'Cadena cinetica inferior, Core',contraccion:'Reactiva',patron:'Estabilización reactiva',nivel:'Intermedio',equipo:'Ninguno',regresion:'po01',progresion:'Equilibrio ojos cerrados'},
+  {id:'po03',nombre:'BOSU squat',bloque:'propiocepcion',musculos:'Cuadriceps, Gluteo, Estabilizador',contraccion:'Concéntrica-excéntrica',patron:'Empuje en superficie inestable',nivel:'Intermedio',equipo:'BOSU',regresion:'Squat convencional',progresion:'BOSU squat con carga'},
+  {id:'po04',nombre:'Disco de equilibrio bipedestación',bloque:'propiocepcion',musculos:'Tobillo, Rodilla, Cadera',contraccion:'Isométrica reactiva',patron:'Estabilización global',nivel:'Principiante',equipo:'Disco de equilibrio',regresion:'po01',progresion:'po03'},
+  {id:'po05',nombre:'Single-leg RDL sin carga',bloque:'propiocepcion',musculos:'Isquiotibial, Gluteo, Estabilizador',contraccion:'Excéntrica-concéntrica',patron:'Bisagra unilateral',nivel:'Intermedio',equipo:'Ninguno',regresion:'po01',progresion:'Single-leg RDL con mancuerna'},
+  {id:'po06',nombre:'Perturbación lateral con banda',bloque:'propiocepcion',musculos:'Gluteo medio, Estabilizador de rodilla',contraccion:'Reactiva',patron:'Estabilización lateral',nivel:'Intermedio',equipo:'Banda elástica',regresion:'po04',progresion:'Perturbación con carga'},
+  {id:'po07',nombre:'Equilibrio en fitball sentado',bloque:'propiocepcion',musculos:'Core, Cadera, Columna',contraccion:'Isométrica',patron:'Estabilización de tronco',nivel:'Principiante',equipo:'Fitball',regresion:'Sentado en silla',progresion:'Fitball con movimiento brazos'},
+  {id:'po08',nombre:'Catch and stabilize con pelota',bloque:'propiocepcion',musculos:'Miembro superior, Hombro, Core',contraccion:'Reactiva',patron:'Estabilización de hombro',nivel:'Intermedio',equipo:'Pelota',regresion:'Apoyo estático en pared',progresion:'Lanzamiento en inestable'},
+  {id:'po09',nombre:'Tandem walk',bloque:'propiocepcion',musculos:'Tobillo, Rodilla, Cadera',contraccion:'Dinámica controlada',patron:'Marcha en línea',nivel:'Principiante',equipo:'Ninguno',regresion:'Caminata amplia',progresion:'Tandem ojos cerrados'},
+  {id:'po10',nombre:'Step-up lento con equilibrio final',bloque:'propiocepcion',musculos:'Cuadriceps, Gluteo, Estabilizador',contraccion:'Concéntrica lenta',patron:'Empuje unilateral controlado',nivel:'Intermedio',equipo:'Cajón',regresion:'po01',progresion:'Step-up con carga y equilibrio'},
+  {id:'po11',nombre:'Estabilización dinámica de cadera',bloque:'propiocepcion',musculos:'Cadera, Gluteo, Core',contraccion:'Reactiva-isométrica',patron:'Control de cadera',nivel:'Intermedio',equipo:'Banda elástica',regresion:'Isométrico de cadera',progresion:'po06'},
+  {id:'po12',nombre:'Equilibrio inestable + perturbación visual',bloque:'propiocepcion',musculos:'Sistema vestibular, Cadena cinetica',contraccion:'Reactiva global',patron:'Estabilización multisensorial',nivel:'Avanzado',equipo:'BOSU/disco',regresion:'po02',progresion:'Perturbación + tarea cognitiva'},
+  {id:'fi01',nombre:'Turkish get-up',bloque:'funcional',musculos:'Hombro, Core, Cadera, Cuadriceps',contraccion:'Dinámica multiplanar',patron:'Levantamiento del suelo',nivel:'Avanzado',equipo:'Kettlebell',regresion:'TGU sin carga',progresion:'TGU con mayor carga'},
   {id:'fi02',nombre:'KB complex (swing+clean+press)',bloque:'funcional',musculos:'Cuerpo completo',contraccion:'Explosiva-dinámica',patron:'Complejo multiarticular',nivel:'Avanzado',equipo:'Kettlebell',regresion:'pt08',progresion:'KB complex doble'},
-  {id:'fi03',nombre:'Bear crawl',bloque:'funcional',musculos:'Hombros, core, cadera, cuádriceps',contraccion:'Dinámica ipsilateral',patron:'Cuadrupedia dinámica',nivel:'Intermedio',equipo:'Suelo',regresion:'Bear crawl estático',progresion:'Bear crawl con carga distal'},
-  {id:'fi04',nombre:"Farmer's carry",bloque:'funcional',musculos:'Core, trapecios, antebrazos, glúteo',contraccion:'Isométrica-dinámica',patron:'Carga transportada',nivel:'Intermedio',equipo:'Mancuernas/KB/barra',regresion:'Carry unilateral',progresion:'fi10'},
-  {id:'fi05',nombre:'Sled push',bloque:'funcional',musculos:'Cuádriceps, glúteo, core, hombros',contraccion:'Concéntrica empuje',patron:'Empuje horizontal con carga',nivel:'Intermedio',equipo:'Trineo',regresion:'Empuje de pared',progresion:'Sled push mayor carga'},
-  {id:'fi06',nombre:'Battle ropes alternadas',bloque:'funcional',musculos:'Hombros, core, piernas',contraccion:'Dinámica ondulatoria',patron:'Movimiento alternado de brazos',nivel:'Intermedio',equipo:'Battle ropes',regresion:'Battle ropes bilateral',progresion:'Battle ropes con sentadilla'},
-  {id:'fi07',nombre:'Sandbag clean and press',bloque:'funcional',musculos:'Cadena posterior, hombros, core',contraccion:'Explosiva-concéntrica',patron:'Levantamiento y empuje vertical',nivel:'Avanzado',equipo:'Sandbag',regresion:'Sandbag deadlift',progresion:'Sandbag thruster'},
-  {id:'fi08',nombre:'Lunge con rotación y press',bloque:'funcional',musculos:'Cuádriceps, core, hombros, oblicuos',contraccion:'Dinámica multiplanar',patron:'Movimiento integrado',nivel:'Intermedio',equipo:'Mancuerna/balón',regresion:'Lunge + rotación sin press',progresion:'Lunge rot. press overhead'},
+  {id:'fi03',nombre:'Bear crawl',bloque:'funcional',musculos:'Hombro, Core, Cadera, Cuadriceps',contraccion:'Dinámica ipsilateral',patron:'Cuadrupedia dinámica',nivel:'Intermedio',equipo:'Suelo',regresion:'Bear crawl estático',progresion:'Bear crawl con carga distal'},
+  {id:'fi04',nombre:"Farmer's carry",bloque:'funcional',musculos:'Core, Trapecio, Antebrazo, Gluteo',contraccion:'Isométrica-dinámica',patron:'Carga transportada',nivel:'Intermedio',equipo:'Mancuernas/KB/barra',regresion:'Carry unilateral',progresion:'fi10'},
+  {id:'fi05',nombre:'Sled push',bloque:'funcional',musculos:'Cuadriceps, Gluteo, Core, Hombro',contraccion:'Concéntrica empuje',patron:'Empuje horizontal con carga',nivel:'Intermedio',equipo:'Trineo',regresion:'Empuje de pared',progresion:'Sled push mayor carga'},
+  {id:'fi06',nombre:'Battle ropes alternadas',bloque:'funcional',musculos:'Hombro, Core, Pierna',contraccion:'Dinámica ondulatoria',patron:'Movimiento alternado de brazos',nivel:'Intermedio',equipo:'Battle ropes',regresion:'Battle ropes bilateral',progresion:'Battle ropes con sentadilla'},
+  {id:'fi07',nombre:'Sandbag clean and press',bloque:'funcional',musculos:'Cadena posterior, Hombro, Core',contraccion:'Explosiva-concéntrica',patron:'Levantamiento y empuje vertical',nivel:'Avanzado',equipo:'Sandbag',regresion:'Sandbag deadlift',progresion:'Sandbag thruster'},
+  {id:'fi08',nombre:'Lunge con rotación y press',bloque:'funcional',musculos:'Cuadriceps, Core, Hombro, Oblicuo',contraccion:'Dinámica multiplanar',patron:'Movimiento integrado',nivel:'Intermedio',equipo:'Mancuerna/balón',regresion:'Lunge + rotación sin press',progresion:'Lunge rot. press overhead'},
   {id:'fi09',nombre:'Burpee con remo en TRX',bloque:'funcional',musculos:'Cuerpo completo',contraccion:'Dinámica integrada',patron:'Empuje + tirón integrado',nivel:'Avanzado',equipo:'TRX',regresion:'Burpee sin remo',progresion:'Burpee con doble remo'},
-  {id:'fi10',nombre:'Overhead carry',bloque:'funcional',musculos:'Hombros, core, trapecio, columna',contraccion:'Isométrica-dinámica',patron:'Estabilización overhead en movimiento',nivel:'Avanzado',equipo:'Mancuernas/KB',regresion:'fi04',progresion:'Overhead carry unilateral'},
+  {id:'fi10',nombre:'Overhead carry',bloque:'funcional',musculos:'Hombro, Core, Trapecio, Columna',contraccion:'Isométrica-dinámica',patron:'Estabilización overhead en movimiento',nivel:'Avanzado',equipo:'Mancuernas/KB',regresion:'fi04',progresion:'Overhead carry unilateral'},
   {id:'fi11',nombre:'Circuito de movimientos integrados',bloque:'funcional',musculos:'Cuerpo completo',contraccion:'Dinámica multiarticular',patron:'Circuito funcional',nivel:'Intermedio',equipo:'Variable',regresion:'Circuito con pausas',progresion:'Circuito a tiempo'},
-  {id:'fi12',nombre:'Crawling pattern (reptación)',bloque:'funcional',musculos:'Core, hombros, cadera',contraccion:'Dinámica contralateral',patron:'Reptación',nivel:'Principiante',equipo:'Suelo',regresion:'fi03',progresion:'Reptación con carga'},
+  {id:'fi12',nombre:'Crawling pattern (reptación)',bloque:'funcional',musculos:'Core, Hombro, Cadera',contraccion:'Dinámica contralateral',patron:'Reptación',nivel:'Principiante',equipo:'Suelo',regresion:'fi03',progresion:'Reptación con carga'},
 
   // ─── MOVILIDAD (13-24) ──────────────────────────────────────────────────
-  {id:'m13',nombre:'Movilidad de tobillo bilateral',bloque:'movilidad',musculos:'Gemelo, sóleo, cápsula tibiotarsiana',contraccion:'Dinámica activa',patron:'Dorsiflexión',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Movilidad tobillo con carga'},
-  {id:'m14',nombre:'Apertura de pecho con foam roller',bloque:'movilidad',musculos:'Pectoral, dorsal, intercostales',contraccion:'Estiramiento pasivo',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'Extensión con mancuerna overhead'},
-  {id:'m15',nombre:'Flexión lateral de tronco activa',bloque:'movilidad',musculos:'Oblicuos, cuadrado lumbar, intercostales',contraccion:'Dinámica activa',patron:'Flexión lateral',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con palo o mancuerna'},
-  {id:'m16',nombre:'Rotación lumbar en supino',bloque:'movilidad',musculos:'Glúteo, piriforme, columna lumbar',contraccion:'Estiramiento activo',patron:'Rotación lumbar',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Rotación con carga distal'},
-  {id:'m17',nombre:'Flexión cervical activa con banda',bloque:'movilidad',musculos:'Flexores profundos cervicales',contraccion:'Concéntrica-excéntrica',patron:'Flexión cervical',nivel:'Principiante',equipo:'Banda elástica',regresion:'Chin tuck estático',progresion:'Flexión cervical con carga'},
-  {id:'m18',nombre:'Movilidad de dedos y metacarpos',bloque:'movilidad',musculos:'Interóseos, lumbricales, flexores',contraccion:'Dinámica activa',patron:'Flexo-extensión dedos',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con resistencia manual'},
-  {id:'m19',nombre:'Círculos de hombro con palo',bloque:'movilidad',musculos:'Manguito rotador, cápsula glenohumeral',contraccion:'Dinámica activa',patron:'Circunducción de hombro',nivel:'Principiante',equipo:'Palo',regresion:'Círculos libres',progresion:'m10'},
-  {id:'m20',nombre:'Movilidad glenohumeral en pared cuadrupedia',bloque:'movilidad',musculos:'Cápsula posterior, dorsal, serrato',contraccion:'Estiramiento activo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Con banda'},
-  {id:'m21',nombre:'Hip flexor rock (estiramiento dinámico)',bloque:'movilidad',musculos:'Psoas, recto femoral, tensor fascia lata',contraccion:'Dinámica activa',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Estiramiento estático',progresion:"fr01"},
-  {id:'m22',nombre:'Extensión activa de rodilla en supino',bloque:'movilidad',musculos:'Cuádriceps, isquiotibiales',contraccion:'Dinámica activa',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Con banda de resistencia'},
-  {id:'m23',nombre:'Rotación interna/externa de cadera en prono',bloque:'movilidad',musculos:'Rotadores de cadera, glúteo',contraccion:'Dinámica activa',patron:'Rotación de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Rotación en supino',progresion:'m02'},
-  {id:'m24',nombre:'Movilización activa de columna en bipedestación',bloque:'movilidad',musculos:'Erector espinal, oblicuos, multífidos',contraccion:'Dinámica activa',patron:'Flexo-extensión y rotación columna',nivel:'Principiante',equipo:'Ninguno',regresion:'Cat-camel',progresion:'Con carga overhead'},
+  {id:'m13',nombre:'Movilidad de tobillo bilateral',bloque:'movilidad',musculos:'Gemelo, Soleo, Capsula tibiotarsiana',contraccion:'Dinámica activa',patron:'Dorsiflexión',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Movilidad tobillo con carga'},
+  {id:'m14',nombre:'Apertura de pecho con foam roller',bloque:'movilidad',musculos:'Pectoral, Dorsal, Intercostal',contraccion:'Estiramiento pasivo',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'',progresion:'Extensión con mancuerna overhead'},
+  {id:'m15',nombre:'Flexión lateral de tronco activa',bloque:'movilidad',musculos:'Oblicuo, Cuadrado lumbar, Intercostal',contraccion:'Dinámica activa',patron:'Flexión lateral',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con palo o mancuerna'},
+  {id:'m16',nombre:'Rotación lumbar en supino',bloque:'movilidad',musculos:'Gluteo, Piriforme, Columna lumbar',contraccion:'Estiramiento activo',patron:'Rotación lumbar',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Rotación con carga distal'},
+  {id:'m17',nombre:'Flexión cervical activa con banda',bloque:'movilidad',musculos:'Flexor profundo cervical',contraccion:'Concéntrica-excéntrica',patron:'Flexión cervical',nivel:'Principiante',equipo:'Banda elástica',regresion:'Chin tuck estático',progresion:'Flexión cervical con carga'},
+  {id:'m18',nombre:'Movilidad de dedos y metacarpos',bloque:'movilidad',musculos:'Interoseo, Lumbrical, Flexor',contraccion:'Dinámica activa',patron:'Flexo-extensión dedos',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con resistencia manual'},
+  {id:'m19',nombre:'Círculos de hombro con palo',bloque:'movilidad',musculos:'Manguito rotador, Capsula glenohumeral',contraccion:'Dinámica activa',patron:'Circunducción de hombro',nivel:'Principiante',equipo:'Palo',regresion:'Círculos libres',progresion:'m10'},
+  {id:'m20',nombre:'Movilidad glenohumeral en pared cuadrupedia',bloque:'movilidad',musculos:'Capsula posterior, Dorsal, Serrato',contraccion:'Estiramiento activo',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Con banda'},
+  {id:'m21',nombre:'Hip flexor rock (estiramiento dinámico)',bloque:'movilidad',musculos:'Psoas, Recto femoral, Tensor de fascia lata',contraccion:'Dinámica activa',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Estiramiento estático',progresion:"fr01"},
+  {id:'m22',nombre:'Extensión activa de rodilla en supino',bloque:'movilidad',musculos:'Cuadriceps, Isquiotibial',contraccion:'Dinámica activa',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'',progresion:'Con banda de resistencia'},
+  {id:'m23',nombre:'Rotación interna/externa de cadera en prono',bloque:'movilidad',musculos:'Rotador de cadera, Gluteo',contraccion:'Dinámica activa',patron:'Rotación de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Rotación en supino',progresion:'m02'},
+  {id:'m24',nombre:'Movilización activa de columna en bipedestación',bloque:'movilidad',musculos:'Erector espinal, Oblicuo, Multifido',contraccion:'Dinámica activa',patron:'Flexo-extensión y rotación columna',nivel:'Principiante',equipo:'Ninguno',regresion:'Cat-camel',progresion:'Con carga overhead'},
   // ─── ACTIVACIÓN (13-24) ─────────────────────────────────────────────────
-  {id:'a13',nombre:'Activación glúteo en cuadrupedia (kickback)',bloque:'activacion',musculos:'Glúteo mayor, isquiotibiales proximales',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Isométrico glúteo prono',progresion:'Con banda elástica'},
-  {id:'a14',nombre:'Clamshell progresivo (3 posiciones)',bloque:'activacion',musculos:'Glúteo medio, piriforme, obturadores',contraccion:'Concéntrica-excéntrica',patron:'Abducción y rotación externa cadera',nivel:'Principiante',equipo:'Banda elástica',regresion:'a03',progresion:'Clamshell con cadera 45°'},
-  {id:'a15',nombre:'Activación escapular en W',bloque:'activacion',musculos:'Trapecio inferior, romboides, deltoides posterior',contraccion:'Concéntrica-isométrica',patron:'Retracción y depresión escapular',nivel:'Principiante',equipo:'Suelo/banco',regresion:'Retracción escapular simple',progresion:'Y/T/W con carga'},
-  {id:'a16',nombre:'Hollow body progresión 1 (piernas)',bloque:'activacion',musculos:'Recto abdominal, transverso, psoas',contraccion:'Isométrica',patron:'Anti-extensión con flexión cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Knees bent hollow',progresion:'zm05'},
-  {id:'a17',nombre:'Hip hinge bilateral (enseñanza)',bloque:'activacion',musculos:'Glúteo mayor, isquiotibiales, erector espinal',contraccion:'Excéntrica-concéntrica',patron:'Bisagra de cadera',nivel:'Principiante',equipo:'Palo o pared',regresion:'',progresion:'f09'},
-  {id:'a18',nombre:'Activación rotadores externos con banda (supino)',bloque:'activacion',musculos:'Infraespinoso, redondo menor, deltoides posterior',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa glenohumeral',nivel:'Principiante',equipo:'Banda elástica',regresion:'Isométrico rotación externa',progresion:'a08'},
-  {id:'a19',nombre:'Activación transverso abdominal en 4 puntos',bloque:'activacion',musculos:'Transverso abdominal, multífidos',contraccion:'Isométrica',patron:'Estabilización lumbo-pélvica',nivel:'Principiante',equipo:'Suelo',regresion:'TA en supino',progresion:'a05'},
-  {id:'a20',nombre:'Puente de glúteo unilateral (progresión)',bloque:'activacion',musculos:'Glúteo mayor, isquiotibiales, core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera unilateral',nivel:'Intermedio',equipo:'Suelo',regresion:'a02',progresion:'Hip thrust unilateral'},
-  {id:'a21',nombre:'Activación serrato en prono',bloque:'activacion',musculos:'Serrato anterior, trapecio inferior',contraccion:'Concéntrica',patron:'Protracción y rotación superior escápula',nivel:'Principiante',equipo:'Suelo',regresion:'a09',progresion:'Push-up plus'},
-  {id:'a22',nombre:'Marcha de glúteo con banda (lateral)',bloque:'activacion',musculos:'Glúteo medio, TFL, glúteo mayor',contraccion:'Concéntrica-excéntrica',patron:'Abducción dinámica en carga',nivel:'Principiante',equipo:'Banda elástica',regresion:'a04',progresion:'Lateral band squat walk'},
-  {id:'a23',nombre:'Rotación torácica activa sentado',bloque:'activacion',musculos:'Rotadores torácicos, intercostales, multífidos',contraccion:'Dinámica activa',patron:'Rotación torácica en carga',nivel:'Principiante',equipo:'Silla/banco',regresion:'Rotación en supino',progresion:'m01'},
-  {id:'a24',nombre:'Activación cuádriceps en semi-flexión (terminal)',bloque:'activacion',musculos:'Cuádriceps, VMO',contraccion:'Concéntrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'pr03',progresion:'Step-up bajo'},
+  {id:'a13',nombre:'Activación glúteo en cuadrupedia (kickback)',bloque:'activacion',musculos:'Gluteo mayor, Isquiotibial proximal',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Isométrico glúteo prono',progresion:'Con banda elástica'},
+  {id:'a14',nombre:'Clamshell progresivo (3 posiciones)',bloque:'activacion',musculos:'Gluteo medio, Piriforme, Obturador',contraccion:'Concéntrica-excéntrica',patron:'Abducción y rotación externa cadera',nivel:'Principiante',equipo:'Banda elástica',regresion:'a03',progresion:'Clamshell con cadera 45°'},
+  {id:'a15',nombre:'Activación escapular en W',bloque:'activacion',musculos:'Trapecio inferior, Romboide, Deltoide posterior',contraccion:'Concéntrica-isométrica',patron:'Retracción y depresión escapular',nivel:'Principiante',equipo:'Suelo/banco',regresion:'Retracción escapular simple',progresion:'Y/T/W con carga'},
+  {id:'a16',nombre:'Hollow body progresión 1 (piernas)',bloque:'activacion',musculos:'Recto abdominal, Transverso, Psoas',contraccion:'Isométrica',patron:'Anti-extensión con flexión cadera',nivel:'Principiante',equipo:'Suelo',regresion:'Knees bent hollow',progresion:'zm05'},
+  {id:'a17',nombre:'Hip hinge bilateral (enseñanza)',bloque:'activacion',musculos:'Gluteo mayor, Isquiotibial, Erector espinal',contraccion:'Excéntrica-concéntrica',patron:'Bisagra de cadera',nivel:'Principiante',equipo:'Palo o pared',regresion:'',progresion:'f09'},
+  {id:'a18',nombre:'Activación rotadores externos con banda (supino)',bloque:'activacion',musculos:'Infraespinoso, Redondo menor, Deltoide posterior',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa glenohumeral',nivel:'Principiante',equipo:'Banda elástica',regresion:'Isométrico rotación externa',progresion:'a08'},
+  {id:'a19',nombre:'Activación transverso abdominal en 4 puntos',bloque:'activacion',musculos:'Transverso abdominal, Multifido',contraccion:'Isométrica',patron:'Estabilización lumbo-pélvica',nivel:'Principiante',equipo:'Suelo',regresion:'TA en supino',progresion:'a05'},
+  {id:'a20',nombre:'Puente de glúteo unilateral (progresión)',bloque:'activacion',musculos:'Gluteo mayor, Isquiotibial, Core',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera unilateral',nivel:'Intermedio',equipo:'Suelo',regresion:'a02',progresion:'Hip thrust unilateral'},
+  {id:'a21',nombre:'Activación serrato en prono',bloque:'activacion',musculos:'Serrato anterior, Trapecio inferior',contraccion:'Concéntrica',patron:'Protracción y rotación superior escápula',nivel:'Principiante',equipo:'Suelo',regresion:'a09',progresion:'Push-up plus'},
+  {id:'a22',nombre:'Marcha de glúteo con banda (lateral)',bloque:'activacion',musculos:'Gluteo medio, TFL, Gluteo mayor',contraccion:'Concéntrica-excéntrica',patron:'Abducción dinámica en carga',nivel:'Principiante',equipo:'Banda elástica',regresion:'a04',progresion:'Lateral band squat walk'},
+  {id:'a23',nombre:'Rotación torácica activa sentado',bloque:'activacion',musculos:'Rotador toracico, Intercostal, Multifido',contraccion:'Dinámica activa',patron:'Rotación torácica en carga',nivel:'Principiante',equipo:'Silla/banco',regresion:'Rotación en supino',progresion:'m01'},
+  {id:'a24',nombre:'Activación cuádriceps en semi-flexión (terminal)',bloque:'activacion',musculos:'Cuadriceps, VMO',contraccion:'Concéntrica',patron:'Extensión de rodilla',nivel:'Principiante',equipo:'Suelo',regresion:'pr03',progresion:'Step-up bajo'},
   // ─── ZONA MEDIA (13-24) ─────────────────────────────────────────────────
-  {id:'zm13',nombre:'Pallof press overhead',bloque:'zona_media',musculos:'Oblicuos, transverso, trapecio, deltoides',contraccion:'Isométrica',patron:'Anti-rotación overhead',nivel:'Avanzado',equipo:'Polea/banda',regresion:'zm06',progresion:'Pallof press en inestable'},
-  {id:'zm14',nombre:'Suitcase carry (cargada lateral)',bloque:'zona_media',musculos:'Cuadrado lumbar, oblicuos, trapecio',contraccion:'Isométrica-dinámica',patron:'Anti-flexión lateral dinámica',nivel:'Intermedio',equipo:'Mancuerna/KB',regresion:'Farmer carry bilateral',progresion:'Mayor carga y distancia'},
-  {id:'zm15',nombre:'Ab wheel desde rodillas',bloque:'zona_media',musculos:'Recto abdominal, serrato, dorsal, tríceps',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión dinámica',nivel:'Intermedio',equipo:'Rueda abdominal',regresion:'zm10',progresion:'zm04'},
-  {id:'zm16',nombre:'Plank con desplazamiento lateral (Spiderman)',bloque:'zona_media',musculos:'Core completo, flexores cadera, oblicuos',contraccion:'Dinámica-isométrica',patron:'Estabilización con movimiento',nivel:'Avanzado',equipo:'Suelo',regresion:'zm01',progresion:'Con chaleco de peso'},
-  {id:'zm17',nombre:'Crunch en cable',bloque:'zona_media',musculos:'Recto abdominal, oblicuos',contraccion:'Concéntrica-excéntrica',patron:'Flexión de tronco con carga',nivel:'Intermedio',equipo:'Polea alta',regresion:'Crunch en suelo',progresion:'Con mayor carga'},
-  {id:'zm18',nombre:'Leg raise colgado',bloque:'zona_media',musculos:'Psoas, recto abdominal, flexores cadera',contraccion:'Concéntrica-excéntrica',patron:'Flexión de cadera en suspensión',nivel:'Avanzado',equipo:'Barra de dominadas',regresion:'Leg raise suelo',progresion:'Leg raise con twist'},
-  {id:'zm19',nombre:'Landmine rotation',bloque:'zona_media',musculos:'Oblicuos, dorsal, hombros, glúteo',contraccion:'Concéntrica-excéntrica rotacional',patron:'Rotación con carga',nivel:'Intermedio',equipo:'Barra, landmine',regresion:'Russian twist',progresion:'Con mayor carga'},
-  {id:'zm20',nombre:'Copenhagen plank',bloque:'zona_media',musculos:'Aductores, core, glúteo medio',contraccion:'Isométrica',patron:'Anti-flexión lateral con aducción',nivel:'Avanzado',equipo:'Banco',regresion:'pr05',progresion:'Copenhagen plank dinámico'},
-  {id:'zm21',nombre:'TRX pike',bloque:'zona_media',musculos:'Core completo, hombros, serrato',contraccion:'Concéntrica-isométrica',patron:'Anti-extensión con flexión',nivel:'Avanzado',equipo:'TRX',regresion:'Plank en TRX',progresion:'TRX pike + push-up'},
-  {id:'zm22',nombre:'Rotación con balón medicinal',bloque:'zona_media',musculos:'Oblicuos, erector, glúteo',contraccion:'Explosiva rotacional',patron:'Rotación potente de tronco',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'zm07',progresion:'Wall ball rotational'},
-  {id:'zm23',nombre:'Plank lateral con rotación (hilo de aguja)',bloque:'zona_media',musculos:'Oblicuo, serrato, rotadores torácicos',contraccion:'Dinámica',patron:'Anti-flexión + rotación',nivel:'Intermedio',equipo:'Suelo',regresion:'zm02',progresion:'Con mancuerna'},
-  {id:'zm24',nombre:'Dead bug con banda (brazos)',bloque:'zona_media',musculos:'Core profundo, serrato, deltoides',contraccion:'Isométrica-excéntrica',patron:'Anti-extensión con carga distal',nivel:'Intermedio',equipo:'Banda elástica',regresion:'zm03',progresion:'Dead bug con KB'},
+  {id:'zm13',nombre:'Pallof press overhead',bloque:'zona_media',musculos:'Oblicuo, Transverso, Trapecio, Deltoide',contraccion:'Isométrica',patron:'Anti-rotación overhead',nivel:'Avanzado',equipo:'Polea/banda',regresion:'zm06',progresion:'Pallof press en inestable'},
+  {id:'zm14',nombre:'Suitcase carry (cargada lateral)',bloque:'zona_media',musculos:'Cuadrado lumbar, Oblicuo, Trapecio',contraccion:'Isométrica-dinámica',patron:'Anti-flexión lateral dinámica',nivel:'Intermedio',equipo:'Mancuerna/KB',regresion:'Farmer carry bilateral',progresion:'Mayor carga y distancia'},
+  {id:'zm15',nombre:'Ab wheel desde rodillas',bloque:'zona_media',musculos:'Recto abdominal, Serrato, Dorsal, Triceps',contraccion:'Excéntrica-concéntrica',patron:'Anti-extensión dinámica',nivel:'Intermedio',equipo:'Rueda abdominal',regresion:'zm10',progresion:'zm04'},
+  {id:'zm16',nombre:'Plank con desplazamiento lateral (Spiderman)',bloque:'zona_media',musculos:'Core completo, Flexor de cadera, Oblicuo',contraccion:'Dinámica-isométrica',patron:'Estabilización con movimiento',nivel:'Avanzado',equipo:'Suelo',regresion:'zm01',progresion:'Con chaleco de peso'},
+  {id:'zm17',nombre:'Crunch en cable',bloque:'zona_media',musculos:'Recto abdominal, Oblicuo',contraccion:'Concéntrica-excéntrica',patron:'Flexión de tronco con carga',nivel:'Intermedio',equipo:'Polea alta',regresion:'Crunch en suelo',progresion:'Con mayor carga'},
+  {id:'zm18',nombre:'Leg raise colgado',bloque:'zona_media',musculos:'Psoas, Recto abdominal, Flexor de cadera',contraccion:'Concéntrica-excéntrica',patron:'Flexión de cadera en suspensión',nivel:'Avanzado',equipo:'Barra de dominadas',regresion:'Leg raise suelo',progresion:'Leg raise con twist'},
+  {id:'zm19',nombre:'Landmine rotation',bloque:'zona_media',musculos:'Oblicuo, Dorsal, Hombro, Gluteo',contraccion:'Concéntrica-excéntrica rotacional',patron:'Rotación con carga',nivel:'Intermedio',equipo:'Barra, landmine',regresion:'Russian twist',progresion:'Con mayor carga'},
+  {id:'zm20',nombre:'Copenhagen plank',bloque:'zona_media',musculos:'Aductor, Core, Gluteo medio',contraccion:'Isométrica',patron:'Anti-flexión lateral con aducción',nivel:'Avanzado',equipo:'Banco',regresion:'pr05',progresion:'Copenhagen plank dinámico'},
+  {id:'zm21',nombre:'TRX pike',bloque:'zona_media',musculos:'Core completo, Hombro, Serrato',contraccion:'Concéntrica-isométrica',patron:'Anti-extensión con flexión',nivel:'Avanzado',equipo:'TRX',regresion:'Plank en TRX',progresion:'TRX pike + push-up'},
+  {id:'zm22',nombre:'Rotación con balón medicinal',bloque:'zona_media',musculos:'Oblicuo, Erector, Gluteo',contraccion:'Explosiva rotacional',patron:'Rotación potente de tronco',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'zm07',progresion:'Wall ball rotational'},
+  {id:'zm23',nombre:'Plank lateral con rotación (hilo de aguja)',bloque:'zona_media',musculos:'Oblicuo, Serrato, Rotador toracico',contraccion:'Dinámica',patron:'Anti-flexión + rotación',nivel:'Intermedio',equipo:'Suelo',regresion:'zm02',progresion:'Con mancuerna'},
+  {id:'zm24',nombre:'Dead bug con banda (brazos)',bloque:'zona_media',musculos:'Core profundo, Serrato, Deltoide',contraccion:'Isométrica-excéntrica',patron:'Anti-extensión con carga distal',nivel:'Intermedio',equipo:'Banda elástica',regresion:'zm03',progresion:'Dead bug con KB'},
   // ─── PREV/REHAB (13-24) ─────────────────────────────────────────────────
-  {id:'pr13',nombre:'Excéntrico de isquiotibiales con fitball',bloque:'prev_rehab',musculos:'Isquiotibiales, glúteo',contraccion:'Excéntrica',patron:'Bisagra excéntrica',nivel:'Intermedio',equipo:'Fitball',regresion:'Curl fitball bilateral',progresion:'pr01'},
-  {id:'pr14',nombre:'Fortalecimiento rotadores cadera (banda, prono)',bloque:'prev_rehab',musculos:'Rotadores externos cadera, glúteo profundo',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa en descarga',nivel:'Principiante',equipo:'Banda elástica',regresion:'pr10',progresion:'Con mayor carga'},
-  {id:'pr15',nombre:'Estiramiento del nervio ciático (deslizamiento neural)',bloque:'prev_rehab',musculos:'Ciático, isquiotibiales, nervio',contraccion:'Deslizamiento neural',patron:'Tensión neural',nivel:'Principiante',equipo:'Suelo',regresion:'SLR pasivo',progresion:'Slump test dinámico'},
-  {id:'pr16',nombre:'Activación VMO en extensión terminal (TKE)',bloque:'prev_rehab',musculos:'Vasto medial oblicuo, cuádriceps',contraccion:'Concéntrica',patron:'Extensión terminal de rodilla',nivel:'Principiante',equipo:'Banda elástica',regresion:'pr09',progresion:'TKE con carga'},
-  {id:'pr17',nombre:'Fortalecimiento glúteo medio (abducción con carga)',bloque:'prev_rehab',musculos:'Glúteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción en carga',nivel:'Intermedio',equipo:'Máquina o cable',regresion:'pr10',progresion:'Hip hike unilateral'},
-  {id:'pr18',nombre:'Propiocepción tobillo con perturbación',bloque:'prev_rehab',musculos:'Peroneales, tibial, estabilizadores tobillo',contraccion:'Reactiva',patron:'Estabilización reactiva tobillo',nivel:'Intermedio',equipo:'Disco inestable',regresion:'po04',progresion:'Sobre superficie muy inestable'},
-  {id:'pr19',nombre:'Fortalecimiento excéntrico cuádriceps (decline)',bloque:'prev_rehab',musculos:'Cuádriceps, tendón rotuliano',contraccion:'Excéntrica',patron:'Extensión de rodilla excéntrica',nivel:'Intermedio',equipo:'Rampa/cajón inclinado',regresion:'Sentadilla excéntrica plana',progresion:'Con carga adicional'},
-  {id:'pr20',nombre:'Estiramiento del tendón de Aquiles (escalón)',bloque:'prev_rehab',musculos:'Gemelo, sóleo, tendón Aquiles',contraccion:'Estiramiento pasivo',patron:'Dorsiflexión en carga',nivel:'Principiante',equipo:'Escalón',regresion:'pr02',progresion:'Estiramiento Aquiles con carga'},
-  {id:'pr21',nombre:'Ejercicio de Codman (péndulo)',bloque:'prev_rehab',musculos:'Manguito rotador, cápsula glenohumeral',contraccion:'Descompresión pasiva',patron:'Descompresión glenohumeral',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Péndulo con mancuerna leve'},
-  {id:'pr22',nombre:'Estiramiento de pectoral menor en pared',bloque:'prev_rehab',musculos:'Pectoral menor, coracobraquial, bíceps',contraccion:'Estiramiento pasivo',patron:'Extensión y RE de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Con banda'},
-  {id:'pr23',nombre:'Fortalecimiento peroneales con banda',bloque:'prev_rehab',musculos:'Peroneo largo, peroneo corto',contraccion:'Concéntrica-excéntrica',patron:'Eversión resistida',nivel:'Principiante',equipo:'Banda elástica',regresion:'Eversión activa libre',progresion:'Propiocepción en inestable'},
-  {id:'pr24',nombre:'Activación glúteo en bipedestación (hip extension cable)',bloque:'prev_rehab',musculos:'Glúteo mayor, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera en carga',nivel:'Intermedio',equipo:'Cable/banda',regresion:'rca_s01',progresion:'Peso muerto unilateral'},
+  {id:'pr13',nombre:'Excéntrico de isquiotibiales con fitball',bloque:'prev_rehab',musculos:'Isquiotibial, Gluteo',contraccion:'Excéntrica',patron:'Bisagra excéntrica',nivel:'Intermedio',equipo:'Fitball',regresion:'Curl fitball bilateral',progresion:'pr01'},
+  {id:'pr14',nombre:'Fortalecimiento rotadores cadera (banda, prono)',bloque:'prev_rehab',musculos:'Rotador externo de cadera, Gluteo profundo',contraccion:'Concéntrica-excéntrica',patron:'Rotación externa en descarga',nivel:'Principiante',equipo:'Banda elástica',regresion:'pr10',progresion:'Con mayor carga'},
+  {id:'pr15',nombre:'Estiramiento del nervio ciático (deslizamiento neural)',bloque:'prev_rehab',musculos:'Ciatico, Isquiotibial, Nervio',contraccion:'Deslizamiento neural',patron:'Tensión neural',nivel:'Principiante',equipo:'Suelo',regresion:'SLR pasivo',progresion:'Slump test dinámico'},
+  {id:'pr16',nombre:'Activación VMO en extensión terminal (TKE)',bloque:'prev_rehab',musculos:'Vasto medial oblicuo, Cuadriceps',contraccion:'Concéntrica',patron:'Extensión terminal de rodilla',nivel:'Principiante',equipo:'Banda elástica',regresion:'pr09',progresion:'TKE con carga'},
+  {id:'pr17',nombre:'Fortalecimiento glúteo medio (abducción con carga)',bloque:'prev_rehab',musculos:'Gluteo medio, TFL',contraccion:'Concéntrica-excéntrica',patron:'Abducción en carga',nivel:'Intermedio',equipo:'Máquina o cable',regresion:'pr10',progresion:'Hip hike unilateral'},
+  {id:'pr18',nombre:'Propiocepción tobillo con perturbación',bloque:'prev_rehab',musculos:'Peroneo, Tibial, Estabilizador de tobillo',contraccion:'Reactiva',patron:'Estabilización reactiva tobillo',nivel:'Intermedio',equipo:'Disco inestable',regresion:'po04',progresion:'Sobre superficie muy inestable'},
+  {id:'pr19',nombre:'Fortalecimiento excéntrico cuádriceps (decline)',bloque:'prev_rehab',musculos:'Cuadriceps, Tendon rotuliano',contraccion:'Excéntrica',patron:'Extensión de rodilla excéntrica',nivel:'Intermedio',equipo:'Rampa/cajón inclinado',regresion:'Sentadilla excéntrica plana',progresion:'Con carga adicional'},
+  {id:'pr20',nombre:'Estiramiento del tendón de Aquiles (escalón)',bloque:'prev_rehab',musculos:'Gemelo, Soleo, Tendon de aquiles',contraccion:'Estiramiento pasivo',patron:'Dorsiflexión en carga',nivel:'Principiante',equipo:'Escalón',regresion:'pr02',progresion:'Estiramiento Aquiles con carga'},
+  {id:'pr21',nombre:'Ejercicio de Codman (péndulo)',bloque:'prev_rehab',musculos:'Manguito rotador, Capsula glenohumeral',contraccion:'Descompresión pasiva',patron:'Descompresión glenohumeral',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Péndulo con mancuerna leve'},
+  {id:'pr22',nombre:'Estiramiento de pectoral menor en pared',bloque:'prev_rehab',musculos:'Pectoral menor, Coracobraquial, Biceps',contraccion:'Estiramiento pasivo',patron:'Extensión y RE de hombro',nivel:'Principiante',equipo:'Pared',regresion:'',progresion:'Con banda'},
+  {id:'pr23',nombre:'Fortalecimiento peroneales con banda',bloque:'prev_rehab',musculos:'Peroneo largo, Peroneo corto',contraccion:'Concéntrica-excéntrica',patron:'Eversión resistida',nivel:'Principiante',equipo:'Banda elástica',regresion:'Eversión activa libre',progresion:'Propiocepción en inestable'},
+  {id:'pr24',nombre:'Activación glúteo en bipedestación (hip extension cable)',bloque:'prev_rehab',musculos:'Gluteo mayor, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera en carga',nivel:'Intermedio',equipo:'Cable/banda',regresion:'rca_s01',progresion:'Peso muerto unilateral'},
   // ─── POTENCIA/PLIOMETRÍA (13-24) ─────────────────────────────────────────
-  {id:'pt13',nombre:'Salto de profundidad (depth drop)',bloque:'potencia',musculos:'Cuádriceps, gemelo, isquiotibiales, core',contraccion:'Reactiva excéntrica',patron:'Absorción de impacto',nivel:'Avanzado',equipo:'Cajón',regresion:'pt02',progresion:'pt10'},
-  {id:'pt14',nombre:'Lateral bound (salto lateral unilateral)',bloque:'potencia',musculos:'Glúteo medio, cuádriceps, gemelo',contraccion:'Explosiva lateral',patron:'Empuje lateral pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'pt12',progresion:'Lateral bound con stick'},
-  {id:'pt15',nombre:'Tuck jump',bloque:'potencia',musculos:'Cuádriceps, glúteo, flexores cadera',contraccion:'Explosiva con flexión',patron:'Salto vertical con rodillas al pecho',nivel:'Avanzado',equipo:'Ninguno',regresion:'pt01',progresion:'Hurdle jump'},
-  {id:'pt16',nombre:'Single leg hop for distance',bloque:'potencia',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Explosiva unilateral',patron:'Empuje horizontal unipodal',nivel:'Avanzado',equipo:'Ninguno',regresion:'pt03',progresion:'Triple hop for distance'},
-  {id:'pt17',nombre:'Medicine ball slam',bloque:'potencia',musculos:'Core, dorsal, hombros, tríceps',contraccion:'Explosiva vertical',patron:'Flexión potente de tronco',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'pt06',progresion:'Rotational slam'},
-  {id:'pt18',nombre:'Hurdle jump bilateral',bloque:'potencia',musculos:'Cuádriceps, glúteo, gemelo',contraccion:'Reactiva pliométrica',patron:'Salto sobre obstáculo bilateral',nivel:'Intermedio',equipo:'Vallas bajas',regresion:'pt02',progresion:'Hurdle unilateral'},
-  {id:'pt19',nombre:'Reactive jump squat con señal',bloque:'potencia',musculos:'Cuádriceps, glúteo, gemelo',contraccion:'Reactiva con decisión',patron:'Salto reactivo con estímulo visual',nivel:'Avanzado',equipo:'Ninguno + partner',regresion:'pt01',progresion:'Con dirección variable'},
-  {id:'pt20',nombre:'Snatch desde colgante (power snatch)',bloque:'potencia',musculos:'Cadena posterior completa, trapecio, hombros',contraccion:'Explosiva multiarticular',patron:'Triple extensión + elevación overhead',nivel:'Avanzado',equipo:'Barra',regresion:'pt09',progresion:'Snatch completo'},
-  {id:'pt21',nombre:'Burpee box jump',bloque:'potencia',musculos:'Cuerpo completo',contraccion:'Explosiva integrada',patron:'Movimiento global explosivo',nivel:'Avanzado',equipo:'Cajón',regresion:'pt04',progresion:'Burpee box jump over'},
-  {id:'pt22',nombre:'Salto en tijera (split jump)',bloque:'potencia',musculos:'Cuádriceps, glúteo, gemelo bilateral',contraccion:'Explosiva bilateral asimétrica',patron:'Empuje bilateral alterno',nivel:'Intermedio',equipo:'Ninguno',regresion:'Estocada dinámica',progresion:'Con mancuernas'},
-  {id:'pt23',nombre:'Lanzamiento balón al suelo (slam)',bloque:'potencia',musculos:'Core, hombros, dorsal, tríceps',contraccion:'Explosiva vertical descendente',patron:'Flexión + extensión potente',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'pt06',progresion:'Rotational slam con salto'},
-  {id:'pt24',nombre:'Sprint en escalera de coordinación',bloque:'potencia',musculos:'Cuádriceps, gemelo, coordinación',contraccion:'Reactiva de baja amplitud',patron:'Velocidad de pies',nivel:'Intermedio',equipo:'Escalera de coordinación',regresion:'Marcha en escalera',progresion:'Sprint + cambio de dirección'},
+  {id:'pt13',nombre:'Salto de profundidad (depth drop)',bloque:'pliometria',musculos:'Cuadriceps, Gemelo, Isquiotibial, Core',contraccion:'Reactiva excéntrica',patron:'Absorción de impacto',nivel:'Avanzado',equipo:'Cajón',regresion:'pt02',progresion:'pt10'},
+  {id:'pt14',nombre:'Lateral bound (salto lateral unilateral)',bloque:'pliometria',musculos:'Gluteo medio, Cuadriceps, Gemelo',contraccion:'Explosiva lateral',patron:'Empuje lateral pliométrico',nivel:'Intermedio',equipo:'Ninguno',regresion:'pt12',progresion:'Lateral bound con stick'},
+  {id:'pt15',nombre:'Tuck jump',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Flexor de cadera',contraccion:'Explosiva con flexión',patron:'Salto vertical con rodillas al pecho',nivel:'Avanzado',equipo:'Ninguno',regresion:'pt01',progresion:'Hurdle jump'},
+  {id:'pt16',nombre:'Single leg hop for distance',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Explosiva unilateral',patron:'Empuje horizontal unipodal',nivel:'Avanzado',equipo:'Ninguno',regresion:'pt03',progresion:'Triple hop for distance'},
+  {id:'pt17',nombre:'Medicine ball slam',bloque:'potencia',musculos:'Core, Dorsal, Hombro, Triceps',contraccion:'Explosiva vertical',patron:'Flexión potente de tronco',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'pt06',progresion:'Rotational slam'},
+  {id:'pt18',nombre:'Hurdle jump bilateral',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Reactiva pliométrica',patron:'Salto sobre obstáculo bilateral',nivel:'Intermedio',equipo:'Vallas bajas',regresion:'pt02',progresion:'Hurdle unilateral'},
+  {id:'pt19',nombre:'Reactive jump squat con señal',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Reactiva con decisión',patron:'Salto reactivo con estímulo visual',nivel:'Avanzado',equipo:'Ninguno + partner',regresion:'pt01',progresion:'Con dirección variable'},
+  {id:'pt20',nombre:'Snatch desde colgante (power snatch)',bloque:'potencia',musculos:'Cadena posterior completa, Trapecio, Hombro',contraccion:'Explosiva multiarticular',patron:'Triple extensión + elevación overhead',nivel:'Avanzado',equipo:'Barra',regresion:'pt09',progresion:'Snatch completo'},
+  {id:'pt21',nombre:'Burpee box jump',bloque:'pliometria',musculos:'Cuerpo completo',contraccion:'Explosiva integrada',patron:'Movimiento global explosivo',nivel:'Avanzado',equipo:'Cajón',regresion:'pt04',progresion:'Burpee box jump over'},
+  {id:'pt22',nombre:'Salto en tijera (split jump)',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo bilateral',contraccion:'Explosiva bilateral asimétrica',patron:'Empuje bilateral alterno',nivel:'Intermedio',equipo:'Ninguno',regresion:'Estocada dinámica',progresion:'Con mancuernas'},
+  {id:'pt23',nombre:'Lanzamiento balón al suelo (slam)',bloque:'potencia',musculos:'Core, Hombro, Dorsal, Triceps',contraccion:'Explosiva vertical descendente',patron:'Flexión + extensión potente',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'pt06',progresion:'Rotational slam con salto'},
+  {id:'pt24',nombre:'Sprint en escalera de coordinación',bloque:'potencia',musculos:'Cuadriceps, Gemelo, Coordinacion',contraccion:'Reactiva de baja amplitud',patron:'Velocidad de pies',nivel:'Intermedio',equipo:'Escalera de coordinación',regresion:'Marcha en escalera',progresion:'Sprint + cambio de dirección'},
   // ─── FUERZA (13-24) ──────────────────────────────────────────────────────
-  {id:'f13',nombre:'Sentadilla con pausa (3 seg)',bloque:'fuerza',musculos:'Cuádriceps, glúteo, core',contraccion:'Isométrica-concéntrica',patron:'Empuje bilateral piernas',nivel:'Intermedio',equipo:'Barra, rack',regresion:'f01',progresion:'Sentadilla con cadenas'},
-  {id:'f14',nombre:'Peso muerto sumo',bloque:'fuerza',musculos:'Aductores, glúteo, isquiotibiales, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Bisagra bilateral apertura 45°',nivel:'Intermedio',equipo:'Barra',regresion:'f02',progresion:'Peso muerto sumo con déficit'},
-  {id:'f15',nombre:'Remo Yates (con supinación)',bloque:'fuerza',musculos:'Dorsal, bíceps, romboides',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal inclinado',nivel:'Intermedio',equipo:'Barra',regresion:'f06',progresion:'Remo Yates con pausa'},
-  {id:'f16',nombre:'Press pecho en banco plano agarre cerrado',bloque:'fuerza',musculos:'Tríceps, pectoral interior, deltoides ant.',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal estrecho',nivel:'Intermedio',equipo:'Barra, banco',regresion:'f03',progresion:'Con pausa en el pecho'},
-  {id:'f17',nombre:'Good morning con barra',bloque:'fuerza',musculos:'Isquiotibiales, glúteo, erector espinal',contraccion:'Excéntrica-concéntrica',patron:'Bisagra bilateral con carga axial',nivel:'Avanzado',equipo:'Barra',regresion:'f09',progresion:'Good morning con pausa'},
-  {id:'f18',nombre:'Press Arnold con mancuernas',bloque:'fuerza',musculos:'Deltoides, tríceps, pectoral superior',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical con rotación',nivel:'Intermedio',equipo:'Mancuernas',regresion:'f04',progresion:'Press Arnold con pausa'},
-  {id:'f19',nombre:'Sentadilla búlgara con barra',bloque:'fuerza',musculos:'Cuádriceps, glúteo, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Empuje unilateral carga axial',nivel:'Avanzado',equipo:'Barra, banco',regresion:'f11',progresion:'Con pausa abajo'},
-  {id:'f20',nombre:'Remo en T-bar',bloque:'fuerza',musculos:'Dorsal, romboides, bíceps, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal bilateral',nivel:'Intermedio',equipo:'T-bar row',regresion:'f06',progresion:'T-bar con agarre neutro'},
-  {id:'f21',nombre:'Hip thrust con banda (resistencia variable)',bloque:'fuerza',musculos:'Glúteo mayor, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera con resistencia variable',nivel:'Intermedio',equipo:'Banda + banco',regresion:'f08',progresion:'Hip thrust barra + banda'},
-  {id:'f22',nombre:'Peso muerto con barra hexagonal (trap bar)',bloque:'fuerza',musculos:'Cuádriceps, glúteo, isquiotibiales, trapecio',contraccion:'Concéntrica-excéntrica',patron:'Empuje-bisagra híbrido',nivel:'Intermedio',equipo:'Trap bar',regresion:'f02',progresion:'Trap bar deadlift con déficit'},
-  {id:'f23',nombre:'Dominada con agarre supino (chin-up)',bloque:'fuerza',musculos:'Bíceps, dorsal, pectoral inf.',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical supino',nivel:'Intermedio',equipo:'Barra',regresion:'Jalón supino',progresion:'f05'},
-  {id:'f24',nombre:'Press inclinado con mancuernas',bloque:'fuerza',musculos:'Pectoral superior, deltoides, tríceps',contraccion:'Concéntrica-excéntrica',patron:'Empuje diagonal con rotación',nivel:'Intermedio',equipo:'Mancuernas, banco inclinado',regresion:'f10',progresion:'Con pausa en el pecho'},
+  {id:'f13',nombre:'Sentadilla con pausa (3 seg)',bloque:'fuerza',musculos:'Cuádriceps, Glúteo, Core',contraccion:'Isométrica-concéntrica',patron:'Empuje bilateral piernas',nivel:'Intermedio',equipo:'Barra, rack',regresion:'f01',progresion:'Sentadilla con cadenas'},
+  {id:'f14',nombre:'Peso muerto sumo',bloque:'fuerza',musculos:'Aductor, Gluteo, Isquiotibial, Trapecio',contraccion:'Concéntrica-excéntrica',patron:'Bisagra bilateral apertura 45°',nivel:'Intermedio',equipo:'Barra',regresion:'f02',progresion:'Peso muerto sumo con déficit'},
+  {id:'f15',nombre:'Remo Yates (con supinación)',bloque:'fuerza',musculos:'Dorsal, Biceps, Romboide',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal inclinado',nivel:'Intermedio',equipo:'Barra',regresion:'f06',progresion:'Remo Yates con pausa'},
+  {id:'f16',nombre:'Press pecho en banco plano agarre cerrado',bloque:'fuerza',musculos:'Triceps, Pectoral inferior, Deltoide anterior',contraccion:'Concéntrica-excéntrica',patron:'Empuje horizontal estrecho',nivel:'Intermedio',equipo:'Barra, banco',regresion:'f03',progresion:'Con pausa en el pecho'},
+  {id:'f17',nombre:'Good morning con barra',bloque:'fuerza',musculos:'Isquiotibial, Gluteo, Erector espinal',contraccion:'Excéntrica-concéntrica',patron:'Bisagra bilateral con carga axial',nivel:'Avanzado',equipo:'Barra',regresion:'f09',progresion:'Good morning con pausa'},
+  {id:'f18',nombre:'Press Arnold con mancuernas',bloque:'fuerza',musculos:'Deltoide, Triceps, Pectoral superior',contraccion:'Concéntrica-excéntrica',patron:'Empuje vertical con rotación',nivel:'Intermedio',equipo:'Mancuernas',regresion:'f04',progresion:'Press Arnold con pausa'},
+  {id:'f19',nombre:'Sentadilla búlgara con barra',bloque:'fuerza',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Empuje unilateral carga axial',nivel:'Avanzado',equipo:'Barra, banco',regresion:'f11',progresion:'Con pausa abajo'},
+  {id:'f20',nombre:'Remo en T-bar',bloque:'fuerza',musculos:'Dorsal, Romboide, Biceps, Trapecio',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal bilateral',nivel:'Intermedio',equipo:'T-bar row',regresion:'f06',progresion:'T-bar con agarre neutro'},
+  {id:'f21',nombre:'Hip thrust con banda (resistencia variable)',bloque:'fuerza',musculos:'Gluteo mayor, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Empuje de cadera con resistencia variable',nivel:'Intermedio',equipo:'Banda + banco',regresion:'f08',progresion:'Hip thrust barra + banda'},
+  {id:'f22',nombre:'Peso muerto con barra hexagonal (trap bar)',bloque:'fuerza',musculos:'Cuadriceps, Gluteo, Isquiotibial, Trapecio',contraccion:'Concéntrica-excéntrica',patron:'Empuje-bisagra híbrido',nivel:'Intermedio',equipo:'Trap bar',regresion:'f02',progresion:'Trap bar deadlift con déficit'},
+  {id:'f23',nombre:'Dominada con agarre supino (chin-up)',bloque:'fuerza',musculos:'Biceps, Dorsal, Pectoral inferior',contraccion:'Concéntrica-excéntrica',patron:'Tirón vertical supino',nivel:'Intermedio',equipo:'Barra',regresion:'Jalón supino',progresion:'f05'},
+  {id:'f24',nombre:'Press inclinado con mancuernas',bloque:'fuerza',musculos:'Pectoral superior, Deltoide, Triceps',contraccion:'Concéntrica-excéntrica',patron:'Empuje diagonal con rotación',nivel:'Intermedio',equipo:'Mancuernas, banco inclinado',regresion:'f10',progresion:'Con pausa en el pecho'},
   // ─── ACCESORIOS (13-24) ──────────────────────────────────────────────────
-  {id:'ac13',nombre:'Curl de bíceps con giro (supinación máxima)',bloque:'accesorios',musculos:'Bíceps (cabeza corta), supinador',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo con supinación',nivel:'Principiante',equipo:'Mancuernas',regresion:'ac01',progresion:'Con pausa supinada'},
-  {id:'ac14',nombre:'Extensión de tríceps overhead con banda',bloque:'accesorios',musculos:'Tríceps (cabeza larga)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo overhead',nivel:'Principiante',equipo:'Banda elástica',regresion:'ac10',progresion:'Con mancuerna'},
-  {id:'ac15',nombre:'Face pull con rotación externa',bloque:'accesorios',musculos:'Deltoides posterior, trapecio, infraespinoso',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal + RE',nivel:'Principiante',equipo:'Polea/banda',regresion:'a07',progresion:'Face pull con cuerda + pausa'},
-  {id:'ac16',nombre:'Curl femoral nórdico asistido',bloque:'accesorios',musculos:'Isquiotibiales (excéntrico)',contraccion:'Excéntrica',patron:'Flexión de rodilla excéntrica',nivel:'Avanzado',equipo:'Sujeción',regresion:'ac06',progresion:'pr01'},
-  {id:'ac17',nombre:'Extensión de cadera en polea baja (kickback)',bloque:'accesorios',musculos:'Glúteo mayor, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera en carga',nivel:'Principiante',equipo:'Polea baja',regresion:'a01',progresion:'Con mayor carga'},
-  {id:'ac18',nombre:'Aperturas inversas con mancuernas (pájaro)',bloque:'accesorios',musculos:'Deltoides posterior, romboides, trapecio medio',contraccion:'Concéntrica-excéntrica',patron:'Horizontal abduction',nivel:'Principiante',equipo:'Mancuernas',regresion:'pr06',progresion:'Con pausa al final'},
-  {id:'ac19',nombre:'Curl de muñeca con barra',bloque:'accesorios',musculos:'Flexores del antebrazo',contraccion:'Concéntrica-excéntrica',patron:'Flexión de muñeca',nivel:'Principiante',equipo:'Barra',regresion:'Curl de muñeca con mancuerna',progresion:'Con supinación adicional'},
-  {id:'ac20',nombre:'Elevaciones frontales con mancuerna',bloque:'accesorios',musculos:'Deltoides anterior, pectoral superior',contraccion:'Concéntrica-excéntrica',patron:'Flexión de hombro con carga',nivel:'Principiante',equipo:'Mancuernas',regresion:'Con banda',progresion:'Alternado con rotación'},
-  {id:'ac21',nombre:'Hip abduction en máquina',bloque:'accesorios',musculos:'Glúteo medio, TFL, glúteo mayor',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera sentado',nivel:'Principiante',equipo:'Máquina abducción',regresion:'a03',progresion:'Con mayor carga + pausa'},
-  {id:'ac22',nombre:'Extensión de espalda en banco romano',bloque:'accesorios',musculos:'Erector espinal, glúteo, isquiotibiales',contraccion:'Concéntrica-excéntrica',patron:'Extensión de tronco',nivel:'Principiante',equipo:'Banco romano',regresion:'Superman en suelo',progresion:'Con disco o barra'},
-  {id:'ac23',nombre:'Curl concentrado de bíceps',bloque:'accesorios',musculos:'Bíceps (pico)',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo concentrado',nivel:'Principiante',equipo:'Mancuerna',regresion:'ac01',progresion:'Curl concentrado con pausa'},
-  {id:'ac24',nombre:'Laterales en cable (con agarre de cuerda)',bloque:'accesorios',musculos:'Deltoides medial',contraccion:'Concéntrica-excéntrica',patron:'Abducción de hombro con carga constante',nivel:'Principiante',equipo:'Polea baja',regresion:'ac03',progresion:'Drop set laterales'},
+  {id:'ac13',nombre:'Curl de bíceps con giro (supinación máxima)',bloque:'accesorios',musculos:'Biceps (cabeza corta), Supinador',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo con supinación',nivel:'Principiante',equipo:'Mancuernas',regresion:'ac01',progresion:'Con pausa supinada'},
+  {id:'ac14',nombre:'Extensión de tríceps overhead con banda',bloque:'accesorios',musculos:'Triceps (cabeza larga)',contraccion:'Concéntrica-excéntrica',patron:'Extensión de codo overhead',nivel:'Principiante',equipo:'Banda elástica',regresion:'ac10',progresion:'Con mancuerna'},
+  {id:'ac15',nombre:'Face pull con rotación externa',bloque:'accesorios',musculos:'Deltoide posterior, Trapecio, Infraespinoso',contraccion:'Concéntrica-excéntrica',patron:'Tirón horizontal + RE',nivel:'Principiante',equipo:'Polea/banda',regresion:'a07',progresion:'Face pull con cuerda + pausa'},
+  {id:'ac16',nombre:'Curl femoral nórdico asistido',bloque:'accesorios',musculos:'Isquiotibial (excentrico)',contraccion:'Excéntrica',patron:'Flexión de rodilla excéntrica',nivel:'Avanzado',equipo:'Sujeción',regresion:'ac06',progresion:'pr01'},
+  {id:'ac17',nombre:'Extensión de cadera en polea baja (kickback)',bloque:'accesorios',musculos:'Gluteo mayor, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Extensión de cadera en carga',nivel:'Principiante',equipo:'Polea baja',regresion:'a01',progresion:'Con mayor carga'},
+  {id:'ac18',nombre:'Aperturas inversas con mancuernas (pájaro)',bloque:'accesorios',musculos:'Deltoide posterior, Romboide, Trapecio medio',contraccion:'Concéntrica-excéntrica',patron:'Horizontal abduction',nivel:'Principiante',equipo:'Mancuernas',regresion:'pr06',progresion:'Con pausa al final'},
+  {id:'ac19',nombre:'Curl de muñeca con barra',bloque:'accesorios',musculos:'Flexor del antebrazo',contraccion:'Concéntrica-excéntrica',patron:'Flexión de muñeca',nivel:'Principiante',equipo:'Barra',regresion:'Curl de muñeca con mancuerna',progresion:'Con supinación adicional'},
+  {id:'ac20',nombre:'Elevaciones frontales con mancuerna',bloque:'accesorios',musculos:'Deltoide anterior, Pectoral superior',contraccion:'Concéntrica-excéntrica',patron:'Flexión de hombro con carga',nivel:'Principiante',equipo:'Mancuernas',regresion:'Con banda',progresion:'Alternado con rotación'},
+  {id:'ac21',nombre:'Hip abduction en máquina',bloque:'accesorios',musculos:'Gluteo medio, TFL, Gluteo mayor',contraccion:'Concéntrica-excéntrica',patron:'Abducción de cadera sentado',nivel:'Principiante',equipo:'Máquina abducción',regresion:'a03',progresion:'Con mayor carga + pausa'},
+  {id:'ac22',nombre:'Extensión de espalda en banco romano',bloque:'accesorios',musculos:'Erector espinal, Gluteo, Isquiotibial',contraccion:'Concéntrica-excéntrica',patron:'Extensión de tronco',nivel:'Principiante',equipo:'Banco romano',regresion:'Superman en suelo',progresion:'Con disco o barra'},
+  {id:'ac23',nombre:'Curl concentrado de bíceps',bloque:'accesorios',musculos:'Biceps (pico)',contraccion:'Concéntrica-excéntrica',patron:'Tirón de codo concentrado',nivel:'Principiante',equipo:'Mancuerna',regresion:'ac01',progresion:'Curl concentrado con pausa'},
+  {id:'ac24',nombre:'Laterales en cable (con agarre de cuerda)',bloque:'accesorios',musculos:'Deltoide medial',contraccion:'Concéntrica-excéntrica',patron:'Abducción de hombro con carga constante',nivel:'Principiante',equipo:'Polea baja',regresion:'ac03',progresion:'Drop set laterales'},
   // ─── CARDIO (13-24) ──────────────────────────────────────────────────────
-  {id:'c13',nombre:'Interval cycling (SIT — sprint interval)',bloque:'cardio',musculos:'Cuádriceps, isquiotibiales, cardiovascular',contraccion:'Explosiva-cíclica',patron:'Sprint en bicicleta',nivel:'Avanzado',equipo:'Bicicleta estática',regresion:'c02',progresion:'SIT protocolo 10×20s'},
-  {id:'c14',nombre:'Remo HIIT (20s máximo / 40s reposo × 8)',bloque:'cardio',musculos:'Cuerpo completo, cardiovascular',contraccion:'Alta intensidad cíclica',patron:'Remo anaeróbico',nivel:'Avanzado',equipo:'Rowing machine',regresion:'c11',progresion:'Remo Tabata'},
-  {id:'c15',nombre:'Shadow boxing (boxeo en aire)',bloque:'cardio',musculos:'Hombros, core, tren inferior, cardiovascular',contraccion:'Dinámica multiplanar',patron:'Movimiento de boxeo',nivel:'Principiante',equipo:'Ninguno',regresion:'Sombra lenta',progresion:'Con guantes y saco'},
-  {id:'c16',nombre:'Caminata nórdica con bastones',bloque:'cardio',musculos:'Cuerpo completo, cardiovascular',contraccion:'Dinámica de baja intensidad',patron:'Marcha con empuje',nivel:'Principiante',equipo:'Bastones nórdicos',regresion:'c06',progresion:'Nórdica en pendiente'},
-  {id:'c17',nombre:'Trepa de cuerda (rope climb)',bloque:'cardio',musculos:'Bíceps, dorsal, core, antebrazos',contraccion:'Concéntrica-dinámica',patron:'Escalada vertical',nivel:'Avanzado',equipo:'Cuerda de trepa',regresion:'Jalada de cuerda desde suelo',progresion:'Sin piernas'},
-  {id:'c18',nombre:'Stair sprint (sprints en escalera)',bloque:'cardio',musculos:'Cuádriceps, glúteo, gemelo, cardiovascular',contraccion:'Explosiva cíclica',patron:'Sprint vertical',nivel:'Intermedio',equipo:'Escalera',regresion:'Subida de escalera caminando',progresion:'Sprint + salto en escalera'},
-  {id:'c19',nombre:'Kettlebell circuit (swing+goblet+press)',bloque:'cardio',musculos:'Cuerpo completo, cardiovascular',contraccion:'Dinámica integrada',patron:'Circuito de potencia',nivel:'Intermedio',equipo:'Kettlebell',regresion:'Circuito con mancuernas',progresion:'Doble KB circuit'},
-  {id:'c20',nombre:'Bear crawl cardio (20m × 6)',bloque:'cardio',musculos:'Hombros, core, cuádriceps',contraccion:'Dinámica cuadrúpeda',patron:'Locomotión en cuadrupedia',nivel:'Intermedio',equipo:'Espacio abierto',regresion:'fi03',progresion:'Bear crawl + salto al final'},
-  {id:'c21',nombre:'LISS en bicicleta (45-60 min)',bloque:'cardio',musculos:'Cuádriceps, cardiovascular',contraccion:'Dinámica sostenida',patron:'Pedaleo aeróbico continuo',nivel:'Principiante',equipo:'Bicicleta estática/outdoor',regresion:'c02',progresion:'Con variaciones de cadencia'},
-  {id:'c22',nombre:'Jumping jacks continuos',bloque:'cardio',musculos:'Gemelo, deltoides, cardiovascular',contraccion:'Explosiva bilateral',patron:'Salto con apertura',nivel:'Principiante',equipo:'Ninguno',regresion:'Paso lateral',progresion:'Con carga'},
-  {id:'c23',nombre:'Versaclimber o escalada vertical',bloque:'cardio',musculos:'Cuerpo completo, cardiovascular',contraccion:'Dinámica alterna',patron:'Escalada vertical',nivel:'Intermedio',equipo:'Versaclimber o escaladora',regresion:'c07',progresion:'Intervalos alta intensidad'},
-  {id:'c24',nombre:'Prowler push / trineo',bloque:'cardio',musculos:'Cuádriceps, glúteo, hombros, cardiovascular',contraccion:'Concéntrica continua',patron:'Empuje horizontal de alta resistencia',nivel:'Intermedio',equipo:'Trineo/prowler',regresion:'fi05',progresion:'Sprint con trineo'},
+  {id:'c13',nombre:'Interval cycling (SIT — sprint interval)',bloque:'cardio',musculos:'Cuadriceps, Isquiotibial, Cardiovascular',contraccion:'Explosiva-cíclica',patron:'Sprint en bicicleta',nivel:'Avanzado',equipo:'Bicicleta estática',regresion:'c02',progresion:'SIT protocolo 10×20s'},
+  {id:'c14',nombre:'Remo HIIT (20s máximo / 40s reposo × 8)',bloque:'cardio',musculos:'Cuerpo completo, Cardiovascular',contraccion:'Alta intensidad cíclica',patron:'Remo anaeróbico',nivel:'Avanzado',equipo:'Rowing machine',regresion:'c11',progresion:'Remo Tabata'},
+  {id:'c15',nombre:'Shadow boxing (boxeo en aire)',bloque:'cardio',musculos:'Hombro, Core, Tren inferior, Cardiovascular',contraccion:'Dinámica multiplanar',patron:'Movimiento de boxeo',nivel:'Principiante',equipo:'Ninguno',regresion:'Sombra lenta',progresion:'Con guantes y saco'},
+  {id:'c16',nombre:'Caminata nórdica con bastones',bloque:'cardio',musculos:'Cuerpo completo, Cardiovascular',contraccion:'Dinámica de baja intensidad',patron:'Marcha con empuje',nivel:'Principiante',equipo:'Bastones nórdicos',regresion:'c06',progresion:'Nórdica en pendiente'},
+  {id:'c17',nombre:'Trepa de cuerda (rope climb)',bloque:'cardio',musculos:'Biceps, Dorsal, Core, Antebrazo',contraccion:'Concéntrica-dinámica',patron:'Escalada vertical',nivel:'Avanzado',equipo:'Cuerda de trepa',regresion:'Jalada de cuerda desde suelo',progresion:'Sin piernas'},
+  {id:'c18',nombre:'Stair sprint (sprints en escalera)',bloque:'cardio',musculos:'Cuadriceps, Gluteo, Gemelo, Cardiovascular',contraccion:'Explosiva cíclica',patron:'Sprint vertical',nivel:'Intermedio',equipo:'Escalera',regresion:'Subida de escalera caminando',progresion:'Sprint + salto en escalera'},
+  {id:'c19',nombre:'Kettlebell circuit (swing+goblet+press)',bloque:'cardio',musculos:'Cuerpo completo, Cardiovascular',contraccion:'Dinámica integrada',patron:'Circuito de potencia',nivel:'Intermedio',equipo:'Kettlebell',regresion:'Circuito con mancuernas',progresion:'Doble KB circuit'},
+  {id:'c20',nombre:'Bear crawl cardio (20m × 6)',bloque:'cardio',musculos:'Hombro, Core, Cuadriceps',contraccion:'Dinámica cuadrúpeda',patron:'Locomotión en cuadrupedia',nivel:'Intermedio',equipo:'Espacio abierto',regresion:'fi03',progresion:'Bear crawl + salto al final'},
+  {id:'c21',nombre:'LISS en bicicleta (45-60 min)',bloque:'cardio',musculos:'Cuadriceps, Cardiovascular',contraccion:'Dinámica sostenida',patron:'Pedaleo aeróbico continuo',nivel:'Principiante',equipo:'Bicicleta estática/outdoor',regresion:'c02',progresion:'Con variaciones de cadencia'},
+  {id:'c22',nombre:'Jumping jacks continuos',bloque:'cardio',musculos:'Gemelo, Deltoide, Cardiovascular',contraccion:'Explosiva bilateral',patron:'Salto con apertura',nivel:'Principiante',equipo:'Ninguno',regresion:'Paso lateral',progresion:'Con carga'},
+  {id:'c23',nombre:'Versaclimber o escalada vertical',bloque:'cardio',musculos:'Cuerpo completo, Cardiovascular',contraccion:'Dinámica alterna',patron:'Escalada vertical',nivel:'Intermedio',equipo:'Versaclimber o escaladora',regresion:'c07',progresion:'Intervalos alta intensidad'},
+  {id:'c24',nombre:'Prowler push / trineo',bloque:'cardio',musculos:'Cuadriceps, Gluteo, Hombro, Cardiovascular',contraccion:'Concéntrica continua',patron:'Empuje horizontal de alta resistencia',nivel:'Intermedio',equipo:'Trineo/prowler',regresion:'fi05',progresion:'Sprint con trineo'},
   // ─── FLEX/RECOVERY (13-24) ───────────────────────────────────────────────
-  {id:'fr13',nombre:'PNF cuádriceps (contrae-relaja)',bloque:'flex_recovery',musculos:'Cuádriceps, recto femoral',contraccion:'PNF — Contrae-Relaja',patron:'Facilitación neuromuscular propioceptiva',nivel:'Intermedio',equipo:'Partner o banda',regresion:'fr03',progresion:'PNF con contracción agonista'},
-  {id:'fr14',nombre:'Estiramiento de piriforme en suelo (figura 4)',bloque:'flex_recovery',musculos:'Piriforme, glúteo profundo, rotadores cadera',contraccion:'Estiramiento pasivo',patron:'Rotación externa + flexión cadera',nivel:'Principiante',equipo:'Suelo',regresion:'fr05',progresion:'Con presión asistida'},
-  {id:'fr15',nombre:'Foam rolling glúteo y piriforme',bloque:'flex_recovery',musculos:'Glúteo mayor, piriforme, TFL',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento glúteo',nivel:'Principiante',equipo:'Foam roller',regresion:'Automasaje manual',progresion:'Con pelota de lacrosse'},
-  {id:'fr16',nombre:'Yoga nidra / relajación progresiva',bloque:'flex_recovery',musculos:'Sistema nervioso, musculatura global',contraccion:'Relajación activa',patron:'Recuperación neuromuscular',nivel:'Principiante',equipo:'Esterilla',regresion:'',progresion:'Meditación + respiración'},
-  {id:'fr17',nombre:'Estiramiento aductores en suelo (mariposa)',bloque:'flex_recovery',musculos:'Aductores, isquiotibiales mediales',contraccion:'Estiramiento pasivo',patron:'Abducción bilateral en suelo',nivel:'Principiante',equipo:'Suelo',regresion:'Apertura parcial',progresion:'Con presión sobre rodillas'},
-  {id:'fr18',nombre:'Estiramiento de dorsal en polea / barra',bloque:'flex_recovery',musculos:'Dorsal, serrato, redondo mayor',contraccion:'Estiramiento activo asistido',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Barra o polea',regresion:'fr06',progresion:'Con rotación torácica'},
-  {id:'fr19',nombre:'Foam rolling en gemelos',bloque:'flex_recovery',musculos:'Gastrocnemio, sóleo, fascia posterior',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento',nivel:'Principiante',equipo:'Foam roller',regresion:'Masaje manual',progresion:'Con pelota de lacrosse'},
-  {id:'fr20',nombre:'Savasana + respiración 4-7-8',bloque:'flex_recovery',musculos:'Sistema nervioso autónomo',contraccion:'Relajación total',patron:'Recuperación post-entrenamiento',nivel:'Principiante',equipo:'Esterilla',regresion:'',progresion:'fr16'},
-  {id:'fr21',nombre:'Estiramiento de pectoral en suelo (ángeles)',bloque:'flex_recovery',musculos:'Pectoral, bíceps, deltoides ant.',contraccion:'Estiramiento pasivo-activo',patron:'Extensión bilateral de hombros',nivel:'Principiante',equipo:'Suelo',regresion:'fr04',progresion:'Con carga leve en manos'},
-  {id:'fr22',nombre:'Foam rolling dorsal alto (entre escápulas)',bloque:'flex_recovery',musculos:'Trapecio, romboides, erector torácico',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'fr08',progresion:'Con foam roller de alta densidad'},
-  {id:'fr23',nombre:'Estiramiento lateral de cuello y trapecio',bloque:'flex_recovery',musculos:'Trapecio sup., esternocleidomastoideo, escalenos',contraccion:'Estiramiento pasivo',patron:'Flexión lateral cervical',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con depresión activa de escápula'},
-  {id:'fr24',nombre:'Hip 90/90 stretch con progresión dinámica',bloque:'flex_recovery',musculos:'Cadera, rotadores, piriforme, aductores',contraccion:'Dinámica activa',patron:'Movilidad multiplanar de cadera',nivel:'Intermedio',equipo:'Suelo',regresion:'m02',progresion:'Con inclinación de tronco'},
+  {id:'fr13',nombre:'PNF cuádriceps (contrae-relaja)',bloque:'flex_recovery',musculos:'Cuadriceps, Recto femoral',contraccion:'PNF — Contrae-Relaja',patron:'Facilitación neuromuscular propioceptiva',nivel:'Intermedio',equipo:'Partner o banda',regresion:'fr03',progresion:'PNF con contracción agonista'},
+  {id:'fr14',nombre:'Estiramiento de piriforme en suelo (figura 4)',bloque:'flex_recovery',musculos:'Piriforme, Gluteo profundo, Rotador de cadera',contraccion:'Estiramiento pasivo',patron:'Rotación externa + flexión cadera',nivel:'Principiante',equipo:'Suelo',regresion:'fr05',progresion:'Con presión asistida'},
+  {id:'fr15',nombre:'Foam rolling glúteo y piriforme',bloque:'flex_recovery',musculos:'Gluteo mayor, Piriforme, TFL',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento glúteo',nivel:'Principiante',equipo:'Foam roller',regresion:'Automasaje manual',progresion:'Con pelota de lacrosse'},
+  {id:'fr16',nombre:'Yoga nidra / relajación progresiva',bloque:'flex_recovery',musculos:'Sistema nervioso, Musculatura global',contraccion:'Relajación activa',patron:'Recuperación neuromuscular',nivel:'Principiante',equipo:'Esterilla',regresion:'',progresion:'Meditación + respiración'},
+  {id:'fr17',nombre:'Estiramiento aductores en suelo (mariposa)',bloque:'flex_recovery',musculos:'Aductor, Isquiotibial medial',contraccion:'Estiramiento pasivo',patron:'Abducción bilateral en suelo',nivel:'Principiante',equipo:'Suelo',regresion:'Apertura parcial',progresion:'Con presión sobre rodillas'},
+  {id:'fr18',nombre:'Estiramiento de dorsal en polea / barra',bloque:'flex_recovery',musculos:'Dorsal, Serrato, Redondo mayor',contraccion:'Estiramiento activo asistido',patron:'Extensión de hombro',nivel:'Principiante',equipo:'Barra o polea',regresion:'fr06',progresion:'Con rotación torácica'},
+  {id:'fr19',nombre:'Foam rolling en gemelos',bloque:'flex_recovery',musculos:'Gastrocnemio, Soleo, Fascia posterior',contraccion:'Liberación miofascial',patron:'Compresión y deslizamiento',nivel:'Principiante',equipo:'Foam roller',regresion:'Masaje manual',progresion:'Con pelota de lacrosse'},
+  {id:'fr20',nombre:'Savasana + respiración 4-7-8',bloque:'flex_recovery',musculos:'Sistema nervioso autonomo',contraccion:'Relajación total',patron:'Recuperación post-entrenamiento',nivel:'Principiante',equipo:'Esterilla',regresion:'',progresion:'fr16'},
+  {id:'fr21',nombre:'Estiramiento de pectoral en suelo (ángeles)',bloque:'flex_recovery',musculos:'Pectoral, Biceps, Deltoide anterior',contraccion:'Estiramiento pasivo-activo',patron:'Extensión bilateral de hombros',nivel:'Principiante',equipo:'Suelo',regresion:'fr04',progresion:'Con carga leve en manos'},
+  {id:'fr22',nombre:'Foam rolling dorsal alto (entre escápulas)',bloque:'flex_recovery',musculos:'Trapecio, Romboide, Erector toracico',contraccion:'Liberación miofascial',patron:'Extensión torácica',nivel:'Principiante',equipo:'Foam roller',regresion:'fr08',progresion:'Con foam roller de alta densidad'},
+  {id:'fr23',nombre:'Estiramiento lateral de cuello y trapecio',bloque:'flex_recovery',musculos:'Trapecio superior, Esternocleidomastoideo, Escaleno',contraccion:'Estiramiento pasivo',patron:'Flexión lateral cervical',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'Con depresión activa de escápula'},
+  {id:'fr24',nombre:'Hip 90/90 stretch con progresión dinámica',bloque:'flex_recovery',musculos:'Cadera, Rotador, Piriforme, Aductor',contraccion:'Dinámica activa',patron:'Movilidad multiplanar de cadera',nivel:'Intermedio',equipo:'Suelo',regresion:'m02',progresion:'Con inclinación de tronco'},
   // ─── PROPIOCEPCIÓN (13-24) ───────────────────────────────────────────────
-  {id:'po13',nombre:'Single leg squat en bosu (pistol asistido)',bloque:'propiocepcion',musculos:'Cuádriceps, glúteo, estabilizadores',contraccion:'Concéntrica en superficie inestable',patron:'Empuje unilateral en inestable',nivel:'Avanzado',equipo:'BOSU',regresion:'po03',progresion:'Pistol completo sin asistencia'},
-  {id:'po14',nombre:'Star excursion balance test (SEBT)',bloque:'propiocepcion',musculos:'Cadena cinética inferior, core',contraccion:'Reactiva-excéntrica',patron:'Estabilización dinámica multidireccional',nivel:'Intermedio',equipo:'Ninguno',regresion:'po02',progresion:'SEBT con carga distal'},
-  {id:'po15',nombre:'Propiocepción en TRX (un apoyo)',bloque:'propiocepcion',musculos:'Core, hombros, cadena cinética',contraccion:'Isométrica reactiva',patron:'Estabilización suspendida',nivel:'Avanzado',equipo:'TRX',regresion:'TRX plank bilateral',progresion:'Con perturbación externa'},
-  {id:'po16',nombre:'Equilibrio con banda de perturbación lateral',bloque:'propiocepcion',musculos:'Glúteo medio, estabilizadores rodilla, tobillo',contraccion:'Reactiva',patron:'Estabilización lateral reactiva',nivel:'Avanzado',equipo:'Banda elástica + partner',regresion:'po06',progresion:'En superficie inestable'},
-  {id:'po17',nombre:'Carrera con cambio de dirección reactivo',bloque:'propiocepcion',musculos:'Cuádriceps, glúteo, gemelo, coordinación',contraccion:'Reactiva-explosiva',patron:'Cambio de dirección',nivel:'Avanzado',equipo:'Conos',regresion:'Sprint recto',progresion:'T-test / 5-10-5'},
-  {id:'po18',nombre:'Balance en tabla de Freeman',bloque:'propiocepcion',musculos:'Tobillo, rodilla, cadera',contraccion:'Reactiva',patron:'Estabilización 3D de tobillo',nivel:'Intermedio',equipo:'Tabla de Freeman/BOSU',regresion:'po04',progresion:'Con perturbación + tarea cognitiva'},
-  {id:'po19',nombre:'Giro de 180° + landing estabilizado',bloque:'propiocepcion',musculos:'Cuádriceps, glúteo, gemelo, estabilizadores',contraccion:'Reactiva-excéntrica',patron:'Aterrizaje tras rotación',nivel:'Avanzado',equipo:'Ninguno',regresion:'Landing bilateral sin giro',progresion:'360° landing + aceleración'},
-  {id:'po20',nombre:'Propiocepción cervical con láser (punto de referencia)',bloque:'propiocepcion',musculos:'Músculos suboccipitales, proprioceptores cervicales',contraccion:'Control neuromuscular cervical',patron:'Reposicionamiento cervical',nivel:'Intermedio',equipo:'Puntero láser en cabeza',regresion:'Reposicionamiento sin láser',progresion:'Con perturbación visual'},
-  {id:'po21',nombre:'Lanzamiento y captura en inestable',bloque:'propiocepcion',musculos:'Hombros, core, estabilizadores',contraccion:'Reactiva',patron:'Estabilización dinámica MS',nivel:'Intermedio',equipo:'BOSU + pelota',regresion:'po08',progresion:'Lanzamiento + inestable bilateral'},
-  {id:'po22',nombre:'Equilibrio en cuerda floja (slackline)',bloque:'propiocepcion',musculos:'Tobillo, rodilla, cadera, core',contraccion:'Reactiva-adaptativa',patron:'Estabilización en superficie dinámica',nivel:'Avanzado',equipo:'Slackline',regresion:'po04',progresion:'Caminata + sentadilla en slackline'},
-  {id:'po23',nombre:'Caída lateral controlada y recuperación',bloque:'propiocepcion',musculos:'Glúteo medio, cuádriceps, estabilizadores tobillo',contraccion:'Excéntrica reactiva',patron:'Control de caída lateral',nivel:'Avanzado',equipo:'Colchoneta',regresion:'Lateral lunge controlado',progresion:'Con perturbación externa'},
-  {id:'po24',nombre:'Ejercicio de Romberg (variantes)',bloque:'propiocepcion',musculos:'Tobillo, rodilla, cadera, sistema vestibular',contraccion:'Isométrica reactiva',patron:'Estabilización multisensorial',nivel:'Principiante',equipo:'Ninguno',regresion:'po01',progresion:'Romberg en superficie inestable'},
+  {id:'po13',nombre:'Single leg squat en bosu (pistol asistido)',bloque:'propiocepcion',musculos:'Cuadriceps, Gluteo, Estabilizador',contraccion:'Concéntrica en superficie inestable',patron:'Empuje unilateral en inestable',nivel:'Avanzado',equipo:'BOSU',regresion:'po03',progresion:'Pistol completo sin asistencia'},
+  {id:'po14',nombre:'Star excursion balance test (SEBT)',bloque:'propiocepcion',musculos:'Cadena cinetica inferior, Core',contraccion:'Reactiva-excéntrica',patron:'Estabilización dinámica multidireccional',nivel:'Intermedio',equipo:'Ninguno',regresion:'po02',progresion:'SEBT con carga distal'},
+  {id:'po15',nombre:'Propiocepción en TRX (un apoyo)',bloque:'propiocepcion',musculos:'Core, Hombro, Cadena cinetica',contraccion:'Isométrica reactiva',patron:'Estabilización suspendida',nivel:'Avanzado',equipo:'TRX',regresion:'TRX plank bilateral',progresion:'Con perturbación externa'},
+  {id:'po16',nombre:'Equilibrio con banda de perturbación lateral',bloque:'propiocepcion',musculos:'Gluteo medio, Estabilizador de rodilla, Tobillo',contraccion:'Reactiva',patron:'Estabilización lateral reactiva',nivel:'Avanzado',equipo:'Banda elástica + partner',regresion:'po06',progresion:'En superficie inestable'},
+  {id:'po17',nombre:'Carrera con cambio de dirección reactivo',bloque:'propiocepcion',musculos:'Cuadriceps, Gluteo, Gemelo, Coordinacion',contraccion:'Reactiva-explosiva',patron:'Cambio de dirección',nivel:'Avanzado',equipo:'Conos',regresion:'Sprint recto',progresion:'T-test / 5-10-5'},
+  {id:'po18',nombre:'Balance en tabla de Freeman',bloque:'propiocepcion',musculos:'Tobillo, Rodilla, Cadera',contraccion:'Reactiva',patron:'Estabilización 3D de tobillo',nivel:'Intermedio',equipo:'Tabla de Freeman/BOSU',regresion:'po04',progresion:'Con perturbación + tarea cognitiva'},
+  {id:'po19',nombre:'Giro de 180° + landing estabilizado',bloque:'propiocepcion',musculos:'Cuadriceps, Gluteo, Gemelo, Estabilizador',contraccion:'Reactiva-excéntrica',patron:'Aterrizaje tras rotación',nivel:'Avanzado',equipo:'Ninguno',regresion:'Landing bilateral sin giro',progresion:'360° landing + aceleración'},
+  {id:'po20',nombre:'Propiocepción cervical con láser (punto de referencia)',bloque:'propiocepcion',musculos:'Musculo suboccipital, Propioceptor cervical',contraccion:'Control neuromuscular cervical',patron:'Reposicionamiento cervical',nivel:'Intermedio',equipo:'Puntero láser en cabeza',regresion:'Reposicionamiento sin láser',progresion:'Con perturbación visual'},
+  {id:'po21',nombre:'Lanzamiento y captura en inestable',bloque:'propiocepcion',musculos:'Hombro, Core, Estabilizador',contraccion:'Reactiva',patron:'Estabilización dinámica MS',nivel:'Intermedio',equipo:'BOSU + pelota',regresion:'po08',progresion:'Lanzamiento + inestable bilateral'},
+  {id:'po22',nombre:'Equilibrio en cuerda floja (slackline)',bloque:'propiocepcion',musculos:'Tobillo, Rodilla, Cadera, Core',contraccion:'Reactiva-adaptativa',patron:'Estabilización en superficie dinámica',nivel:'Avanzado',equipo:'Slackline',regresion:'po04',progresion:'Caminata + sentadilla en slackline'},
+  {id:'po23',nombre:'Caída lateral controlada y recuperación',bloque:'propiocepcion',musculos:'Gluteo medio, Cuadriceps, Estabilizador de tobillo',contraccion:'Excéntrica reactiva',patron:'Control de caída lateral',nivel:'Avanzado',equipo:'Colchoneta',regresion:'Lateral lunge controlado',progresion:'Con perturbación externa'},
+  {id:'po24',nombre:'Ejercicio de Romberg (variantes)',bloque:'propiocepcion',musculos:'Tobillo, Rodilla, Cadera, Sistema vestibular',contraccion:'Isométrica reactiva',patron:'Estabilización multisensorial',nivel:'Principiante',equipo:'Ninguno',regresion:'po01',progresion:'Romberg en superficie inestable'},
   // ─── FUNCIONAL INTEGRADOR (13-24) ────────────────────────────────────────
-  {id:'fi13',nombre:'Thruster con barra (squat + press)',bloque:'funcional',musculos:'Cuádriceps, glúteo, deltoides, tríceps',contraccion:'Dinámica integrada',patron:'Empuje piernas + empuje vertical',nivel:'Avanzado',equipo:'Barra o mancuernas',regresion:'Goblet squat + press separado',progresion:'Thruster en AMRAP'},
+  {id:'fi13',nombre:'Thruster con barra (squat + press)',bloque:'funcional',musculos:'Cuadriceps, Gluteo, Deltoide, Triceps',contraccion:'Dinámica integrada',patron:'Empuje piernas + empuje vertical',nivel:'Avanzado',equipo:'Barra o mancuernas',regresion:'Goblet squat + press separado',progresion:'Thruster en AMRAP'},
   {id:'fi14',nombre:'Man maker con mancuernas',bloque:'funcional',musculos:'Cuerpo completo',contraccion:'Dinámica multiplanar',patron:'Complejo de suelo + empuje + tracción',nivel:'Avanzado',equipo:'Mancuernas',regresion:'Renegade row sin push-up',progresion:'Man maker con mayor carga'},
-  {id:'fi15',nombre:'Tire flip (volteo de llanta)',bloque:'funcional',musculos:'Cadena posterior, cuádriceps, hombros',contraccion:'Explosiva funcional',patron:'Empuje + bisagra de alta potencia',nivel:'Avanzado',equipo:'Llanta grande',regresion:'Sumo deadlift',progresion:'Tire flip + salto encima'},
-  {id:'fi16',nombre:'Deadball over shoulder',bloque:'funcional',musculos:'Cadena posterior, core, trapecio, hombros',contraccion:'Explosiva sobre la cabeza',patron:'Levantamiento + lanzamiento overhead',nivel:'Avanzado',equipo:'Balón medicinal/sandbag',regresion:'fi07',progresion:'Con mayor peso'},
-  {id:'fi17',nombre:'Kettlebell snatch',bloque:'funcional',musculos:'Cadena posterior, hombros, core',contraccion:'Explosiva vertical',patron:'Triple extensión + overhead',nivel:'Avanzado',equipo:'Kettlebell',regresion:'KB clean + press',progresion:'KB snatch doble'},
-  {id:'fi18',nombre:'Wall ball shots',bloque:'funcional',musculos:'Cuádriceps, glúteo, hombros, core',contraccion:'Explosiva-dinámica',patron:'Squat + empuje vertical integrado',nivel:'Intermedio',equipo:'Balón medicinal, pared',regresion:'fi13 (thruster)',progresion:'Wall ball en AMRAP'},
-  {id:'fi19',nombre:'Rope pull (cuerda acostado)',bloque:'funcional',musculos:'Dorsal, bíceps, core',contraccion:'Concéntrica tracción horizontal',patron:'Tracción horizontal en el suelo',nivel:'Intermedio',equipo:'Cuerda',regresion:'fi04 farmer carry',progresion:'Rope pull de pie'},
-  {id:'fi20',nombre:'Movimiento animal: rana (frog)',bloque:'funcional',musculos:'Caderas, core, hombros, cuádriceps',contraccion:'Dinámica global',patron:'Locomotión cuadrúpeda explosiva',nivel:'Intermedio',equipo:'Suelo',regresion:'fi12',progresion:'Rana lateral y diagonal'},
-  {id:'fi21',nombre:'Push press con mancuernas',bloque:'funcional',musculos:'Deltoides, tríceps, cuádriceps, core',contraccion:'Explosiva vertical',patron:'Empuje vertical con impulso piernas',nivel:'Intermedio',equipo:'Mancuernas',regresion:'f04 press militar',progresion:'Push jerk'},
-  {id:'fi22',nombre:'Slam ball lateral',bloque:'funcional',musculos:'Oblicuos, core, hombros, caderas',contraccion:'Explosiva rotacional',patron:'Rotación + lanzamiento lateral',nivel:'Intermedio',equipo:'Slam ball',regresion:'pt06',progresion:'Con giro + recepción'},
-  {id:'fi23',nombre:'Loaded carry en cinta (marcha con carga)',bloque:'funcional',musculos:'Core, trapecio, antebrazos, glúteo',contraccion:'Isométrica-dinámica',patron:'Carga transportada en movimiento',nivel:'Intermedio',equipo:'Cinta + mancuernas/KB',regresion:'fi04',progresion:'fi10 overhead carry'},
-  {id:'fi24',nombre:'Get-up de emergencia (sin manos)',bloque:'funcional',musculos:'Core, glúteo, cuádriceps, estabilizadores',contraccion:'Dinámica funcional',patron:'Levantamiento del suelo sin apoyo',nivel:'Intermedio',equipo:'Ninguno',regresion:'TGU asistido',progresion:'fi01 Turkish get-up'},];
+  {id:'fi15',nombre:'Tire flip (volteo de llanta)',bloque:'funcional',musculos:'Cadena posterior, Cuadriceps, Hombro',contraccion:'Explosiva funcional',patron:'Empuje + bisagra de alta potencia',nivel:'Avanzado',equipo:'Llanta grande',regresion:'Sumo deadlift',progresion:'Tire flip + salto encima'},
+  {id:'fi16',nombre:'Deadball over shoulder',bloque:'funcional',musculos:'Cadena posterior, Core, Trapecio, Hombro',contraccion:'Explosiva sobre la cabeza',patron:'Levantamiento + lanzamiento overhead',nivel:'Avanzado',equipo:'Balón medicinal/sandbag',regresion:'fi07',progresion:'Con mayor peso'},
+  {id:'fi17',nombre:'Kettlebell snatch',bloque:'funcional',musculos:'Cadena posterior, Hombro, Core',contraccion:'Explosiva vertical',patron:'Triple extensión + overhead',nivel:'Avanzado',equipo:'Kettlebell',regresion:'KB clean + press',progresion:'KB snatch doble'},
+  {id:'fi18',nombre:'Wall ball shots',bloque:'funcional',musculos:'Cuadriceps, Gluteo, Hombro, Core',contraccion:'Explosiva-dinámica',patron:'Squat + empuje vertical integrado',nivel:'Intermedio',equipo:'Balón medicinal, pared',regresion:'fi13 (thruster)',progresion:'Wall ball en AMRAP'},
+  {id:'fi19',nombre:'Rope pull (cuerda acostado)',bloque:'funcional',musculos:'Dorsal, Biceps, Core',contraccion:'Concéntrica tracción horizontal',patron:'Tracción horizontal en el suelo',nivel:'Intermedio',equipo:'Cuerda',regresion:'fi04 farmer carry',progresion:'Rope pull de pie'},
+  {id:'fi20',nombre:'Movimiento animal: rana (frog)',bloque:'funcional',musculos:'Caderas, Core, Hombros, Cuádriceps',contraccion:'Dinámica global',patron:'Locomotión cuadrúpeda explosiva',nivel:'Intermedio',equipo:'Suelo',regresion:'fi12',progresion:'Rana lateral y diagonal'},
+  {id:'fi21',nombre:'Push press con mancuernas',bloque:'funcional',musculos:'Deltoide, Triceps, Cuadriceps, Core',contraccion:'Explosiva vertical',patron:'Empuje vertical con impulso piernas',nivel:'Intermedio',equipo:'Mancuernas',regresion:'f04 press militar',progresion:'Push jerk'},
+  {id:'fi22',nombre:'Slam ball lateral',bloque:'funcional',musculos:'Oblicuo, Core, Hombro, Cadera',contraccion:'Explosiva rotacional',patron:'Rotación + lanzamiento lateral',nivel:'Intermedio',equipo:'Slam ball',regresion:'pt06',progresion:'Con giro + recepción'},
+  {id:'fi23',nombre:'Loaded carry en cinta (marcha con carga)',bloque:'funcional',musculos:'Core, Trapecio, Antebrazo, Gluteo',contraccion:'Isométrica-dinámica',patron:'Carga transportada en movimiento',nivel:'Intermedio',equipo:'Cinta + mancuernas/KB',regresion:'fi04',progresion:'fi10 overhead carry'},
+  {id:'fi24',nombre:'Get-up de emergencia (sin manos)',bloque:'funcional',musculos:'Core, Gluteo, Cuadriceps, Estabilizador',contraccion:'Dinámica funcional',patron:'Levantamiento del suelo sin apoyo',nivel:'Intermedio',equipo:'Ninguno',regresion:'TGU asistido',progresion:'fi01 Turkish get-up'},
+  {id:'pot01',nombre:'Hang clean desde rodillas',bloque:'potencia',musculos:'Cadena posterior, Trapecio',contraccion:'Explosiva multiarticular',patron:'Triple extensión desde posición alta',nivel:'Avanzado',equipo:'Barra',regresion:'pt09',progresion:'Hang clean completo'},
+  {id:'pot02',nombre:'Push press con barra',bloque:'potencia',musculos:'Deltoide, Triceps, Cuadriceps',contraccion:'Explosiva vertical',patron:'Empuje vertical con impulso de piernas',nivel:'Intermedio',equipo:'Barra',regresion:'Press militar estricto',progresion:'Push jerk'},
+  {id:'pot03',nombre:'Arrancada colgante (hang snatch)',bloque:'potencia',musculos:'Cadena posterior, Trapecio, Hombro',contraccion:'Explosiva multiarticular',patron:'Triple extensión + recepción overhead',nivel:'Avanzado',equipo:'Barra',regresion:'pt20',progresion:'Arrancada completa'},
+  {id:'pot04',nombre:'Lanzamiento rotacional de balón medicinal',bloque:'potencia',musculos:'Core, Oblicuo, Hombro',contraccion:'Explosiva rotacional',patron:'Rotación de tronco con lanzamiento',nivel:'Intermedio',equipo:'Balón medicinal',regresion:'Rotación de tronco sin carga',progresion:'Lanzamiento rotacional con salto de aproximación'},
+  {id:'pot05',nombre:'Sprint resistido con trineo',bloque:'potencia',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Explosiva reactiva',patron:'Carrera de velocidad resistida',nivel:'Intermedio',equipo:'Trineo de arrastre',regresion:'pt11',progresion:'Trineo con mayor carga'},
+  {id:'pot06',nombre:'Aceleración en cuesta',bloque:'potencia',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Explosiva reactiva',patron:'Carrera de velocidad en pendiente',nivel:'Intermedio',equipo:'Espacio con pendiente',regresion:'pt11',progresion:'Cuesta con mayor inclinación'},
+  {id:'pot07',nombre:'Cambios de dirección 5-10-5 (pro agility)',bloque:'potencia',musculos:'Cuadriceps, Gluteo, Aductor',contraccion:'Explosiva multidireccional',patron:'Aceleración-desaceleración-cambio de dirección',nivel:'Avanzado',equipo:'Conos',regresion:'Cambios de dirección a baja velocidad',progresion:'5-10-5 con estímulo reactivo'},
+  {id:'pot08',nombre:'Kettlebell clean and press',bloque:'potencia',musculos:'Gluteo, Isquiotibial, Deltoide, Triceps',contraccion:'Explosiva multiarticular',patron:'Bisagra + empuje vertical',nivel:'Intermedio',equipo:'Kettlebell',regresion:'pt08',progresion:'Doble KB clean and press'},
+  {id:'plio01',nombre:'Countermovement jump medido',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Reactiva pliométrica',patron:'Salto vertical con contramovimiento',nivel:'Principiante',equipo:'Ninguno',regresion:'Sentadilla con salto asistido',progresion:'pt01'},
+  {id:'plio02',nombre:'Salto continuo en el lugar (pogo jumps)',bloque:'pliometria',musculos:'Gemelo, Tobillo',contraccion:'Reactiva pliométrica',patron:'Ciclo estiramiento-acortamiento de tobillo',nivel:'Principiante',equipo:'Ninguno',regresion:'Elevación de talones',progresion:'Pogo con avance'},
+  {id:'plio03',nombre:'Descenso controlado de cajón (step-down)',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Estabilizador',contraccion:'Excéntrica controlada',patron:'Aterrizaje unipodal controlado',nivel:'Principiante',equipo:'Cajón bajo',regresion:'',progresion:'pt02'},
+  {id:'plio04',nombre:'Bounding progresivo',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Isquiotibial',contraccion:'Reactiva pliométrica',patron:'Zancada bounding alternada',nivel:'Avanzado',equipo:'Espacio abierto',regresion:'pt03',progresion:'Bounding con resistencia'},
+  {id:'plio05',nombre:'Salto lateral sobre línea (line hops)',bloque:'pliometria',musculos:'Gemelo, Gluteo medio, Tobillo',contraccion:'Reactiva pliométrica',patron:'Salto lateral de baja amplitud',nivel:'Principiante',equipo:'Ninguno',regresion:'',progresion:'pt12'},
+  {id:'plio06',nombre:'Squat jump con pausa',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Concéntrica explosiva pura',patron:'Salto vertical sin contramovimiento',nivel:'Intermedio',equipo:'Ninguno',regresion:'pt01',progresion:'Squat jump con carga'},
+  {id:'plio07',nombre:'Salto de valla lateral (lateral hurdle hops)',bloque:'pliometria',musculos:'Gluteo medio, Cuadriceps, Gemelo',contraccion:'Reactiva pliométrica',patron:'Salto lateral repetido sobre obstáculo',nivel:'Intermedio',equipo:'Vallas bajas',regresion:'pt12',progresion:'pt18'},
+  {id:'plio08',nombre:'Depth jump a sprint',bloque:'pliometria',musculos:'Cuadriceps, Gluteo, Gemelo',contraccion:'Reactiva pliométrica',patron:'Aterrizaje seguido de aceleración',nivel:'Avanzado',equipo:'Cajón',regresion:'pt10',progresion:'Depth jump a cambio de dirección'},];
 
 // ─── ESTILOS ────────────────────────────────────────────────────────────────
 const mkS=()=>({
@@ -881,507 +916,65 @@ function EjecucionModal({ plan, exs, onClose }){
   );
 }
 
-export default function App(){
-  const s=mkS();
-  const [tab,setTab]=useState(()=>{
-    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
-  });
-  useEffect(()=>{
-    try { localStorage.setItem('activa_tab',tab); } catch {}
-  },[tab]);
-  // Ejercicios en tiempo real (Supabase) — seeded from DB0 on first run
-  const { exs, saveEjercicio: dbSaveEjercicio, deleteEjercicio: dbDeleteEjercicio, setExs } = useEjercicios(DB0);
-  // ── ESTADO DE PLAN SEMANAL ────────────────────────────────────────────────
-  // El plan agrupa de 1 a 5 sesiones (días) que comparten cliente/fecha/plan.
-  // Cada día = { id, obj, name, blocks, notas }. activeDia = día en edición.
-  const blankDia=(n=1)=>({id:genId('dia'),obj:null,name:`Día ${n}`,blocks:[],notas:''});
-  const [session,setSession]=useState({
-    cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
-    planNombre:'', dias:[blankDia(1)], activeDia:0,
-  });
-  // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
-  const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
-  const [clients, setClientsLocal] = useState([]);
+const OverlayWrap=({children,wide})=>(
+  <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 16px'}}>
+    <div style={{background:WH,borderRadius:12,padding:24,width:'100%',maxWidth:wide?760:440,marginBottom:20}}>{children}</div>
+  </div>
+);
 
-  // Sincronizar clientes de DB con estado local
-  useEffect(()=>{ setClientsLocal(dbClients); }, [dbClients]);
+// ══════════════════════════════════════════════════════════════════════════
+// WIZARD DE ALTA DE CLIENTE
+// Paso 0 = Datos personales | Pasos 1-9 = Screening
+// ══════════════════════════════════════════════════════════════════════════
+const WIZARD_STEPS=[
+  {title:'Datos personales',          icon:'👤',fase:1},
+  {title:'Historia de salud',         icon:'🏥',fase:1},
+  {title:'Historia de entrenamiento', icon:'🏋️',fase:1},
+  {title:'Estilo de vida y objetivos',icon:'🌿',fase:1},
+  {title:'Guardar / Agendar evaluación',icon:'💾',fase:'transicion'},
+  {title:'Composición corporal',      icon:'📊',fase:2},
+  {title:'Evaluación postural',       icon:'🔍',fase:2},
+  {title:'Movilidad y control motor', icon:'🦵',fase:2},
+  {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
+  {title:'Banderas clínicas',         icon:'🚩',fase:2},
+  {title:'Potencia y saltos (deportistas)',icon:'🏃',fase:2},
+  {title:'Síntesis y plan',           icon:'📋',fase:2},
+];
 
-  // Wrappers que persisten en DB Y actualizan estado local
-  const saveClientFn = useCallback(async (client) => {
-    await dbSaveClient(client);
-  }, [dbSaveClient]);
-
-  const deleteClientFn = useCallback(async (id) => {
-    await dbDeleteClient(id);
-    if(session.clienteId===id) setSession(p=>({...p,clienteId:null,cliente:''}));
-  }, [dbDeleteClient, session.clienteId]);
-
-  const updateClientFn = useCallback(async (id, updates) => {
-    await dbUpdateClient(id, updates);
-  }, [dbUpdateClient]);
-  const [dbFilter,setDbFilter]=useState('all');
-  const [dbSearch,setDbSearch]=useState('');
-  const [showExForm,setShowExForm]=useState(false);
-  const [editingEx,setEditingEx]=useState(null);
-  const [expandedBlock,setExpandedBlock]=useState(null);
-  const [selBlock,setSelBlock]=useState(null);
-  const [replaceTarget,setReplaceTarget]=useState(null);
-  const [exSearch,setExSearch]=useState('');
-  const [overrideState,setOverrideState]=useState(null);
-  const [addBType,setAddBType]=useState('');
-  const [addBPos,setAddBPos]=useState('');
-  // brand persiste en localStorage — no se pierde al cambiar de pestaña
-  const [brand,setBrand]=useState(()=>{
-    try {
-      const saved=localStorage.getItem('activa_brand');
-      return saved ? JSON.parse(saved) : {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'};
-    } catch { return {gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'}; }
-  });
-  // Guardar brand en localStorage cada vez que cambia
-  useEffect(()=>{
-    try { localStorage.setItem('activa_brand', JSON.stringify(brand)); } catch {}
-  },[brand]);
-  const [clientWizard,setClientWizard]=useState(null);
-  const [informeCliente,setInformeCliente]=useState(null);
-
-  const logoInputRef=useRef();
-  const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
-
-  const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
-  // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
-  const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
-  // Registro de planes del cliente activo + base de conocimiento de la IA
-  const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
-  // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
-  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
-  const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
-  // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
-  const ejecucionResumen=useMemo(()=>{
-    if(!ejecRegistros.length)return [];
-    const porEx={};
-    ejecRegistros.forEach(r=>{
-      if(r.peso_real==null&&!r.reps_real)return;
-      const nom=r.ejercicio_nombre||(exs.find(e=>e.id===r.ejercicio_id)?.nombre)||r.ejercicio_id;
-      (porEx[nom]=porEx[nom]||[]).push({sem:r.semana,peso:r.peso_real,reps:r.reps_real});
-    });
-    return Object.entries(porEx).map(([nom,arr])=>{
-      arr.sort((a,b)=>a.sem-b.sem);
-      const pts=arr.map(x=>`S${x.sem}: ${x.peso!=null?x.peso+'kg':''}${x.reps?'×'+x.reps:''}`.trim());
-      return `${nom} → ${pts.join(', ')}`;
-    });
-  },[ejecRegistros,exs]);
-  const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
-  const [showHistorial,setShowHistorial]=useState(false);
-  const [verEjecucion,setVerEjecucion]=useState(null);
-  const [showEntrenarIA,setShowEntrenarIA]=useState(false);
-  // Fase activa del plan de periodización del cliente
-  const activeFasePlan=useMemo(()=>{
-    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
-    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
-  },[activeClient]);
-
-  // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
-  const numDias=session.dias?.length||1;
-  const activeDiaIdx=Math.min(session.activeDia||0,numDias-1);
-  const dia=session.dias?.[activeDiaIdx]||{obj:null,blocks:[],name:'',notas:''};
-  // Cronograma (plazos) del plan según la periodización del cliente y la fecha de inicio
-  const planMeta=useMemo(()=>{
-    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
-    return planTimeline(PERIODIZACIONES[activeClient.periodizacion],session.fecha);
-  },[activeClient,session.fecha]);
-
-  // Modifica SOLO el día activo (fn recibe el día y devuelve el día nuevo)
-  const setDia=(fn)=>setSession(p=>{
-    const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
-    return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
-  });
-  const addDia=()=>setSession(p=>{
-    if((p.dias?.length||0)>=5)return p;
-    return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
-  });
-  const removeDia=(idx)=>setSession(p=>{
-    if((p.dias?.length||1)<=1)return p;
-    const dias=p.dias.filter((_,i)=>i!==idx).map((d,i)=>({...d,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Día ${i+1}`}));
-    return {...p,dias,activeDia:Math.max(0,Math.min(p.activeDia,dias.length-1))};
-  });
-  const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
-  const setNumDias=(target)=>setSession(p=>{
-    const cur=p.dias?.length||1;
-    if(target===cur||target<1||target>5)return p;
-    if(target>cur){
-      const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
-      return {...p,dias:[...p.dias,...extra]};
-    }
-    return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
-  });
-  const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
-
-  // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
-  // Resumen textual compacto de un plan (para la lista y como contexto de IA)
-  const resumirPlan=(dias)=>{
-    return (dias||[]).filter(d=>d.obj&&d.blocks.length).map((d,i)=>{
-      const ejs=d.blocks.flatMap(b=>b.exercises.map(be=>{
-        const ex=exs.find(e=>e.id===be.exId);const p=be.params||b.params;
-        return ex?`${ex.nombre} ${p.series||'?'}×${p.reps||'?'}`:null;
-      }).filter(Boolean));
-      return `${d.name||`Día ${i+1}`} (${OBJS[d.obj]?.label||d.obj}): ${ejs.join('; ')}`;
-    }).join(' | ');
+// Componente propio a nivel de módulo — usa hooks internamente (useState),
+// así que TIENE que ser un componente de verdad (invocado como <Comp/>),
+// no una función que se llama directo. Vivía adentro de App() y se llamaba
+// como EditorCriteriosFase({...}) — eso rompía las Reglas de Hooks de React
+// apenas se llamaba condicionalmente (exactamente el error #310 reportado).
+const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>{
+  const [items,setItems]=useState(()=>[...(criteriosAvanceTemplate[fase]||[])]);
+  const dirty=JSON.stringify(items)!==JSON.stringify(criteriosAvanceTemplate[fase]||[]);
+  const setTexto=(i,v)=>setItems(p=>p.map((it,idx)=>idx===i?{...it,texto:v}:it));
+  const eliminar=(i)=>setItems(p=>p.filter((_,idx)=>idx!==i));
+  const agregar=()=>setItems(p=>[...p,{id:genId('crit'),texto:''}]);
+  const guardar=()=>{
+    const limpio=items.filter(it=>it.texto.trim());
+    saveCriteriosFase(fase,limpio);
+    setItems(limpio);
   };
-  const guardarPlanActual=async()=>{
-    if(!activeClient){alert('Vinculá un cliente antes de guardar el plan.');return;}
-    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
-    if(!diasArmados.length){alert('No hay días con ejercicios para guardar.');return;}
-    const id=session.planId||genId('plan');
-    const registro={
-      id,
-      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
-      fecha_inicio:session.fecha,
-      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
-      periodizacion:activeClient.periodizacion||'',
-      nivel_metodo:activeClient.nivel||'',
-      num_dias:diasArmados.length,
-      estado:session.planEstado||'activo',
-      dias:session.dias,
-      plazos:planMeta||null,
-      resumen:resumirPlan(session.dias),
-      es_ejemplo:session.planEsEjemplo||false,
-      notas:session.planNotasGlobal||'',
-    };
-    try{
-      await saveGymPlan(registro);
-      setSession(p=>({...p,planId:id}));
-      alert('💾 Plan guardado en el historial del cliente.');
-    }catch(e){alert('Error al guardar el plan: '+e.message);}
-  };
-  const cargarPlan=(plan)=>{
-    setSession(p=>({
-      ...p,
-      planId:plan.id,
-      planNombre:plan.nombre,
-      fecha:plan.fecha_inicio||p.fecha,
-      planEstado:plan.estado,
-      planEsEjemplo:plan.es_ejemplo,
-      dias:(plan.dias&&plan.dias.length)?plan.dias:[blankDia(1)],
-      activeDia:0,
-    }));
-    setShowHistorial(false);setExpandedBlock(null);setSelBlock(null);
-    setTab('session');
-  };
-  const duplicarPlan=(plan)=>{
-    setSession(p=>({
-      ...p,
-      planId:null, // nuevo registro
-      planNombre:`${plan.nombre} (copia)`,
-      fecha:new Date().toISOString().split('T')[0],
-      planEstado:'activo',planEsEjemplo:false,
-      dias:(plan.dias&&plan.dias.length)?JSON.parse(JSON.stringify(plan.dias)):[blankDia(1)],
-      activeDia:0,
-    }));
-    setShowHistorial(false);setTab('session');
-  };
-  const cambiarEstadoPlan=async(plan,estado)=>{try{await saveGymPlan({...plan,estado});}catch(e){console.error(e);}};
-  const marcarEjemploPlan=async(plan,val)=>{try{await saveGymPlan({...plan,es_ejemplo:val});}catch(e){console.error(e);}};
-
-  // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
-  const applyAISession=(aiResult)=>{
-    // Orden canónico de bloques en una sesión
-    const ORDEN_BLOQUES=['movilidad','activacion','propiocepcion','prev_rehab','potencia','fuerza','accesorios','zona_media','funcional','cardio','flex_recovery'];
-    let descartados=0;
-    const blocks=(aiResult.blocks||[])
-      .filter(b=>BLOCKS[b.type]) // solo tipos de bloque válidos
-      .map((b)=>{
-        // VALIDACIÓN CLAVE: cada ejercicio debe pertenecer al bloque correcto.
-        // El ejercicio en la DB tiene .bloque — debe coincidir con b.type.
-        const ejerciciosValidos=(b.exercises||[]).filter(e=>{
-          const ex=exs.find(x=>x.id===e.exId);
-          if(!ex){descartados++;return false;}
-          if(ex.bloque!==b.type){descartados++;return false;} // descarta ej. en bloque equivocado
-          return true;
-        });
-        return {type:b.type,params:b.params,exercises:ejerciciosValidos};
-      })
-      .filter(b=>b.exercises.length>0) // descarta bloques que quedaron vacíos
-      .sort((a,b)=>ORDEN_BLOQUES.indexOf(a.type)-ORDEN_BLOQUES.indexOf(b.type)) // ordena
-      .map((b,i)=>({
-        id:Date.now()+i,
-        type:b.type,
-        position:i+1,
-        exercises:b.exercises.map(e=>({
-          exId:e.exId,override:false,note:'',
-          params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
-          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
-        })),
-        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
-      }));
-    setDia(d=>({...d,obj:d.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||d.name,notas:aiResult.objetivo_sesion||d.notas}));
-    if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
-  };
-  const suggestBlocks=(obj)=>{
-    const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
-    setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
-  };
-  const addBlock=()=>{
-    if(!addBType||!addBPos||dia.blocks.length>=7)return;
-    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
-    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
-    setAddBType('');setAddBPos('');
-  };
-  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
-  const addExToBlock=(blockId,exId,override=false,note='')=>{
-    setDia(d=>({...d,blocks:d.blocks.map(b=>{
-      if(b.id!==blockId||b.exercises.length>=5)return b;
-      const exEntry={exId,override,note,
-        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
-        pesoSug:'',pesoReal:'',anotacion:''};
-      return{...b,exercises:[...b.exercises,exEntry]};
-    })}));
-  };
-  const updateExParam=(blockId,exId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
-  })}));
-  const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,params:{...(be.params||{}), ...params}}:be)};
-  })}));
-  const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
-  })}));
-  // Mover un ejercicio dentro del bloque (por índice, sin perder el resto)
-  const moveExInBlock=(blockId,idx,dir)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    const arr=b.exercises.slice();const j=idx+dir;
-    if(idx<0||idx>=arr.length||j<0||j>=arr.length)return b;
-    [arr[idx],arr[j]]=[arr[j],arr[idx]];
-    return{...b,exercises:arr};
-  })}));
-  // Reemplazar el ejercicio en una posición por otro, conservando series/reps/etc.
-  const replaceExInBlock=(blockId,idx,ex,override=false,note='')=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
-    if(b.id!==blockId)return b;
-    const arr=b.exercises.slice();
-    if(idx<0||idx>=arr.length)return b;
-    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:'',pesoReal:'',anotacion:''};
-    return{...b,exercises:arr};
-  })}));
-  const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
-
-  const handlePickEx=(block,ex)=>{
-    const rest=checkRestriction(ex,activeClient);
-    if(rest==='block'){
-      alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
-      return;
-    }
-    const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
-    if(rest==='warn'){
-      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true,replaceIdx:repl});
-      return;
-    }
-    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false,replaceIdx:repl});return;}
-    if(repl!=null){replaceExInBlock(block.id,repl,ex);setReplaceTarget(null);setSelBlock(null);setExSearch('');}
-    else{addExToBlock(block.id,ex.id);setSelBlock(null);setExSearch('');}
-  };
-  const confirmOverride=()=>{
-    if(!overrideState)return;
-    if(overrideState.replaceIdx!=null){replaceExInBlock(overrideState.blockId,overrideState.replaceIdx,overrideState.ex,true,overrideState.note);setReplaceTarget(null);}
-    else addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
-    setOverrideState(null);setSelBlock(null);setExSearch('');
-  };
-
-  // ─── GUARDAR CLIENTE ────────────────────────────────────────────────────
-  const saveClient=(client)=>{
-    saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
-    setClientWizard(null);
-  };
-  // Genera (si hace falta) y copia el link del portal personal del cliente
-  const copiarPortalCliente=async(c)=>{
-    let token=c.portal_token;
-    if(!token){
-      token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
-      try{await updateClientFn(c.id,{portal_token:token});}
-      catch(e){alert('No se pudo generar el acceso: '+e.message);return;}
-    }
-    const link=`${location.origin}/portal.html?t=${token}`;
-    try{await navigator.clipboard.writeText(link);alert('📲 Link del portal copiado:\n\n'+link+'\n\nEnviáselo al cliente (WhatsApp). Con ese enlace entra a SU entrenamiento y carga los pesos/reps de cada semana. Solo ve sus propios datos.');}
-    catch(e){prompt('Copiá el link del portal de '+c.nombre+':',link);}
-  };
-  // Regenera el token: invalida el link anterior y crea uno nuevo
-  const regenerarPortalCliente=async(c)=>{
-    if(!confirm(`¿Regenerar el link de ${c.nombre}?\n\nEl link anterior dejará de funcionar. Tenés que enviarle el nuevo.`))return;
-    const token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
-    try{await updateClientFn(c.id,{portal_token:token});}
-    catch(e){alert('No se pudo regenerar: '+e.message);return;}
-    const link=`${location.origin}/portal.html?t=${token}`;
-    try{await navigator.clipboard.writeText(link);alert('🔄 Link nuevo generado y copiado:\n\n'+link+'\n\nEl anterior ya no sirve. Enviale este al cliente.');}
-    catch(e){prompt('Nuevo link del portal de '+c.nombre+':',link);}
-  };
-  const deleteClient=(id)=>{
-    deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
-  };
-
-  // ─── EXPORTAR PDF (PLAN COMPLETO: TODOS LOS DÍAS + PLAZOS + GRILLA 8 SEM) ──
-  const exportPDF=()=>{
-    const diasConBloques=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
-    if(!diasConBloques.length){alert('No hay días con bloques cargados para exportar.');return;}
-    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
-    const SEMANAS=8;
-    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
-    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
-
-    // Tabla de UN día (una fila por ejercicio + 8 celdas vacías para pesos semanales)
-    const tablaDia=(d)=>{
-      const rows=d.blocks.flatMap(b=>{
-        const bd=BLOCKS[b.type];const bg=bd.color;
-        if(b.exercises.length===0){
-          return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
-        }
-        return b.exercises.map((be,idx)=>{
-          const ex=exs.find(e=>e.id===be.exId);
-          const exNombre=ex?ex.nombre:be.exId;
-          const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
-          const pctTxt=sug?`${sug.pct}%`:'—';
-          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
-          const bloqueCel=idx===0
-            ?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`
-            :'';
-          return`<tr>
-            ${bloqueCel}
-            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
-            <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
-            ${celdasSem}
-          </tr>`;
-        });
-      }).join('');
-      return`<table class="plan"><thead><tr>
-          <th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}
-        </tr></thead><tbody>${rows}</tbody></table>
-        ${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
-    };
-
-    // Secciones de cada día, separadas con salto de página
-    const seccionesDias=diasConBloques.map((d,i)=>{
-      const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
-      return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}>
-        <div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${d.blocks.reduce((a,b)=>a+b.exercises.length,0)} ejercicios</div></div></div>
-        ${tablaDia(d)}
-      </section>`;
-    }).join('');
-
-    // ── PLAZOS DEL PLAN (punto 4) ──
-    let plazosHtml='';
-    if(planMeta){
-      const faseRows=planMeta.fases.map(f=>`<tr>
-        <td style="padding:5px 9px;font-weight:700;font-size:10px;">${f.nombre}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.semanasLabel||'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.fIni&&f.fFin?`${f.fIni} → ${f.fFin}`:'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.reps||'—'}</td>
-        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.intensidad||'—'}</td>
-        <td style="padding:5px 9px;font-size:9px;color:#555;">${f.objetivo||''}</td>
-      </tr>`).join('');
-      const totalTxt=planMeta.secuencial&&planMeta.totalSemanas
-        ?`<strong>${planMeta.totalSemanas} semanas</strong>${planMeta.fechaFin?` · ${planMeta.fechaInicio} → ${planMeta.fechaFin}`:''}`
-        :`${planMeta.duracionTexto} <span style="color:#888;">(fases no secuenciales en el tiempo)</span>`;
-      const faseMetodo=activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:(activeClient?activeClient.nivel:'—');
-      plazosHtml=`<section class="plazos">
-        <div class="sec-title">📅 Plazos del plan — ${planMeta.nombre}</div>
-        <div style="font-size:10px;color:#555;margin:2px 0 8px;">Autor/base: ${planMeta.autor||'—'} · Duración total: ${totalTxt}</div>
-        <div style="font-size:10px;color:#555;margin-bottom:8px;">Fase del Método Activa Integra: <strong style="color:${brand.colorPrimary};">${(faseMetodo||'').toUpperCase()}</strong> · El cronograma de abajo corresponde a las fases del <strong>plan asignado</strong> (no del método).</div>
-        <table class="plan"><thead><tr><th>Fase del plan</th><th style="text-align:center;">Semanas</th><th style="text-align:center;">Fechas estimadas</th><th style="text-align:center;">Reps</th><th style="text-align:center;">Intensidad</th><th>Objetivo</th></tr></thead><tbody>${faseRows}</tbody></table>
-      </section>`;
-    }
-
-    const sfBanner=activeClient?`<div class="sf" style="background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
-    const logoHtml=brand.logoImg
-      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
-      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
-
-    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
-      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
-      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
-      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
-      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
-      .sf{margin-bottom:12px;padding:9px 13px;border-radius:6px;font-size:11px}
-      .sec-title{font-size:14px;font-weight:800;color:${brand.colorPrimary};margin-top:4px}
-      .plazos{margin-bottom:16px;padding-bottom:14px;border-bottom:2px dashed #ddd}
-      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:2px}
-      .dia-num{background:${brand.colorPrimary};color:#fff;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
-      .dia-title{font-size:15px;font-weight:800;color:#111}
-      .dia-sub{font-size:10px;color:#777}
-      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
-      .leyenda{margin-top:6px;font-size:9px;color:#888;font-style:italic}
-      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
-      @page{size:A4 landscape;margin:12mm}
-      @media print{body{padding:0}}`;
-
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${planNom}</title><style>${css}</style></head><body>
-      <div class="hdr"><div>${logoHtml}</div>
-        <div style="text-align:right">
-          <div style="font-size:16px;font-weight:800;color:#111">${planNom}</div>
-          <div style="font-size:10px;color:#666;margin-top:3px">Cliente: ${session.cliente||'—'}${activeClient?` · Nivel: ${NIVEL[activeClient.nivel].label}`:''} · Inicio: ${session.fecha} · ${diasConBloques.length} sesión/es por semana</div>
+  return(
+    <div style={{background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:6,padding:'8px 10px',marginTop:6}}>
+      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>Esta plantilla se sincroniza en todos los dispositivos — editarla acá cambia los requisitos para TODOS los clientes en fase {NIVEL[fase]?.label}, no solo este.</div>
+      {items.map((it,i)=>(
+        <div key={it.id} style={{display:'flex',gap:5,marginBottom:4,alignItems:'center'}}>
+          <input value={it.texto} onChange={e=>setTexto(i,e.target.value)} placeholder="Requisito..." style={{...s.inp,fontSize:11,padding:'5px 8px'}}/>
+          <button onClick={()=>eliminar(i)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:13,padding:'0 4px'}}>✕</button>
         </div>
+      ))}
+      <div style={{display:'flex',gap:6,marginTop:6}}>
+        <button onClick={agregar} style={{...s.btnG,fontSize:10,padding:'5px 10px',borderStyle:'dashed'}}>+ Requisito</button>
+        <button onClick={guardar} disabled={!dirty} style={{...s.btnR,fontSize:10,padding:'5px 12px',opacity:dirty?1:.4,cursor:dirty?'pointer':'not-allowed'}}>Guardar plantilla</button>
       </div>
-      ${sfBanner}
-      ${plazosHtml}
-      ${seccionesDias}
-      <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
-      <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
-      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
-    const w=window.open('','_blank');w.document.write(html);w.document.close();
-  };
-
-  const exportCSV=()=>{
-    const headers=['Día','Posición','Bloque','Ejercicio','Override','Series','Reps','RPE','Tempo','Descanso','% 1RM','Peso sug. (kg)',...Array.from({length:8},(_,i)=>`Sem ${i+1}`),'Cliente','Nivel','Plan','Fecha inicio'];
-    const rows=[];
-    const nivelLabel=activeClient?NIVEL[activeClient.nivel].label:'';
-    const planNom=session.planNombre||'';
-    (session.dias||[]).forEach((d,di)=>{
-      if(!d.obj)return;
-      const diaLbl=d.name||`Día ${di+1}`;
-      const objLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
-      d.blocks.forEach(b=>{
-        const bd=BLOCKS[b.type];
-        if(b.exercises.length===0){rows.push([diaLbl,b.position,bd.label,'(sin ejercicios)','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,'','','','','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);return;}
-        b.exercises.forEach(be=>{
-          const ex=exs.find(e=>e.id===be.exId);
-          const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
-          rows.push([diaLbl,b.position,bd.label,ex?ex.nombre:be.exId,be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
-        });
-      });
-    });
-    const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
-    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(planNom||'plan').replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
-  };
-
-  const OverlayWrap=({children,wide})=>(
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 16px'}}>
-      <div style={{background:WH,borderRadius:12,padding:24,width:'100%',maxWidth:wide?760:440,marginBottom:20}}>{children}</div>
     </div>
   );
+};
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // WIZARD DE ALTA DE CLIENTE
-  // Paso 0 = Datos personales | Pasos 1-9 = Screening
-  // ══════════════════════════════════════════════════════════════════════════
-  const WIZARD_STEPS=[
-    {title:'Datos personales',          icon:'👤',fase:1},
-    {title:'Historia de salud',         icon:'🏥',fase:1},
-    {title:'Historia de entrenamiento', icon:'🏋️',fase:1},
-    {title:'Estilo de vida y objetivos',icon:'🌿',fase:1},
-    {title:'Guardar / Agendar evaluación',icon:'💾',fase:'transicion'},
-    {title:'Composición corporal',      icon:'📊',fase:2},
-    {title:'Evaluación postural',       icon:'🔍',fase:2},
-    {title:'Movilidad y control motor', icon:'🦵',fase:2},
-    {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
-    {title:'Banderas clínicas',         icon:'🚩',fase:2},
-    {title:'Síntesis y plan',           icon:'📋',fase:2},
-  ];
-
-  // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
-  const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand})=>{
+  const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,setTab,iaReglas})=>{
     const {tests:clientTests}=useFuerzaTests(cliente?.id||null);
     const [iaInforme,setIaInforme]=useState(null);
     if(!cliente)return null;
@@ -1406,16 +999,41 @@ export default function App(){
 
     const aplicarSugerencia=(ai)=>{
       const upd={...cliente};
-      if(ai.fase_sugerida)upd.nivel=ai.fase_sugerida;
+      // Si la IA sugiere AVANZAR de fase (no bajar ni quedarse igual), no lo
+      // aplicamos automáticamente — el avance solo se confirma desde el
+      // checklist de "📈 Avance de fase", que traba si no está completo.
+      // Bajar de fase (regresión clínica) o quedarse igual sí se aplica directo.
+      let faseBloqueada=false;
+      if(ai.fase_sugerida&&ai.fase_sugerida!==cliente.nivel){
+        if(esAvanceDeFase(cliente.nivel,ai.fase_sugerida)){
+          faseBloqueada=true; // no tocar upd.nivel
+        }else{
+          upd.nivel=ai.fase_sugerida;
+        }
+      }
       if(ai.objetivos_sugeridos?.length)upd.objetivo=ai.objetivos_sugeridos[0];
-      upd._informeIA=composeInformeIA(ai);
+      // Persistir las determinaciones ESTRUCTURADAS del análisis dentro de
+      // screening (que sí se guarda en Supabase — un campo suelto como
+      // cliente._ultimoAnalisisIA se perdería al recargar, igual que ya le
+      // pasa a _informeIA). Antes solo quedaba el texto narrativo del PDF,
+      // no se podían generar criterios de avance personalizados con eso.
+      upd.screening={...cliente.screening,_ultimoAnalisisIA:{
+        deficiencias_funcionales:ai.deficiencias_funcionales||[],
+        deficiencias_fuerza:ai.deficiencias_fuerza||[],
+        fecha:new Date().toISOString().split('T')[0],
+      }};
+      upd._informeIA=composeInformeIA(ai)+(faseBloqueada?`<br><br><strong style="color:#DC2626">⚠ La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero el avance de fase se confirma desde el checklist "📈 Avance de fase" en el directorio de clientes — no se aplicó automáticamente.</strong>`:'');
       // mapear metodología sugerida a key de periodización
-      const metaMap={'Lineal Clásica':'lineal','DUP Ondulante':'dup','Bloques':'bloques','ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'trifasico','Fitness General':'fitness','Pérdida de Grasa':'perdida_grasa'};
+      const metaMap={'Lineal Clásica':'lineal','Ondulante Diaria':'dup','Bloques':'bloque','Sistema ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'triphasic','Fitness General':'fitness_general','Pérdida de Grasa':'perdida_grasa'};
       const found=Object.entries(metaMap).find(([k])=>ai.metodologia_sugerida?.includes(k));
-      if(found)upd.periodizacion=found[1];
+      // Guarda defensiva: si por algún motivo la IA sugiere una metodología
+      // incompatible con la fase que está aplicando, no la asignamos —
+      // mejor dejarla vacía que guardar una combinación inválida.
+      if(found&&PERIODIZACIONES[found[1]]?.compatible_fases?.includes(upd.nivel))upd.periodizacion=found[1];
       saveClient(upd);
+      if(faseBloqueada)alert(`La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero eso se confirma desde "📈 Avance de fase" en el directorio — ahí vas a ver qué requisitos faltan.`);
       // Llevar al constructor de sesión con el cliente vinculado y la fase aplicada
-      const faseObj=ai.fase_sugerida||upd.nivel||'activa';
+      const faseObj=upd.nivel||'activa';
       setSession(p=>{
         const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
         return {
@@ -1438,9 +1056,9 @@ export default function App(){
 
     const exportInformePDF=()=>{
       const bc=brand.colorPrimary;
-      const row=(lbl,val)=>val?`<tr><td style="padding:4px 10px;font-size:11px;color:#666;width:170px">${lbl}</td><td style="padding:4px 10px;font-size:11px;font-weight:600">${val}</td></tr>`:'';
+      const row=(lbl,val)=>val?`<tr><td style="padding:7px 10px;font-size:11px;color:#666;width:170px;border-bottom:1px solid #eee">${lbl}</td><td style="padding:7px 10px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">${val}</td></tr>`:'';
       const testsRows=clientTests.map(t=>`<tr style="border-bottom:1px solid #eee"><td style="padding:4px 8px;font-size:10px">${t.test_nombre||t.test_id}</td><td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700">${t.rm1_real||t.rm1_calculado||'—'} kg</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.nivel_resultado||'—'}</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.fecha||''}</td></tr>`).join('');
-      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:28px;color:#111}table{width:100%;border-collapse:collapse}@media print{body{padding:14px}@page{size:A4;margin:14mm}}</style></head><body>
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>${getPrintCSS(bc)}table{width:100%;border-collapse:collapse}table tr:nth-child(even){background:#FAFAFA}h3{page-break-after:avoid}</style></head><body>
         <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${bc};padding-bottom:12px;margin-bottom:16px">
           <div><div style="font-size:22px;font-weight:900;color:${bc};letter-spacing:2px">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
           <div style="text-align:right"><div style="font-size:16px;font-weight:800">Informe de Evaluación</div><div style="font-size:11px;color:#555;margin-top:2px">${cliente.nombre} ${cliente.apellido}</div><div style="font-size:10px;color:#999">${cliente.documento?'CI '+cliente.documento+' · ':''}${new Date().toLocaleDateString('es-ES')}</div></div>
@@ -1524,6 +1142,19 @@ export default function App(){
     const banderas=[sc.banderaRoja==='si'&&'🔴 Bandera roja (patología seria → derivación médica)',sc.banderaNaranja==='si'&&'🟠 Bandera naranja (factor psicológico)',sc.banderaAmarilla==='si'&&'🟡 Bandera amarilla (kinesiofobia/catastrofismo)'].filter(Boolean).join('; ')||'sin banderas';
     const restrEst=[sc.restriccionImpacto==='si'&&'sin impacto/pliometría',sc.restriccionOverhead==='si'&&'sin cargas overhead',sc.restriccionCargaAxial==='si'&&'sin carga axial pesada'].filter(Boolean).join('; ')||'ninguna';
 
+    // ── Potencia y saltos (solo deportistas) ──
+    const potBloqueado = sc.banderaRoja==='si' || sc.restriccionImpacto==='si';
+    const potRows=[];
+    if(!potBloqueado){
+      const _cmj=nivelCMJ(parseFloat(sc.pot_cmj),sc.genero);if(_cmj)potRows.push(`CMJ ${sc.pot_cmj}cm (${_cmj.label})`);
+      const _sj=nivelSJ(parseFloat(sc.pot_sj),sc.genero);if(_sj)potRows.push(`SJ ${sc.pot_sj}cm (${_sj.label})`);
+      const _broad=nivelBroadJump(parseFloat(sc.pot_broad),sc.genero);if(_broad)potRows.push(`Salto horizontal ${sc.pot_broad}cm (${_broad.label})`);
+      const _rsiVal=calcularRSI(parseFloat(sc.pot_drop_altura),parseFloat(sc.pot_drop_contacto));if(_rsiVal!=null)potRows.push(`RSI ${_rsiVal} (${nivelRSI(_rsiVal)?.label||''})`);
+      const _lsiVal=calcularLSI(parseFloat(sc.pot_hop_dom),parseFloat(sc.pot_hop_nodom));if(_lsiVal!=null)potRows.push(`Hop test LSI ${_lsiVal}% (${nivelLSI(_lsiVal)?.label||''})`);
+      if(sc.pot_mb_dist)potRows.push(`Lanzamiento balón medicinal: ${sc.pot_mb_peso||'?'}kg → ${sc.pot_mb_dist}cm (sin tabla normativa, solo seguimiento)`);
+    }
+    const potenciaTxt = potBloqueado ? 'Sección bloqueada por bandera roja o restricción de impacto (no evaluado)' : (potRows.length?potRows.join(' | '):'NO REGISTRADA');
+
     const datosIA={
       nombre:cliente.nombre,apellido:cliente.apellido,
       objetivo:cliente.objetivo||'no declarado',
@@ -1542,6 +1173,7 @@ export default function App(){
       pvfiNivel,
       banderas,
       restriccionesEstructuradas:restrEst,
+      potencia:potenciaTxt,
     };
 
     return(
@@ -1577,1466 +1209,370 @@ export default function App(){
     );
   };
 
-  const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
-    if(!clientWizard)return null;
-    const [step,setStep]=useState(clientWizard.step||0);
-    const [form,setForm]=useState(()=>({...clientWizard.cli}));
-    const [sc,setSc]=useState(()=>({...clientWizard.cli.screening}));
-    const set=(k,v)=>setForm(f=>({...f,[k]:v}));
-    const setSCK=(k,v)=>setSc(f=>({...f,[k]:v}));
-    const isNew=!clientWizard.cli.screeningCompleto;
-    const totalSteps=WIZARD_STEPS.length;
+  const FuerzaTab=({brand,clients,s,saveClientFn})=>{
+    const [selClientId,setSelClientId]=useState('');
+    const pac=clients.find(x=>x.id===selClientId);
+    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
+    const [showForm,setShowForm]=useState(false);
+    const [editingTest,setEditingTest]=useState(null);
+    const [showPlan,setShowPlan]=useState(false);
+    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
+    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
+    const {customRows,saveCustom}=useCustomTests(selClientId||null);
+    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
+    const [showCustomEdit,setShowCustomEdit]=useState(false);
+    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
+    const migradoRef=useRef(new Set());
+    useEffect(()=>{
+      if(!selClientId||migradoRef.current.has(selClientId))return;
+      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
+      try{
+        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
+        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
+          migradoRef.current.add(selClientId);
+          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
+        }
+      }catch{}
+    },[selClientId,customRows,saveCustom]);
 
-    const finalize=()=>{
-      const flags={
-        impacto:sc.restriccionImpacto==='si',
-        overhead:sc.restriccionOverhead==='si',
-        cargaAxial:sc.restriccionCargaAxial==='si',
-      };
-      const resText=[
-        sc.restriccionImpacto==='si'?'Sin impacto':'',
-        sc.restriccionOverhead==='si'?'Sin overhead':'',
-        sc.restriccionCargaAxial==='si'?'Sin carga axial':'',
-        sc.otraRestriccion||'',
-      ].filter(Boolean).join(' · ');
-      const saved={
-        ...form,
-        nivel:sc.nivelAsignado,
-        semaforo:sc.semaforoAsignado,
-        restricciones:resText,
-        restricciones_flags:flags,
-        fechaEval:sc.fechaEvaluacion||new Date().toISOString().split('T')[0],
-        screeningCompleto:true,
-        screening:sc,
-      };
-      saveClient(saved);
-    };
-
-    const inp2=(k,placeholder='')=>(
-      <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder={placeholder} style={s.inp}/>
-    );
-    const sel2=(k,opts)=>(
-      <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
-        {opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
-      </select>
-    );
-
-    const renderStep=()=>{
-      switch(step){
-        // ── PASO 0: DATOS PERSONALES ──────────────────────────────────────
-        case 0: return(
-          <div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-              <div><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp} placeholder="Nombre"/></div>
-              <div><span style={s.lbl}>Apellido *</span><input value={form.apellido} onChange={e=>set('apellido',e.target.value)} style={s.inp} placeholder="Apellido"/></div>
-              <div style={{gridColumn:'1/-1'}}>
-                <span style={s.lbl}>🎯 Objetivo del cliente — condiciona criterios de evolución</span>
-                <input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="¿Qué quiere lograr? (Ej: volver a correr, trabajar sin dolor, levantar...)" style={s.inp}/>
-                <div style={{fontSize:10,color:G3,marginTop:3}}>Este objetivo personaliza los criterios de avance entre fases del método.</div>
-              </div>
-              <div style={{gridColumn:'1/-1'}}>
-                <span style={s.lbl}>📅 Sistema de periodización asignado</span>
-                <select value={form.periodizacion||''} onChange={e=>set('periodizacion',e.target.value)} style={{...s.sel,width:'100%',marginTop:2}}>
-                  <option value=''>— Sin sistema asignado —</option>
-                  {Object.entries(PERIODIZACIONES).map(([k,v])=>(
-                    <option key={k} value={k}>{v.nombre} · {v.duracion}</option>
-                  ))}
-                </select>
-                {form.periodizacion&&PERIODIZACIONES[form.periodizacion]&&(
-                  <div style={{background:G1,borderRadius:5,padding:'6px 10px',marginTop:4,fontSize:10,color:G4,lineHeight:1.5}}>
-                    <strong>{PERIODIZACIONES[form.periodizacion].autor}</strong> · {PERIODIZACIONES[form.periodizacion].indicado_para}
-                  </div>
-                )}
-              </div>
-              <div><span style={s.lbl}>N° de documento *</span><input value={form.documento} onChange={e=>set('documento',e.target.value)} style={s.inp} placeholder="CI / Pasaporte"/></div>
-              <div><span style={s.lbl}>Celular *</span><input value={form.celular} onChange={e=>set('celular',e.target.value)} style={s.inp} placeholder="+598 9x xxx xxx"/></div>
-              <div><span style={s.lbl}>Fecha de nacimiento</span><input type="date" value={sc.fechaNac} onChange={e=>setSCK('fechaNac',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Género</span>{sel2('genero',[['','Seleccionar'],['masculino','Masculino'],['femenino','Femenino']])}</div>
-              <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Ocupación</span><input value={sc.ocupacion} onChange={e=>setSCK('ocupacion',e.target.value)} style={s.inp} placeholder="Trabajo / actividad principal"/></div>
-              <div><span style={s.lbl}>Fecha de ingreso</span><input type="date" value={form.fechaIngreso} onChange={e=>set('fechaIngreso',e.target.value)} style={s.inp}/></div>
-              {/* ── POLÍTICA DE REFERIDOS ── */}
-              <div style={{gridColumn:'1/-1',background:'#FFF9EC',border:'1px solid #FCD34D',borderRadius:7,padding:'10px 12px',marginTop:4}}>
-                <div style={{fontSize:11,fontWeight:700,color:'#92400E',marginBottom:6}}>🎁 Política de referidos</div>
-                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:8}}>
-                  <div>
-                    <span style={s.lbl}>¿Quién lo recomendó?</span>
-                    <input value={form.referidoPor||''} onChange={e=>set('referidoPor',e.target.value)} list="clientes-referido" style={s.inp} placeholder="Nombre del cliente que lo refirió"/>
-                    <datalist id="clientes-referido">
-                      {clients.map(cl=><option key={cl.id} value={`${cl.nombre} ${cl.apellido}`}/>)}
-                    </datalist>
-                  </div>
-                  <div>
-                    <span style={s.lbl}>Canal</span>
-                    <select value={form.referidoTipo||''} onChange={e=>set('referidoTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
-                      <option value="">— Seleccionar —</option>
-                      <option value="cliente">Cliente actual</option>
-                      <option value="redes">Redes sociales</option>
-                      <option value="paciente_fisio">Paciente de fisio</option>
-                      <option value="cartel">Cartel / vidriera</option>
-                      <option value="otro">Otro</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-        // ── PASO 1: HISTORIA DE SALUD ────────────────────────────────────
-        case 1: return(
-          <div style={{display:'flex',flexDirection:'column',gap:12}}>
-            <div><span style={s.lbl}>A1. ¿Condición médica diagnosticada actualmente?</span>{sel2('condicionMedica',[['no','No'],['si','Sí']])}{sc.condicionMedica==='si'&&<input value={sc.condicionDetalle||''} onChange={e=>setSCK('condicionDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Especificar condición"/>}</div>
-            <div><span style={s.lbl}>A2. ¿Toma medicación actualmente?</span>{sel2('medicacion',[['no','No'],['si','Sí']])}{sc.medicacion==='si'&&<input value={sc.medicacionDetalle||''} onChange={e=>setSCK('medicacionDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Especificar medicación"/>}</div>
-            <div><span style={s.lbl}>A3. ¿Lesiones activas o dolor crónico?</span>{sel2('lesionesActivas',[['no','No'],['si','Sí — dolor activo'],['historia','Historia de lesiones']])}{sc.lesionesActivas!=='no'&&<input value={sc.lesionesDetalle||''} onChange={e=>setSCK('lesionesDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Zona, tiempo, diagnóstico si lo tiene"/>}</div>
-            <div><span style={s.lbl}>A4. ¿Cirugías previas?</span>{sel2('cirugias',[['no','No'],['si','Sí']])}{sc.cirugias==='si'&&<input value={sc.cirugiasDetalle||''} onChange={e=>setSCK('cirugiasDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Tipo de cirugía y año"/>}</div>
-            <div><span style={s.lbl}>A5. ¿Dolor actual al movimiento?</span>{sel2('dolorActual',[['no','No'],['leve','Leve (1-3/10)'],['moderado','Moderado (4-6/10)'],['intenso','Intenso (7+/10)']])}{sc.dolorActual!=='no'&&<input value={sc.dolorDetalle||''} onChange={e=>setSCK('dolorDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Localización y tipo de dolor"/>}</div>
-          </div>
-        );
-        // ── PASO 2: HISTORIA DE ENTRENAMIENTO ────────────────────────────
-        case 2: return(
-          <div style={{display:'flex',flexDirection:'column',gap:12}}>
-            <div><span style={s.lbl}>B1. Nivel de actividad física actual</span>{sel2('nivelActividad',[['sedentario','Sedentario (−1 vez/sem)'],['levemente_activo','Levemente activo (1-2 veces/sem)'],['moderadamente_activo','Moderadamente activo (3-4 veces/sem)'],['muy_activo','Muy activo (5+ veces/sem)'],['atleta','Atleta / competidor']])}</div>
-            <div><span style={s.lbl}>B2. Experiencia previa en entrenamiento</span>{sel2('expEntrenamiento',[['sin_experiencia','Sin experiencia'],['menos_1_año','Menos de 1 año'],['1_3_años','1-3 años'],['mas_3_años','Más de 3 años'],['entrenamiento_dirigido','Entrenamiento dirigido/competitivo']])}</div>
-            <div><span style={s.lbl}>B3. ¿Está entrenando actualmente?</span>{sel2('entrenamientoActual',[['no','No'],['si_gym','Sí — gimnasio'],['si_deporte','Sí — deporte'],['si_otro','Sí — otro tipo de actividad']])}</div>
-            <div><span style={s.lbl}>B4. Experiencia con ejercicios específicos (libre)</span><input value={sc.expEjerciciosDetalle||''} onChange={e=>setSCK('expEjerciciosDetalle',e.target.value)} style={s.inp} placeholder="Ej: levantamiento olímpico, pilates, crossfit..."/></div>
-          </div>
-        );
-        // ── PASO 3: ESTILO DE VIDA Y OBJETIVOS ───────────────────────────
-        case 3: return(
-          <div style={{display:'flex',flexDirection:'column',gap:12}}>
-            <div><span style={s.lbl}>C1. Calidad del sueño</span>{sel2('sueño',[['bueno','Bueno (7-9h, reparador)'],['regular','Regular (interrumpido o insuficiente)'],['malo','Malo (menos de 6h o no reparador)']])}</div>
-            <div><span style={s.lbl}>C2. Nivel de estrés percibido</span>{sel2('estres',[['bajo','Bajo'],['moderado','Moderado'],['alto','Alto'],['muy_alto','Muy alto — interfiere con la vida diaria']])}</div>
-            <div><span style={s.lbl}>D1. Objetivo principal</span>{sel2('objetivoPrincipal',[['salud_bienestar','Salud y bienestar general'],['perdida_grasa','Pérdida de grasa / composición corporal'],['hipertrofia','Aumento de masa muscular'],['fuerza','Ganancia de fuerza'],['rendimiento','Rendimiento deportivo'],['rehabilitacion','Rehabilitación / recuperación de lesión'],['otro','Otro']])}</div>
-            <div><span style={s.lbl}>D2. Expectativas adicionales / restricciones de tiempo</span><input value={sc.expectativas||''} onChange={e=>setSCK('expectativas',e.target.value)} style={s.inp} placeholder="Disponibilidad horaria, compromisos, limitaciones logísticas..."/></div>
-          </div>
-        );
-        // ── PASO 4: GUARDAR / AGENDAR EVALUACIÓN ────────────────────────
-        case 4: return(
-          <div>
-            <div style={{background:'#1a1a1a',border:'2px solid #CC0000',borderRadius:10,padding:'18px 16px',marginBottom:16,textAlign:'center'}}>
-              <div style={{fontSize:28,marginBottom:8}}>💾</div>
-              <div style={{fontWeight:800,fontSize:15,color:WH,marginBottom:6}}>Fase 1 completada</div>
-              <div style={{fontSize:12,color:G3,lineHeight:1.7}}>Los datos personales y la historia clínica de <strong style={{color:WH}}>{form.nombre} {form.apellido}</strong> están registrados.<br/>Podés guardar la ficha ahora y completar la evaluación funcional en otro momento.</div>
-            </div>
-            <div style={{...s.card,borderLeft:'4px solid #16A34A',marginBottom:12}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:'#16A34A'}}>✓ Guardar y continuar después</div>
-              <div style={{fontSize:12,color:G4,lineHeight:1.6,marginBottom:12}}>La ficha queda guardada con semáforo ⏳ PENDIENTE. El cliente aparece en el directorio pero no está disponible para construir sesiones hasta completar la evaluación funcional.</div>
-              <button onClick={()=>{
-                const saved={...form,nivel:'activa',semaforo:'pendiente',restricciones:'',restricciones_flags:{impacto:false,overhead:false,cargaAxial:false},fechaEval:'',screeningCompleto:false,screening:{...emptyScreening(),...sc}};
-                saveClient(saved);
-              }} style={{...s.btnGreen,width:'100%',padding:'11px',fontSize:13}}>Guardar ficha — completar evaluación después</button>
-            </div>
-            <div style={{...s.card,borderLeft:'4px solid #D97706',marginBottom:12,background:'#FFFBEB'}}>
-              <div style={{fontWeight:700,fontSize:12,color:'#92400E',marginBottom:4}}>📅 Recordatorio</div>
-              <div style={{fontSize:12,color:'#78350F',lineHeight:1.6}}>Agendá una consulta de <strong>45–60 minutos</strong> para completar la evaluación funcional (Fases 2: composición corporal, postura, movilidad, capacidades físicas y banderas clínicas).<br/><br/>Hasta completarla, el cliente no tendrá semáforo asignado ni filtro de ejercicios activo.</div>
-            </div>
-            <div style={{...s.card,borderLeft:'4px solid #1D4ED8'}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:'#1D4ED8'}}>→ Continuar ahora con la Fase 2</div>
-              <div style={{fontSize:12,color:G4,marginBottom:0}}>Si el tiempo lo permite, continuá con la evaluación profesional en esta misma sesión.</div>
-            </div>
-          </div>
-        );
-        // ── PASO 5: COMPOSICIÓN CORPORAL ─────────────────────────────────
-        case 5: return(
-          <div>
-            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2 — Evaluación profesional.</strong> Completado por el equipo del centro.</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
-              <div><span style={s.lbl}>Fecha de evaluación</span><input type="date" value={sc.fechaEvaluacion||''} onChange={e=>setSCK('fechaEvaluacion',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Evaluador/es</span><input value={sc.evaluador||''} onChange={e=>setSCK('evaluador',e.target.value)} style={s.inp} placeholder="Nombre y cargo"/></div>
-              <div><span style={s.lbl}>Derivado a</span>{sel2('derivadoA',[['','Seleccionar'],['clinica','Clínica'],['entrenamiento','Entrenamiento'],['ambos','Ambos']])}</div>
-            </div>
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8,letterSpacing:'.04em'}}>Antropometría básica</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:14}}>
-              {[['peso','Peso (kg)'],['talla','Talla (cm)'],['imc','IMC (kg/m²)'],['pctGrasa','% Grasa corporal'],['fcReposo','FC reposo (lpm)'],['ta','Tensión arterial']].map(([k,lbl])=>(
-                <div key={k}><span style={s.lbl}>{lbl}</span><input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={s.inp}/></div>
-              ))}
-            </div>
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8,letterSpacing:'.04em'}}>Circunferencias corporales (cm)</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
-              {[
-                ['per_cintura_escapular','Cintura escapular'],
-                ['per_brazo_d','Brazo derecho'],
-                ['per_brazo_i','Brazo izquierdo'],
-                ['per_cintura','Cintura (ombligo)'],
-                ['per_cadera','Cadera (trocánter)'],
-                ['per_muslo_d','Muslo derecho'],
-                ['per_muslo_i','Muslo izquierdo'],
-                ['per_pantorrilla_d','Pantorrilla derecha'],
-                ['per_pantorrilla_i','Pantorrilla izquierda'],
-              ].map(([k,lbl])=>(
-                <div key={k}><span style={s.lbl}>{lbl}</span><input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={s.inp} placeholder="cm"/></div>
-              ))}
-            </div>
-          </div>
-        );
-        // ── PASO 6: EVALUACIÓN POSTURAL ──────────────────────────────────
-        case 6: return(
-          <div>
-            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2.</strong> Registrar hallazgos posturales principales.</div>
-            {[
-              ['postura_cabeza','Alineación de cabeza',['Centrada','Lateralización D','Lateralización I','Antepulsión']],
-              ['postura_hombros','Nivel de hombros',['Simétrico','Elevado derecho','Elevado izquierdo']],
-              ['postura_columna_lat','Curva lumbar (lateral)',['Normal','Hiperlordosis','Rectificación']],
-              ['postura_columna_tor','Curva torácica',['Normal','Hipercifosis','Rectificación']],
-              ['postura_pelvis','Posición pélvica',['Neutra','Anteversión','Retroversión']],
-              ['postura_rodillas','Rodillas',['Neutro','Valgo bilateral','Varo bilateral','Hiperextensión']],
-              ['postura_pies','Pies',['Neutro','Pronación bilateral','Supinación bilateral','Asimétrico']],
-            ].map(([k,lbl,opts])=>(
-              <div key={k} style={{marginBottom:8,display:'grid',gridTemplateColumns:'160px 1fr',gap:8,alignItems:'center'}}>
-                <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
-                  <option value="">— sin evaluar</option>
-                  {opts.map(o=><option key={o}>{o}</option>)}
-                </select>
-              </div>
-            ))}
-            <div style={{marginTop:10}}><span style={s.lbl}>Observaciones posturales adicionales</span><textarea value={sc.postura_hallazgos||''} onChange={e=>setSCK('postura_hallazgos',e.target.value)} rows={3} placeholder="Detalles relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
-          </div>
-        );
-        // ── PASO 7: MOVILIDAD Y CONTROL MOTOR ────────────────────────────
-        case 7: return(
-          <div>
-            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
-              🩺 Marcá el estado de cada movimiento por lado. Dejá en <strong>—</strong> lo que no evalúes. Si medís los grados exactos, agregalos en el campo de cada fila.
-            </div>
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:6}}>Screening de movilidad articular</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:2}}>
-              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Movimiento · Referencia</div>
-              <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Der/Bil</div>
-              <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
-            </div>
-            {[
-              ['mov_tobillo','Dorsiflexión tobillo','Normal ≥20° · Disfunc <10°'],
-              ['mov_cad_rot','Rotación interna cadera','Normal 40-45° · Disfunc <30°'],
-              ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°'],
-              ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°'],
-              ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°'],
-              ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°'],
-              ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°'],
-            ].map(([k,lbl,ref])=>(
-              <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
-                    <div style={{fontSize:9,color:G3}}>{ref}</div>
-                  </div>
-                  {['DBil','Izq'].map(side=>(
-                    <select key={side} value={sc[k+'_'+side]||''} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
-                      <option value="">—</option>
-                      <option value="N">Óptimo</option>
-                      <option value="L">Limitado</option>
-                      <option value="ML">Muy limitado</option>
-                      <option value="D">Dolor</option>
-                    </select>
-                  ))}
-                </div>
-                <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,marginTop:4,padding:'4px 8px'}}/>
-              </div>
-            ))}
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
-            {[
-              ['cm_squat','Deep squat / Overhead squat',['Óptimo','Compensaciones leves','Compensaciones marcadas','No puede realizarlo']],
-              ['cm_lunge','Estocada estática',['Óptimo D/I','Falla derecho','Falla izquierdo','Falla bilateral']],
-              ['cm_sls','Single leg stance (30s)',['Estable D/I','Inestable derecho','Inestable izquierdo','Inestable bilateral']],
-              ['cm_birddog','Bird-dog (rotary stability)',['Óptimo','Rotación pélvica','Inestabilidad marcada','No puede realizarlo']],
-              ['cm_deadbug','Dead bug (control lumbo-pélvico)',['Óptimo','Pierde neutro lumbar','No puede realizarlo']],
-              ['cm_bisagra','Bisagra de cadera con palo',['Óptimo','Compensaciones leves','Compensaciones marcadas','No puede realizarlo']],
-            ].map(([k,lbl,opts])=>(
-              <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 180px',gap:8,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
-                <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
-                  <option value="">— sin evaluar</option>
-                  {opts.map(o=><option key={o}>{o}</option>)}
-                </select>
-              </div>
-            ))}
-            <div style={{marginTop:12,background:G1,borderRadius:8,padding:'10px 12px'}}>
-              <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4,textTransform:'uppercase'}}>Y Reach Test — Balance dinámico (cm)</div>
-              <div style={{display:'grid',gridTemplateColumns:'120px 1fr 1fr 1fr',gap:6,marginBottom:4}}>
-                <div/>
-                {['Anterior','Posteromedial','Posterolateral'].map(d=><div key={d} style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center',textTransform:'uppercase'}}>{d}</div>)}
-              </div>
-              {['Pierna derecha','Pierna izquierda'].map((pierna,pi)=>(
-                <div key={pi} style={{display:'grid',gridTemplateColumns:'120px 1fr 1fr 1fr',gap:6,marginBottom:6,alignItems:'center'}}>
-                  <span style={{fontSize:11,fontWeight:600}}>{pierna}</span>
-                  {['ant','pm','pl'].map(dir=>(
-                    <input key={dir} value={sc[`yreach_${pi===0?'d':'i'}_${dir}`]||''} onChange={e=>setSCK(`yreach_${pi===0?'d':'i'}_${dir}`,e.target.value)} placeholder="cm" style={{...s.inp,fontSize:11,textAlign:'center'}}/>
-                  ))}
-                </div>
-              ))}
-              <div style={{fontSize:10,color:G3,marginTop:4}}>Referencia: diferencia bilateral &gt;4 cm = asimetría significativa. Riesgo de lesión si &lt;89% del largo de pierna en dirección anterior.</div>
-            </div>
-            <div style={{marginTop:10}}><span style={s.lbl}>Observaciones movilidad y control motor</span><textarea value={sc.movilidad_hallazgos||''} onChange={e=>setSCK('movilidad_hallazgos',e.target.value)} rows={2} placeholder="Compensaciones, asimetrías relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
-          </div>
-        );
-        // ── PASO 8: PVFI — CAPACIDADES FÍSICAS ───────────────────────────
-        case 8: return(
-          <div>
-            <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:14}}>⚠️ <strong>No aplicar en perfil RESTAURA.</strong> Omitir tests con contraindicación clínica. Seleccionar el bloque según perfil del evaluado.</div>
-            <div style={{fontSize:12,fontWeight:800,color:BK,marginBottom:10,borderBottom:`2px solid ${R}`,paddingBottom:6}}>PVFI — Ficha de Valoración Funcional Integral</div>
-
-            {/* BLOQUE 1: ADULTO MAYOR / FRAGILIDAD */}
-            <div style={{marginBottom:16}}>
-              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🧓 BLOQUE 1 — Adulto mayor / Fragilidad <span style={{fontWeight:400,color:G3,marginLeft:8}}>+60 años o movilidad muy reducida</span></div>
-              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px',display:'flex',flexDirection:'column',gap:10}}>
-                {[
-                  {k:'pvfi_chair_stand',lbl:'1. 30s Chair Stand — Fuerza tren inferior',unit:'reps',ref:'🔴 <8 rep · 🟢 12–17 rep',obs:'pvfi_chair_stand_obs',obsPlaceholder:'Calidad del apoyo, uso de manos, fatiga'},
-                  {k:'pvfi_dino_d',lbl:'2. Dinamometría — Mano derecha',unit:'kg',ref:'H >27 kg · M >16 kg',obs:'pvfi_dino_d_obs',obsPlaceholder:'Asimetrías o dolor en el agarre'},
-                  {k:'pvfi_dino_i',lbl:'Dinamometría — Mano izquierda',unit:'kg',ref:'H >27 kg · M >16 kg',obs:null},
-                  {k:'pvfi_tug',lbl:'3. TUG Test — Agilidad y movilidad',unit:'seg',ref:'🔴 >20s · 🟢 <10s',obs:'pvfi_tug_obs',obsPlaceholder:'Equilibrio en el giro, fluidez de marcha'},
-                  {k:'pvfi_plancha_elev',lbl:'4. Plancha elevada — Resistencia core',unit:'seg',ref:'Mínimo >30 seg',obs:'pvfi_plancha_elev_obs',obsPlaceholder:'Compensación lumbar, control escapular'},
-                ].map(({k,lbl,unit,ref,obs,obsPlaceholder})=>(
-                  <div key={k} style={{background:G1,borderRadius:6,padding:'8px 10px'}}>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:8,alignItems:'center',marginBottom:obs?6:0}}>
-                      <div>
-                        <div style={{fontSize:11,fontWeight:700}}>{lbl}</div>
-                        <div style={{fontSize:10,color:G3}}>{ref}</div>
-                      </div>
-                      <div style={{display:'flex',alignItems:'center',gap:4}}>
-                        <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder="—" style={{...s.inp,textAlign:'center',fontSize:11}}/>
-                        <span style={{fontSize:10,color:G4,whiteSpace:'nowrap'}}>{unit}</span>
-                      </div>
-                    </div>
-                    {obs&&<input value={sc[obs]||''} onChange={e=>setSCK(obs,e.target.value)} placeholder={`Obs: ${obsPlaceholder}`} style={{...s.inp,fontSize:10,color:G4}}/>}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* BLOQUE 2: ADULTO SEDENTARIO / INEXPERTO */}
-            <div style={{marginBottom:16}}>
-              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🏃 BLOQUE 2 — Adulto sedentario / Inexperto <span style={{fontWeight:400,color:G3,marginLeft:8}}>20–59 años</span></div>
-              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px',display:'flex',flexDirection:'column',gap:10}}>
-                {[
-                  {k:'pvfi_wallsit',lbl:'1. Wall Sit 90° — Resistencia tren inferior',unit:'seg',ref:'Pobre <25s · Promedio 35–50s · Pro >60s',obs:'pvfi_wallsit_obs',obsPlaceholder:'Temblor, valgo de rodilla'},
-                  {k:'pvfi_pushup_rod',lbl:'2. Push-Up en rodillas — Fuerza empuje',unit:'reps',ref:'Pobre <10 · Promedio 15–24 · Pro >25',obs:'pvfi_pushup_rod_obs',obsPlaceholder:'Estabilidad escapular, control de cadera'},
-                  {k:'pvfi_plancha_suelo',lbl:'3. Plancha frontal suelo — Resistencia core',unit:'seg',ref:'Pobre <30s · Promedio 45–75s · Pro >90s',obs:'pvfi_plancha_suelo_obs',obsPlaceholder:'Pérdida de alineación, dolor lumbar'},
-                  {k:'pvfi_row_iso',lbl:'4. Row isométrico / Suspensión — Fuerza tracción',unit:'seg',ref:'Mínimo >30 seg',obs:'pvfi_row_iso_obs',obsPlaceholder:'Capacidad de retracción escapular'},
-                  {k:'pvfi_dino2',lbl:'5. Dinamometría — Fuerza tren superior',unit:'kg',ref:'H >35 kg · M >22 kg',obs:'pvfi_dino2_obs',obsPlaceholder:'Fuerza relativa al peso corporal'},
-                ].map(({k,lbl,unit,ref,obs,obsPlaceholder})=>(
-                  <div key={k} style={{background:G1,borderRadius:6,padding:'8px 10px'}}>
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:8,alignItems:'center',marginBottom:obs?6:0}}>
-                      <div>
-                        <div style={{fontSize:11,fontWeight:700}}>{lbl}</div>
-                        <div style={{fontSize:10,color:G3}}>{ref}</div>
-                      </div>
-                      <div style={{display:'flex',alignItems:'center',gap:4}}>
-                        <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder="—" style={{...s.inp,textAlign:'center',fontSize:11}}/>
-                        <span style={{fontSize:10,color:G4,whiteSpace:'nowrap'}}>{unit}</span>
-                      </div>
-                    </div>
-                    {obs&&<input value={sc[obs]||''} onChange={e=>setSCK(obs,e.target.value)} placeholder={`Obs: ${obsPlaceholder}`} style={{...s.inp,fontSize:10,color:G4}}/>}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* BLOQUE 3: SEMÁFORO DE PRIORIDADES */}
-            <div style={{marginBottom:14}}>
-              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🚦 BLOQUE 3 — Semáforo de prioridades <span style={{fontWeight:400,color:G3,marginLeft:8}}>Criterio multidisciplinario</span></div>
-              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px'}}>
-                {[
-                  ['pvfi_nivel_rojo','🔴 NIVEL ROJO — Rehabilitación / Adaptación','Riesgos funcionales o valores de fragilidad. Programa centrado en movilidad segura, estabilidad y fuerza base bajo supervisión estricta.'],
-                  ['pvfi_nivel_amarillo','🟡 NIVEL AMARILLO — Acondicionamiento','Valores en rangos mínimos o promedio bajo. Corregir asimetrías, mejorar técnica y aumentar capacidad de carga progresivamente.'],
-                  ['pvfi_nivel_verde','🟢 NIVEL VERDE — Optimización','Buen punto de partida. Listo para programas de rendimiento, hipertrofia o metas estéticas/deportivas.'],
-                ].map(([k,titulo,desc])=>(
-                  <div key={k} onClick={()=>setSCK('pvfi_nivel',k.replace('pvfi_nivel_',''))} style={{display:'grid',gridTemplateColumns:'1fr 32px',gap:8,alignItems:'center',marginBottom:8,border:`2px solid ${sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:G2}`,borderRadius:6,padding:'8px 10px',cursor:'pointer',background:sc.pvfi_nivel===k.replace('pvfi_nivel_','')?'#FEF2F2':WH}}>
-                    <div><div style={{fontSize:11,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4,marginTop:2}}>{desc}</div></div>
-                    <div style={{width:22,height:22,borderRadius:4,border:`2px solid ${sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:G2}`,background:sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:WH,display:'flex',alignItems:'center',justifyContent:'center',color:WH,fontSize:12,fontWeight:700,flexShrink:0}}>{sc.pvfi_nivel===k.replace('pvfi_nivel_','')&&'✓'}</div>
-                  </div>
-                ))}
-                <div style={{marginTop:8}}><span style={s.lbl}>Notas del equipo (fisio/entrenador)</span><textarea value={sc.pvfi_notas||''} onChange={e=>setSCK('pvfi_notas',e.target.value)} rows={2} placeholder="Observaciones integradas del equipo..." style={{...s.inp,resize:'vertical'}}/></div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
-                  <div><span style={s.lbl}>Próxima evaluación</span><input type="date" value={sc.pvfi_proxima_eval||''} onChange={e=>setSCK('pvfi_proxima_eval',e.target.value)} style={s.inp}/></div>
-                  <div style={{display:'flex',alignItems:'flex-end'}}><div style={{fontSize:10,color:G3,lineHeight:1.5}}>Recomendado: 8–12 semanas desde la evaluación inicial.</div></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-        // ── PASO 9: BANDERAS CLÍNICAS ────────────────────────────────────
-        case 9: return(
-          <div>
-            <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🔒 <strong>Completado exclusivamente por fisioterapeuta.</strong> Lectura permitida al entrenador.</div>
-            <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:16}}>
-              {[
-                ['banderaRoja','🔴 Bandera Roja','Patología seria: tumor, fractura, infección, neurológico','Derivación médica inmediata'],
-                ['banderaNaranja','🟠 Bandera Naranja','Trastorno psicológico que influye en el dolor','Comunicación con salud mental'],
-                ['banderaAmarilla','🟡 Bandera Amarilla','Miedo al movimiento, catastrofismo, kinesiofobia','Abordaje educativo + progresión gradual'],
-              ].map(([k,titulo,desc,accion])=>(
-                <div key={k} style={{display:'grid',gridTemplateColumns:'1fr 100px',gap:8,alignItems:'center',background:G1,borderRadius:6,padding:'8px 10px'}}>
-                  <div><div style={{fontSize:12,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4}}>{desc}</div><div style={{fontSize:10,color:R,marginTop:2}}>{accion}</div></div>
-                  <select value={sc[k]||'no'} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel}}>
-                    <option value="no">No</option>
-                    <option value="si">Sí</option>
-                  </select>
-                </div>
-              ))}
-            </div>
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8}}>Restricciones activas — alimentan el filtro de ejercicios</div>
-            {[
-              ['restriccionImpacto','🚫 Restricción de impacto','Sin saltos, carrera, pliometría → bloquea bloque Potencia'],
-              ['restriccionOverhead','🚫 Restricción overhead','Sin cargas sobre la cabeza → alerta en empuje vertical'],
-              ['restriccionCargaAxial','⚠️ Restricción carga axial','Sin sentadilla/peso muerto pesados → alerta en Fuerza bilateral'],
-            ].map(([k,titulo,desc])=>(
-              <div key={k} style={{display:'grid',gridTemplateColumns:'1fr 80px',gap:8,alignItems:'center',marginBottom:8,border:`1px solid ${G2}`,borderRadius:6,padding:'8px 10px'}}>
-                <div><div style={{fontSize:12,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4}}>{desc}</div></div>
-                <select value={sc[k]||'no'} onChange={e=>setSCK(k,e.target.value)} style={s.sel}>
-                  <option value="no">No</option>
-                  <option value="si">Sí</option>
-                </select>
-              </div>
-            ))}
-            <div style={{marginTop:8}}><span style={s.lbl}>Otra restricción específica</span><input value={sc.otraRestriccion||''} onChange={e=>setSCK('otraRestriccion',e.target.value)} style={s.inp} placeholder="Especificar si aplica"/></div>
-            <div style={{marginTop:14}}>
-              <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>🚦 Semáforo de carga — Estado para el entrenador</div>
-              <div style={{display:'flex',gap:8}}>
-                {[['verde','🟢 Verde — Sin restricciones'],['amarillo','🟡 Amarillo — Restricciones parciales'],['rojo','🔴 Rojo — Solo clínica']].map(([v,l])=>{
-                  const sfv=SF[v];
-                  return(
-                    <div key={v} onClick={()=>setSCK('semaforoAsignado',v)} style={{flex:1,padding:'10px 8px',borderRadius:8,border:`2px solid ${sc.semaforoAsignado===v?sfv.color:G2}`,background:sc.semaforoAsignado===v?sfv.bg:WH,cursor:'pointer',textAlign:'center',fontSize:11,fontWeight:sc.semaforoAsignado===v?700:400,color:sc.semaforoAsignado===v?sfv.color:'#333',transition:'all .15s'}}>
-                      {l}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        );
-        // ── PASO 10: SÍNTESIS Y PLAN ─────────────────────────────────────
-        case 10: return(
-          <div>
-            <div><span style={s.lbl}>Hallazgos principales</span><textarea value={sc.hallazgosPrincipales||''} onChange={e=>setSCK('hallazgosPrincipales',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
-            <div style={{marginTop:10}}><span style={s.lbl}>Prioridades de trabajo</span><textarea value={sc.prioridades||''} onChange={e=>setSCK('prioridades',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
-            <div style={{marginTop:14,fontSize:11,fontWeight:700,marginBottom:8}}>Asignación de nivel — Método Activa Integra</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
-              {Object.entries(NIVEL).map(([k,v])=>(
-                <div key={k} onClick={()=>setSCK('nivelAsignado',k)} style={{padding:'12px',borderRadius:8,border:`2px solid ${sc.nivelAsignado===k?v.color:G2}`,background:sc.nivelAsignado===k?`${v.color}14`:WH,cursor:'pointer',transition:'all .15s'}}>
-                  <div style={{fontWeight:800,color:v.color,fontSize:12}}>{v.badge} · {v.label}</div>
-                  <div style={{fontSize:11,color:G4,marginTop:2}}>{v.desc}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
-              <div><span style={s.lbl}>Frecuencia semanal</span><input value={sc.frecuencia||''} onChange={e=>setSCK('frecuencia',e.target.value)} style={s.inp} placeholder="ej: 3 sesiones"/></div>
-              <div><span style={s.lbl}>Duración por sesión</span><input value={sc.duracion||''} onChange={e=>setSCK('duracion',e.target.value)} style={s.inp} placeholder="ej: 60 min"/></div>
-              <div><span style={s.lbl}>Revisión programada</span><input value={sc.revision||''} onChange={e=>setSCK('revision',e.target.value)} style={s.inp} placeholder="ej: 8 semanas"/></div>
-            </div>
-            <div><span style={s.lbl}>Observaciones adicionales del equipo</span><textarea value={sc.observaciones||''} onChange={e=>setSCK('observaciones',e.target.value)} rows={2} placeholder="Cualquier información relevante para el plan inicial..." style={{...s.inp,resize:'vertical'}}/></div>
-            <div style={{marginTop:14,background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:8,padding:'12px 14px'}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>Resumen del alta</div>
-              <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
-                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Nivel</div><div style={{fontSize:13,fontWeight:700,color:NIVEL[sc.nivelAsignado]?.color}}>{NIVEL[sc.nivelAsignado]?.label}</div></div>
-                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Semáforo</div><div style={{fontSize:13,fontWeight:700,color:SF[sc.semaforoAsignado]?.color}}>{SF[sc.semaforoAsignado]?.emoji} {SF[sc.semaforoAsignado]?.label}</div></div>
-                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Restricciones activas</div><div style={{fontSize:12,fontWeight:700}}>{[sc.restriccionImpacto==='si'&&'Impacto',sc.restriccionOverhead==='si'&&'Overhead',sc.restriccionCargaAxial==='si'&&'Carga axial',sc.otraRestriccion].filter(Boolean).join(', ')||'Ninguna'}</div></div>
-              </div>
-            </div>
-          </div>
-        );
-        default: return null;
-      }
-    };
-
-    const canNext=step===0?(!!(form.nombre&&form.apellido&&form.documento&&form.celular)):step===4?true:true;
-    const isLast=step===totalSteps-1;
+    // Sync custom tests when client changes
+    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
 
     return(
-      <OverlayWrap wide>
-        {/* Header del wizard */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
-          <div>
-            <div style={{fontWeight:800,fontSize:15}}>{form.nombre?`${form.nombre} ${form.apellido}`:'Alta de nuevo cliente'}</div>
-            <div style={{fontSize:11,color:G3,marginTop:2}}>{WIZARD_STEPS[step].fase===1?'📋 Fase 1 — Autocompletado':WIZARD_STEPS[step].fase==='transicion'?'💾 Guardar progreso':'🩺 Fase 2 — Evaluación profesional'}</div>
-          </div>
-          <button onClick={()=>{setClientWizard(null);}} style={s.btnG}>✕</button>
+      <div style={{padding:'12px 14px'}}>
+        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}} brand={brand} s={s}/>}
+        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)} brand={brand} clients={clients} s={s}/>}
+        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} brand={brand} s={s} onSave={(tests)=>{
+          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
+        }}/>}
+        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
+          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
         </div>
-        {/* Barra de pasos */}
-        <div style={{display:'flex',gap:3,marginBottom:16,overflowX:'auto'}}>
-          {WIZARD_STEPS.map((ws,i)=>(
-            <div key={i} onClick={()=>i<step&&setStep(i)} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:6,background:i===step?BK:i<step?'#E5E7EB':G1,color:i===step?WH:i<step?G4:G3,fontSize:10,fontWeight:i===step?700:400,cursor:i<step?'pointer':'default',flexShrink:0,whiteSpace:'nowrap'}}>
-              <span>{i<step?'✓':ws.icon}</span>
-              <span style={{display:window.innerWidth>600?'inline':'none'}}>{ws.title}</span>
-              {window.innerWidth<=600&&<span>{i+1}</span>}
+        {/* Selector de cliente */}
+        <div style={{...s.card,marginBottom:12}}>
+          <span style={s.lbl}>Seleccionar cliente</span>
+          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
+            <option value=''>— Seleccionar cliente —</option>
+            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
+          </select>
+        </div>
+        {pac&&(
+          <>
+            {/* Header del paciente */}
+            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
+                  <div style={{fontSize:11,color:G3,marginTop:2}}>
+                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
+                    {tests.length>0&&(()=>{
+                      const last=new Date(tests[0].fecha);
+                      const next=new Date(last);next.setMonth(next.getMonth()+4);
+                      const dias=Math.ceil((next-new Date())/86400000);
+                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
+                    })()}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
+                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
+                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-        {/* Título del paso */}
-        <div style={{background:BK,borderRadius:8,padding:'10px 14px',marginBottom:14,borderLeft:`3px solid ${R}`}}>
-          <div style={{color:WH,fontWeight:700,fontSize:13}}>{WIZARD_STEPS[step].icon} Paso {step+1} de {totalSteps} — {WIZARD_STEPS[step].title}</div>
-        </div>
-        {/* Contenido */}
-        <div style={{maxHeight:'50vh',overflowY:'auto',paddingRight:4}}>
-          {renderStep()}
-        </div>
-        {/* Navegación */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:16,paddingTop:12,borderTop:`1px solid ${G2}`}}>
-          <button onClick={()=>step>0&&setStep(p=>p-1)} disabled={step===0} style={{...s.btnG,opacity:step===0?.3:1}}>← Anterior</button>
-          <span style={{fontSize:11,color:G3}}>{step+1} / {totalSteps}</span>
-          {isLast
-            ?<button onClick={finalize} style={{...s.btnGreen,padding:'9px 20px'}}>✓ Completar alta</button>
-            :<button onClick={()=>canNext&&setStep(p=>p+1)} disabled={!canNext} style={{...s.btnR,opacity:!canNext?.4:1}}>Siguiente →</button>
-          }
-        </div>
-        {step===0&&(!form.nombre||!form.apellido||!form.documento||!form.celular)&&(
-          <div style={{fontSize:10,color:'#D97706',textAlign:'center',marginTop:6}}>* Nombre, apellido, documento y celular son obligatorios para continuar</div>
-        )}
-      </OverlayWrap>
-    );
-  };
-
-  // ─── BANNER SEMÁFORO ─────────────────────────────────────────────────────
-  const SemaforoBanner=({cliente})=>{
-    if(!cliente)return null;
-    const sf=SF[cliente.semaforo];
-    const nv=NIVEL[cliente.nivel];
-    return(
-      <div style={{background:sf.bg,border:`1.5px solid ${sf.border}`,borderRadius:8,padding:'10px 14px',marginBottom:10,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{fontSize:22,flexShrink:0}}>{sf.emoji}</div>
-          <div>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2}}>
-              <span style={{fontWeight:800,fontSize:12,color:sf.color}}>SEMÁFORO {sf.label}</span>
-              <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99}}>{nv.badge} {nv.label}</span>
-              {!cliente.screeningCompleto&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99,border:'1px solid #F59E0B'}}>EVALUACIÓN PENDIENTE</span>}
-            </div>
-            {cliente.restricciones
-              ?<div style={{fontSize:11,color:'#444'}}><strong>Restricciones:</strong> {cliente.restricciones}</div>
-              :<div style={{fontSize:11,color:G3}}>Sin restricciones documentadas</div>
-            }
-            {cliente.semaforo==='rojo'&&<div style={{fontSize:11,color:R,fontWeight:700,marginTop:4}}>⚠ Solo fisioterapia — Derivar antes de programar entrenamiento</div>}
-            {cliente.semaforo==='pendiente'&&<div style={{fontSize:11,color:'#D97706',marginTop:2}}>El filtro de ejercicios se activa al completar la evaluación funcional.</div>}
-            {cliente.periodizacion&&PERIODIZACIONES[cliente.periodizacion]&&(()=>{
-              const p=PERIODIZACIONES[cliente.periodizacion];
-              const f=p.fases[0];
+            {/* Plan activo */}
+            {planes.filter(p=>p.activo).length>0&&(()=>{
+              const plan=planes.filter(p=>p.activo)[0];
+              const ps=PERIODIZACIONES[plan.sistema_id];
               return(
-                <div style={{marginTop:5,background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:5,padding:'6px 9px'}}>
-                  <div style={{fontSize:9,color:'#7C3AED',fontWeight:700,textTransform:'uppercase',marginBottom:2}}>📅 Periodización activa</div>
-                  <div style={{fontSize:11,color:'#4C1D95',fontWeight:700}}>{p.nombre}</div>
-                  <div style={{fontSize:10,color:'#6D28D9',display:'flex',gap:10,flexWrap:'wrap',marginTop:2}}>
-                    <span>Fase: <strong>{f?.nombre}</strong></span>
-                    <span>Reps: <strong>{f?.reps}</strong></span>
-                    <span>Intensidad: <strong>{f?.intensidad}</strong></span>
-                    <span>RIR: <strong>{f?.rir}</strong></span>
-                  </div>
-                  <div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontStyle:'italic'}}>{f?.objetivo}</div>
+                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
+                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
+                  {ps&&(
+                    <>
+                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
+                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
+                        {ps.fases.map((f,i)=>(
+                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
+                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
+                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
+                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
+                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
+                    </>
+                  )}
+                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
                 </div>
               );
             })()}
-            {cliente.objetivo&&(
-              <div style={{marginTop:6,background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:5,padding:'5px 8px'}}>
-                <div style={{fontSize:9,color:'#1D4ED8',fontWeight:700,textTransform:'uppercase',marginBottom:2}}>🎯 Objetivo · Criterios de evolución activos</div>
-                <div style={{fontSize:10,color:'#1D4ED8',marginBottom:3,fontStyle:'italic'}}>"{cliente.objetivo}"</div>
-                {generarCriteriosPersonalizados(cliente.objetivo,cliente.nivel||'activa','',null).slice(0,3).map((crit,i)=>(
-                  <div key={i} style={{fontSize:10,color:'#374151',display:'flex',gap:4,marginBottom:1}}>
-                    <span style={{color:FASES_METODO[cliente.nivel]?.color||'#374151',fontWeight:700,flexShrink:0}}>→</span>{crit}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnG,flexShrink:0,fontSize:10,padding:'3px 8px'}}>Desvincular</button>
-      </div>
-    );
-  };
-
-  // ── TAB: CLIENTES ──────────────────────────────────────────────────────────
-  const ClientesTab=()=>(
-    <div style={{padding:'12px 14px'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
-        <div>
-          <div style={{fontSize:14,fontWeight:700}}>Directorio de clientes</div>
-          <div style={{fontSize:11,color:G4}}>{clients.length} clientes · Método Activa Integra v4.0</div>
-        </div>
-        <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
-      </div>
-      {clients.length===0&&(
-        <div style={{...s.card,textAlign:'center',padding:36,borderStyle:'dashed'}}>
-          <div style={{fontSize:28,marginBottom:8}}>👤</div>
-          <div style={{fontWeight:700,marginBottom:4}}>Sin clientes registrados</div>
-          <div style={{fontSize:12,color:G3,marginBottom:16,lineHeight:1.6}}>El alta incluye datos personales + screening funcional completo.<br/>El semáforo y el filtro de ejercicios se activan al finalizar la evaluación.</div>
-          <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
-        </div>
-      )}
-      <div style={{display:'grid',gap:8}}>
-        {clients.map(c=>{
-          const sf=SF[c.semaforo];
-          const nv=NIVEL[c.nivel];
-          const isLinked=session.clienteId===c.id;
-          return(
-            <div key={c.id} style={{...s.card,borderLeft:`4px solid ${c.screeningCompleto?sf.color:'#D1D5DB'}`,marginBottom:0,padding:'12px 14px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-                <div style={{flex:1}}>
-                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}}>
-                    <span style={{fontWeight:700,fontSize:14}}>{c.nombre} {c.apellido}</span>
-                    {c.documento&&<span style={{fontSize:10,color:G3}}>CI {c.documento}</span>}
-                    <span style={{fontSize:15}}>{sf.emoji}</span>
-                    <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:99}}>{nv.emoji} {nv.badge} {nv.label}</span>
-                    {!c.screeningCompleto&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #F59E0B'}}>⏳ Evaluación pendiente</span>}
-                  {c.periodizacion&&<span style={{background:'#F5F3FF',color:'#7C3AED',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #C4B5FD'}}>📅 {PERIODIZACIONES[c.periodizacion]?.nombre?.split(' ').slice(0,2).join(' ')}</span>}
-                    {isLinked&&<span style={{background:'#DCFCE7',color:'#16A34A',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #86EFAC'}}>● EN SESIÓN</span>}
-                  </div>
-                  {c.objetivo&&(
-                    <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:5,padding:'5px 8px',margin:'4px 0'}}>
-                      <div style={{fontSize:9,color:'#1D4ED8',fontWeight:700,marginBottom:2}}>🎯 {FASES_METODO[c.nivel]?.badge} {FASES_METODO[c.nivel]?.label} — Criterios de evolución</div>
-                      <div style={{fontSize:10,color:'#1E40AF',fontStyle:'italic',marginBottom:2}}>"{c.objetivo}"</div>
-                      {generarCriteriosPersonalizados(c.objetivo,c.nivel||'activa','',null).slice(0,2).map((crit,i)=>(
-                        <div key={i} style={{fontSize:10,color:'#374151',display:'flex',gap:4}}>
-                          <span style={{color:FASES_METODO[c.nivel]?.color||'#374151',fontWeight:700,flexShrink:0}}>→</span>{crit}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:10,color:G3}}>
-                    {c.celular&&<span>📱 {c.celular}</span>}
-                    {c.restricciones&&<span style={{color:'#444',fontSize:11}}><strong>Restricciones:</strong> {c.restricciones}</span>}
-                    {c.fechaEval&&<span>Eval: {c.fechaEval}</span>}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}}>
-                  {!c.screeningCompleto&&(
-                    <button onClick={()=>setClientWizard({cli:c,step:5})} style={{...s.btnR,fontSize:10,padding:'4px 10px'}}>Completar evaluación →</button>
-                  )}
-                  {c.screeningCompleto&&!isLinked&&(
-                    <button onClick={()=>{setSession(p=>({...p,clienteId:c.id,cliente:`${c.nombre} ${c.apellido}`}));setTab('session');}} style={{...s.btnBK,fontSize:10,padding:'4px 10px'}}>Usar en sesión →</button>
-                  )}
-                  {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
-                  {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
-                  <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
-                  {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
-                  <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Editar</button>
-                  <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {clients.length>0&&(
-        <div style={{...s.card,marginTop:8,background:G1}}>
-          <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4}}>Resumen</div>
-          <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-            {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{v.label}</div><div style={{fontSize:18,fontWeight:700,color:v.color}}>{n}</div></div>;})}
-            <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20,display:'flex',gap:14}}>
-              {Object.entries(SF).map(([k,v])=>{const n=clients.filter(c=>c.semaforo===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3}}>{v.emoji}</div><div style={{fontSize:16,fontWeight:700,color:v.color}}>{n}</div></div>;})}
-            </div>
-            <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20}}>
-              <div style={{fontSize:9,color:G3}}>Evaluaciones pendientes</div>
-              <div style={{fontSize:16,fontWeight:700,color:'#D97706'}}>{clients.filter(c=>!c.screeningCompleto).length}</div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  // ── BARRA DE DÍAS DEL PLAN (sesiones por semana 1–5) ──────────────────────
-  const DiaTabs=()=>(
-    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`,padding:'10px 12px'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
-        <div style={{fontSize:12,fontWeight:700,color:'#111'}}>🗓️ Sesiones por semana</div>
-        <div style={{display:'flex',gap:4,alignItems:'center'}}>
-          {[1,2,3,4,5].map(n=>(
-            <button key={n} onClick={()=>setNumDias(n)} style={{width:28,height:28,borderRadius:6,border:`1px solid ${numDias===n?brand.colorPrimary:G2}`,background:numDias===n?brand.colorPrimary:WH,color:numDias===n?WH:G4,fontWeight:800,fontSize:12,cursor:'pointer'}}>{n}</button>
-          ))}
-          <span style={{fontSize:10,color:G3,marginLeft:4}}>día/s</span>
-        </div>
-      </div>
-      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        {(session.dias||[]).map((d,i)=>{
-          const act=i===activeDiaIdx;
-          const nEj=d.blocks.reduce((a,b)=>a+b.exercises.length,0);
-          return(
-            <div key={d.id} onClick={()=>gotoDia(i)} style={{cursor:'pointer',display:'flex',alignItems:'center',gap:6,background:act?brand.colorPrimary:'#f1f1f1',color:act?WH:'#333',borderRadius:8,padding:'6px 10px',border:`1px solid ${act?brand.colorPrimary:G2}`}}>
-              <span style={{fontWeight:800,fontSize:12}}>{i+1}</span>
-              <div style={{lineHeight:1.1}}>
-                <div style={{fontSize:11,fontWeight:700}}>{d.name||`Día ${i+1}`}</div>
-                <div style={{fontSize:8,opacity:.85}}>{d.obj?`${OBJS[d.obj].label} · ${nEj} ej.`:'sin armar'}</div>
-              </div>
-              {numDias>1&&<span onClick={(e)=>{e.stopPropagation();removeDia(i);}} style={{marginLeft:2,fontSize:14,lineHeight:1,opacity:.7}}>×</span>}
-            </div>
-          );
-        })}
-        {numDias<5&&<button onClick={addDia} style={{...s.btnG,fontSize:11,padding:'6px 10px',borderStyle:'dashed'}}>+ Día</button>}
-      </div>
-    </div>
-  );
-
-  // ── TAB: SESIÓN ────────────────────────────────────────────────────────────
-  const SessionTab=()=>{
-    if(!dia.obj)return(
-      <div style={{padding:'16px 14px'}}>
-        {DiaTabs()}
-        {clients.filter(c=>c.screeningCompleto).length>0&&(
-          <div style={{...s.card,marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-            <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Vincular cliente a la sesión</div>
-            <select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%',marginBottom:activeClient?8:0}}>
-              <option value=''>Sin cliente vinculado</option>
-              {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
-            </select>
-            {activeClient&&<SemaforoBanner cliente={activeClient}/>}
-          </div>
-        )}
-        {clients.filter(c=>!c.screeningCompleto).length>0&&(
-          <div style={{...s.card,marginBottom:16,background:'#FFFBEB',borderColor:'#FCD34D'}}>
-            <div style={{fontSize:11,color:'#92400E'}}>⏳ {clients.filter(c=>!c.screeningCompleto).length} cliente/s con evaluación pendiente — no disponibles para sesión hasta completar el screening.</div>
-          </div>
-        )}
-        {/* PERIODIZACIÓN ACTIVA DEL CLIENTE — condiciona la elección */}
-        {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
-          const per=PERIODIZACIONES[activeClient.periodizacion];
-          const fase=per.fases[0];
-          return(
-            <div style={{background:'#1a0a2e',borderRadius:10,padding:'14px 16px',marginBottom:14,border:'1px solid #4C1D95',borderLeft:'4px solid #7C3AED'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:10}}>
-                <div>
-                  <div style={{fontSize:13,fontWeight:800,color:'#C4B5FD'}}>📅 Periodización activa del cliente</div>
-                  <div style={{fontSize:11,color:'#9F7AEA',marginTop:1}}>{per.nombre} · {per.autor}</div>
-                </div>
-                <span style={{background:'#4C1D95',color:'#E9D5FF',fontSize:10,fontWeight:700,padding:'3px 10px',borderRadius:99}}>{per.duracion}</span>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(per.fases.length,4)},1fr)`,gap:6,marginBottom:10}}>
-                {per.fases.map((f,i)=>(
-                  <div key={i} style={{background:i===0?'#4C1D95':'#2d1b69',borderRadius:6,padding:'7px 8px',border:i===0?'1px solid #7C3AED':'1px solid #3b1f7a'}}>
-                    <div style={{fontSize:9,fontWeight:700,color:i===0?'#E9D5FF':'#9F7AEA',marginBottom:3}}>{i===0?'▶ ':''}{f.nombre}</div>
-                    <div style={{fontSize:11,color:i===0?WH:'#C4B5FD',fontWeight:i===0?700:400}}>{f.reps} reps</div>
-                    <div style={{fontSize:9,color:'#9F7AEA'}}>{f.intensidad}</div>
-                    <div style={{fontSize:9,color:'#9F7AEA'}}>RIR {f.rir}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{background:'#2d1b69',borderRadius:7,padding:'8px 10px',fontSize:11}}>
-                <div style={{color:'#E9D5FF',fontWeight:700,marginBottom:2}}>🎯 Fase activa: {fase.nombre}</div>
-                <div style={{display:'flex',gap:14,flexWrap:'wrap',color:'#C4B5FD',fontSize:10}}>
-                  <span>Series sugeridas: <strong style={{color:WH}}>3–5</strong></span>
-                  <span>Reps sugeridas: <strong style={{color:WH}}>{fase.reps}</strong></span>
-                  <span>Intensidad: <strong style={{color:WH}}>{fase.intensidad}</strong></span>
-                  <span>RIR: <strong style={{color:WH}}>{fase.rir}</strong></span>
-                  <span>Volumen: <strong style={{color:WH}}>{fase.volumen}</strong></span>
-                </div>
-                <div style={{color:'#9F7AEA',fontSize:10,marginTop:4,fontStyle:'italic'}}>{fase.objetivo}</div>
-              </div>
-              <div style={{marginTop:8,fontSize:10,color:'#7C3AED',fontStyle:'italic'}}>
-                💡 La estructura de sesión sugerida abajo está preseleccionada según el nivel del cliente. Los parámetros de series, reps, RPE y tempo deben ajustarse manualmente al indicado arriba.
-              </div>
-            </div>
-          );
-        })()}
-        {/* PLAZOS DEL PLAN — duración total y fases con fechas (punto 4) */}
-        {planMeta&&(
-          <div style={{background:'#0A3D62',borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:'4px solid #1BAA86'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:8}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:800,color:'#7FE9CE'}}>📆 Plazos del plan asignado</div>
-                <div style={{fontSize:10,color:'#9FD9EC',marginTop:1}}>{planMeta.nombre}</div>
-              </div>
-              <span style={{background:'#1BAA86',color:'#04261C',fontSize:10,fontWeight:800,padding:'3px 10px',borderRadius:99}}>
-                {planMeta.secuencial&&planMeta.totalSemanas?`${planMeta.totalSemanas} semanas`:planMeta.duracionTexto}
-              </span>
-            </div>
-            {planMeta.secuencial&&planMeta.fechaFin&&(
-              <div style={{fontSize:10,color:'#9FD9EC',marginBottom:8}}>Inicio: <strong style={{color:WH}}>{planMeta.fechaInicio}</strong> · Fin estimado: <strong style={{color:WH}}>{planMeta.fechaFin}</strong> <span style={{opacity:.7}}>(según fecha del plan)</span></div>
-            )}
-            <div style={{display:'flex',flexDirection:'column',gap:5}}>
-              {planMeta.fases.map((f,i)=>(
-                <div key={i} style={{background:'#0d4f7d',borderRadius:6,padding:'7px 10px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
-                  <span style={{background:'#1BAA86',color:'#04261C',fontWeight:800,fontSize:10,width:20,height:20,borderRadius:5,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{i+1}</span>
-                  <div style={{flex:1,minWidth:140}}>
-                    <div style={{fontSize:11,fontWeight:700,color:WH}}>{f.nombre}</div>
-                    <div style={{fontSize:9,color:'#9FD9EC'}}>{f.semanasLabel}{f.fIni&&f.fFin?` · ${f.fIni} → ${f.fFin}`:''}</div>
-                  </div>
-                  <div style={{fontSize:9,color:'#7FE9CE',textAlign:'right'}}>{f.reps} reps · {f.intensidad}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{marginTop:8,fontSize:9,color:'#9FD9EC',fontStyle:'italic'}}>Estas son las fases del <strong style={{color:'#7FE9CE'}}>plan</strong> (ej. periodización). La fase del <strong style={{color:'#7FE9CE'}}>Método</strong> ({activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:activeClient?.nivel}) es transversal y se mantiene en el encabezado.</div>
-          </div>
-        )}
-        <div style={{background:BK,borderRadius:10,padding:'18px 16px',marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:4}}>Nivel del método — Día {activeDiaIdx+1}</div>
-          <div style={{fontSize:12,color:G3}}>La sugerencia de bloques se adapta al continuum Activa Integra.</div>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
-          {Object.entries(OBJS).map(([k,o])=>{
-            const nv=NIVEL[o.nivelKey];
-            return(
-              <div key={k} onClick={()=>suggestBlocks(k)} style={{cursor:'pointer',background:BK,borderRadius:10,padding:'18px 16px',border:`1px solid #333`,borderTop:`4px solid ${nv.color}`,position:'relative',overflow:'hidden'}}>
-                <div style={{position:'absolute',top:0,right:0,width:70,height:70,background:nv.color,opacity:.08,borderRadius:'0 0 0 70px'}}/>
-                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
-                  <div style={{width:38,height:38,background:nv.color,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:WH,fontWeight:900,flexShrink:0}}>{nv.badge}</div>
-                  <div><div style={{fontSize:15,fontWeight:800,color:WH}}>{o.label}</div><div style={{fontSize:11,color:G3,marginTop:1}}>{o.desc}</div></div>
-                </div>
-                <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-                  {o.blocks.map((b,i)=>(
-                    <span key={b} style={{display:'inline-flex',alignItems:'center',gap:4,background:'#2a2a2a',border:`1px solid #3a3a3a`,borderRadius:99,padding:'3px 8px'}}>
-                      <span style={{color:nv.color,fontSize:9,fontWeight:800}}>{i+1}</span>
-                      <span style={{color:G3,fontSize:9,fontWeight:600}}>{BLOCKS[b].label}</span>
-                    </span>
-                  ))}
-                </div>
-                <div style={{marginTop:10,fontSize:10,color:'#555',display:'flex',justifyContent:'space-between'}}>
-                  <span>{o.blocks.length} bloques</span><span style={{color:nv.color,fontWeight:700}}>SELECCIONAR →</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-    const statusColor=dia.blocks.length>=5&&dia.blocks.length<=7?'#16A34A':R;
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {DiaTabs()}
-        <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
-            <div><span style={s.lbl}>Nombre del plan</span><input value={session.planNombre} onChange={e=>setSession(p=>({...p,planNombre:e.target.value}))} placeholder="Ej: Plan pérdida de grasa 16 sem" style={s.inp}/></div>
-            <div><span style={s.lbl}>Fecha inicio del plan</span><input type="date" value={session.fecha} onChange={e=>setSession(p=>({...p,fecha:e.target.value}))} style={s.inp}/></div>
-          </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
-            <div><span style={s.lbl}>Nombre del día {activeDiaIdx+1}</span><input value={dia.name} onChange={e=>setDia(d=>({...d,name:e.target.value}))} style={s.inp}/></div>
-            <div>
-              <span style={s.lbl}>Cliente</span>
-              {clients.filter(c=>c.screeningCompleto).length>0
-                ?<select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%'}}>
-                    <option value=''>Sin cliente</option>
-                    {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido}</option>)}
-                  </select>
-                :<input value={session.cliente} onChange={e=>setSession(p=>({...p,cliente:e.target.value}))} placeholder="Nombre del cliente" style={s.inp}/>
-              }
-            </div>
-          </div>
-          <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
-            <div style={{display:'flex',gap:6,alignItems:'center'}}>
-              <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
-              <span style={{...s.tag(statusColor)}}>{dia.blocks.length}/5-7 bloques</span>
-              {activeClient&&<span style={{fontSize:12}}>{SF[activeClient.semaforo].emoji}</span>}
-            </div>
-            <div style={{display:'flex',gap:6}}>
-              <button onClick={guardarPlanActual} style={{...s.btnBK,fontSize:11,padding:'5px 10px',background:'#16A34A'}}>💾 Guardar plan</button>
-              {activeClient&&<button onClick={()=>setShowHistorial(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>📂 Historial{gymPlanes.length?` (${gymPlanes.length})`:''}</button>}
-              <button onClick={()=>setShowEntrenarIA(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>🧠 Entrenar IA</button>
-              <button onClick={()=>setTab('export')} style={{...s.btnBK,fontSize:11,padding:'5px 10px'}}>Exportar plan →</button>
-              <button onClick={()=>setDia(d=>({...d,obj:null,blocks:[]}))} style={s.btnG}>↺ Rearmar día</button>
-              <button onClick={resetPlan} style={s.btnG}>← Nuevo plan</button>
-            </div>
-          </div>
-        </div>
-        {activeClient&&<SemaforoBanner cliente={activeClient}/>}
-        {/* ── MODAL: HISTORIAL DE PLANES DEL CLIENTE ── */}
-        {showHistorial&&(
-          <OverlayWrap wide>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <div style={{fontSize:17,fontWeight:800}}>📂 Historial de planes — {activeClient?.nombre} {activeClient?.apellido}</div>
-              <button onClick={()=>setShowHistorial(false)} style={s.btnG}>✕</button>
-            </div>
-            {gymPlanes.length===0
-              ?<div style={{fontSize:13,color:G3,padding:'20px 0',textAlign:'center'}}>Todavía no hay planes guardados para este cliente.<br/>Armá un plan y tocá <strong>💾 Guardar plan</strong>.</div>
-              :<div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:'60vh',overflowY:'auto'}}>
-                {gymPlanes.map(pl=>{
-                  const estCol=pl.estado==='completado'?'#16A34A':pl.estado==='reemplazado'?'#999':R;
+            {/* Grid resumen 1RM */}
+            <div style={{...s.card,marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                {allTests.map((tf,tfIdx)=>{
+                  const data=tests.filter(t=>t.test_id===tf.id);
+                  const last=data[0];
+                  const rm1=last?.rm1_real||last?.rm1_calculado;
+                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
+                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
+                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
+                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
                   return(
-                    <div key={pl.id} style={{border:`1px solid ${G2}`,borderLeft:`4px solid ${estCol}`,borderRadius:8,padding:'10px 12px'}}>
-                      <div style={{flex:1,minWidth:200}}>
-                        <div style={{fontSize:13,fontWeight:800}}>{pl.nombre} {pl.es_ejemplo&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 6px',borderRadius:99,fontWeight:700}}>⭐ EJEMPLO IA</span>}</div>
-                        <div style={{fontSize:10,color:G3,marginTop:1}}>{pl.fecha_inicio||'sin fecha'} · {pl.num_dias} día/s · {(pl.periodizacion||'').replace(/_/g,' ')} · <span style={{color:estCol,fontWeight:700}}>{pl.estado}</span></div>
-                        {pl.resumen&&<div style={{fontSize:9,color:'#888',marginTop:3,lineHeight:1.4}}>{pl.resumen.slice(0,180)}{pl.resumen.length>180?'…':''}</div>}
-                      </div>
-                      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:8}}>
-                        <button onClick={()=>cargarPlan(pl)} style={{...s.btnBK,fontSize:10,padding:'4px 9px'}}>Abrir</button>
-                        <button onClick={()=>duplicarPlan(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>Duplicar</button>
-                        {pl.estado!=='completado'&&<button onClick={()=>cambiarEstadoPlan(pl,'completado')} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>✓ Completar</button>}
-                        <button onClick={()=>marcarEjemploPlan(pl,!pl.es_ejemplo)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>{pl.es_ejemplo?'Quitar ejemplo':'⭐ Marcar ejemplo'}</button>
-                        <button onClick={()=>setVerEjecucion(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:'#16A34A',borderColor:'#16A34A'}}>📊 Ejecución</button>
-                        <button onClick={()=>{if(confirm('¿Eliminar este plan del historial?'))deleteGymPlan(pl.id);}} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:R}}>Eliminar</button>
-                      </div>
+                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
+                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
+                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
+                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
+                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
+                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
+                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
                     </div>
                   );
                 })}
               </div>
-            }
-            <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Los planes marcados como ⭐ ejemplo y el historial reciente se le pasan a la IA como contexto al generar nuevas sesiones.</div>
-          </OverlayWrap>
-        )}
-        {/* ── MODAL: ENTRENAR IA (base de conocimiento) ── */}
-        {showEntrenarIA&&(()=>{
-          const AMB={entrenamiento:'Entrenamiento',rehab:'Rehabilitación',nutricion:'Nutrición',evaluacion:'Evaluaciones',general:'General'};
-          return(
-            <OverlayWrap wide>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                <div style={{fontSize:17,fontWeight:800}}>🧠 Entrenar IA — Reglas y criterio</div>
-                <button onClick={()=>setShowEntrenarIA(false)} style={s.btnG}>✕</button>
-              </div>
-              <div style={{fontSize:11,color:G3,marginBottom:12,lineHeight:1.5}}>Escribí tus principios de planificación, tratamiento o evaluación. La IA los lee y los aplica en cada recomendación. Ej: <em>"Para principiantes, nunca superar 3 series las primeras 2 semanas"</em> o <em>"En RESTAURA priorizar isométricos sin dolor antes que rango completo"</em>.</div>
-              <NuevaReglaIA onSave={r=>saveIaRegla(r)} genId={genId}/>
-              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'48vh',overflowY:'auto',marginTop:12}}>
-                {iaReglas.length===0
-                  ?<div style={{fontSize:12,color:G3,textAlign:'center',padding:'16px 0'}}>Sin reglas todavía. Agregá la primera arriba.</div>
-                  :iaReglas.map(r=>(
-                    <div key={r.id} style={{border:`1px solid ${G2}`,borderRadius:8,padding:'8px 10px',opacity:r.activo?1:.5}}>
-                      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
-                        <div style={{flex:1}}>
-                          <span style={{background:BK,color:WH,fontSize:8,padding:'1px 7px',borderRadius:99,fontWeight:700,textTransform:'uppercase'}}>{AMB[r.ambito]||r.ambito}</span>
-                          <div style={{fontSize:12,color:'#111',marginTop:4,lineHeight:1.4}}>{r.regla}</div>
-                        </div>
-                        <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                          <button onClick={()=>saveIaRegla({...r,activo:!r.activo})} style={{...s.btnG,fontSize:9,padding:'3px 7px'}}>{r.activo?'Pausar':'Activar'}</button>
-                          <button onClick={()=>{if(confirm('¿Eliminar esta regla?'))deleteIaRegla(r.id);}} style={{...s.btnG,fontSize:9,padding:'3px 7px',color:R}}>Eliminar</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                }
-              </div>
-              <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Las reglas activas de ámbito "Entrenamiento" y "General" se inyectan al generar sesiones. Las de Rehab/Nutrición/Evaluaciones se sumarán a esos generadores en la próxima fase.</div>
-            </OverlayWrap>
-          );
-        })()}
-        {verEjecucion&&<EjecucionModal plan={verEjecucion} exs={exs} onClose={()=>setVerEjecucion(null)}/>}
-        {/* BLOQUEO TOTAL SEMÁFORO ROJO */}
-        {activeClient&&activeClient.semaforo==='rojo'&&(
-          <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'16px 14px',marginBottom:12,textAlign:'center'}}>
-            <div style={{fontSize:18,marginBottom:6}}>🔴</div>
-            <div style={{fontSize:13,fontWeight:800,color:R,marginBottom:4}}>SEMÁFORO ROJO — Entrenamiento bloqueado</div>
-            <div style={{fontSize:12,color:'#666'}}>No es posible agregar ejercicios a un cliente con semáforo rojo.<br/>Derivar a fisioterapia antes de retomar el entrenamiento.</div>
-          </div>
-        )}
-        {overrideState&&(
-          <OverlayWrap>
-            <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:overrideState.isRestriction?R:'#92400E'}}>
-              {overrideState.isRestriction?'⚠ Restricción clínica activa':'Confirmar Override de bloque'}
             </div>
-            {overrideState.isRestriction
-              ?<div style={{fontSize:12,color:G4,marginBottom:10,lineHeight:1.5}}>
-                  <strong>{overrideState.ex.nombre}</strong> activa una restricción de <strong>{activeClient?.nombre}</strong>.<br/>
-                  Patrón: <em>{overrideState.ex.patron}</em><br/>
-                  <span style={{color:R}}>Solo continuar con justificación clínica documentada.</span>
-                </div>
-              :<div style={{fontSize:12,color:G4,marginBottom:10}}><strong>{overrideState.ex.nombre}</strong> pertenece a <strong>{BLOCKS[overrideState.ex.bloque]?.label}</strong>, no a <strong>{BLOCKS[overrideState.blockType]?.label}</strong>.</div>
-            }
-            <span style={s.lbl}>Justificación {overrideState.isRestriction?'clínica (obligatoria)':'(opcional)'}</span>
-            <input value={overrideState.note} onChange={e=>setOverrideState(p=>({...p,note:e.target.value}))} placeholder="Especificar justificación..." style={{...s.inp,marginBottom:10}}/>
-            <div style={{display:'flex',gap:8}}>
-              <button onClick={confirmOverride} disabled={overrideState.isRestriction&&!overrideState.note} style={{...s.btnR,flex:1,opacity:overrideState.isRestriction&&!overrideState.note?.4:1}}>Confirmar con override</button>
-              <button onClick={()=>setOverrideState(null)} style={{...s.btnG,flex:1}}>Cancelar</button>
-            </div>
-          </OverlayWrap>
-        )}
-        {/* CONTADOR DE DURACIÓN DE LA SESIÓN (por día, se recalcula y reinicia en cada sesión) */}
-        {(()=>{
-          const dur=calcularDuracionSesion(dia.blocks);
-          const col=colorDuracion(dur.totalMin);
-          const totEx=dia.blocks.reduce((a,b)=>a+b.exercises.length,0);
-          return(
-            <div style={{background:WH,border:`1px solid ${G2}`,borderLeft:`4px solid ${col.color}`,borderRadius:8,padding:'10px 14px',marginBottom:10}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
-                <div>
-                  <div style={{fontSize:12,fontWeight:800,color:'#111'}}>⏱ Duración estimada — {dia.name||`Día ${activeDiaIdx+1}`}</div>
-                  <div style={{fontSize:9,color:G3,marginTop:1}}>Calent. {dur.calentamiento}′ · Trabajo {dur.ejercicios}′ · Transic. {dur.transiciones}′ · Vuelta calma {dur.vueltaCalma}′ · {totEx} ejercicio/s</div>
-                </div>
-                <div style={{textAlign:'right'}}>
-                  <span style={{fontSize:28,fontWeight:800,color:col.color,lineHeight:1}}>{dur.totalMin}</span>
-                  <span style={{fontSize:12,color:col.color}}> min</span>
-                  <div style={{fontSize:10,color:col.color,fontWeight:700}}>{col.label}</div>
-                </div>
-              </div>
-              <div style={{background:G2,borderRadius:99,height:5,overflow:'hidden',marginTop:7}}>
-                <div style={{width:Math.min(dur.totalMin/90*100,100)+'%',background:col.color,height:'100%',borderRadius:99,transition:'width .4s'}}/>
-              </div>
-            </div>
-          );
-        })()}
-        {dia.blocks.map(block=>{
-          const bd=BLOCKS[block.type];
-          const isExp=expandedBlock===block.id;
-          const isSel=selBlock===block.id;
-          const replMode=!!(replaceTarget&&replaceTarget.blockId===block.id);
-          const replEx=replMode?exs.find(e=>e.id===block.exercises[replaceTarget.idx]?.exId):null;
-          return(
-            <div key={block.id} style={{border:`1px solid ${G2}`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
-              <div style={s.bHdr(block.type)}>
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <div style={{background:brand.colorPrimary,color:WH,width:22,height:22,borderRadius:4,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>{block.position}</div>
-                  <span style={{fontWeight:700,fontSize:13}}>{bd.label}</span>
-                  {block.exercises.length>0&&<span style={{background:'rgba(255,255,255,.2)',borderRadius:99,fontSize:10,padding:'1px 6px'}}>{block.exercises.length} ej.</span>}
-                </div>
-                <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>setExpandedBlock(isExp?null:block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>{isExp?'▲':'▼'}</button>
-                  <button onClick={()=>removeBlock(block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>✕</button>
-                </div>
-              </div>
-              {isExp&&(
-                <div style={{padding:'10px 12px',background:'#fafafa',borderTop:`1px solid ${G2}`}}>
-                  {/* SUGERENCIAS DE PESO DEL BLOQUE */}
-                  {activeClientTests?.length>0&&block.exercises.length>0&&(()=>{
-                    const sugs=sugerirPesosBloque(block.exercises,exs,activeClientTests,activeFasePlan);
-                    if(!sugs.length)return null;
-                    return(
-                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',marginBottom:8}}>
-                        <div style={{fontSize:10,fontWeight:700,color:'#7C3AED',marginBottom:6}}>
-                          💡 Sugerencias de peso para este bloque
-                          {activeFasePlan&&<span style={{fontSize:9,color:'#9F7AEA',fontWeight:400,marginLeft:6}}>— {activeFasePlan.nombre} · {activeFasePlan.reps} reps · RIR {activeFasePlan.rir}</span>}
-                        </div>
-                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:5}}>
-                          {sugs.map(({exId,nombre,sugerencia:sg})=>(
-                            <div key={exId} style={{background:'#EDE9FE',borderRadius:5,padding:'5px 8px'}}>
-                              <div style={{fontSize:9,color:'#6D28D9',fontWeight:700,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nombre}</div>
-                              <div style={{fontSize:14,fontWeight:800,color:'#4C1D95'}}>{sg.pesoSugerido} <span style={{fontSize:9,fontWeight:400}}>kg</span></div>
-                              <div style={{fontSize:8,color:'#7C3AED'}}>rango: {sg.pesoRango}</div>
-                              <div style={{fontSize:8,color:'#9F7AEA'}}>{sg.pct}% de {sg.rm1}kg 1RM</div>
-                              {sg.testVencido&&<div style={{fontSize:8,color:'#F59E0B',fontWeight:700}}>⚠ Test vencido</div>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                  {/* Sugerencia de periodización activa */}
-                  {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
-                    const per=PERIODIZACIONES[activeClient.periodizacion];
-                    const fase=per.fases[0];
-                    return(
-                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'6px 10px',marginBottom:8,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-                        <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>📅 {per.nombre} · {fase.nombre}</span>
-                        {[['Reps',fase.reps],['Intensidad',fase.intensidad],['RIR',fase.rir],['Volumen',fase.volumen]].map(([k,v])=>(
-                          <span key={k} style={{fontSize:9,color:'#4C1D95'}}>{k}: <strong>{v}</strong></span>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:10}}>
-                    {[['series','Series'],['reps','Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Descanso']].map(([k,lbl])=>(
-                      <div key={k}><span style={s.lbl}>{lbl}</span><input value={block.params[k]} onChange={e=>updateParams(block.id,k,e.target.value)} style={s.inp}/></div>
-                    ))}
-                  </div>
-                  {block.exercises.map((be,exIdx)=>{
-                    const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
-                    const rest=checkRestriction(ex,activeClient);
-                    const exParams=be.params||block.params;
-                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,exParams.reps);
-                    // Seed peso sugerido the first time
-                    if(sug&&be.pesoSug===''&&sug.pesoSugerido){
-                      setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
-                    }
-                    return(
-                      <div key={be.exId+'_'+exIdx} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderRadius:7,padding:'8px 10px',marginBottom:6}}>
-                        {/* Cabecera ejercicio */}
-                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:5}}>
-                          <div style={{flex:1}}>
-                            <div style={{fontSize:12,fontWeight:700}}><span style={{color:G3,fontWeight:600}}>{exIdx+1}.</span> {ex.nombre}</div>
-                            <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
-                            {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
-                            {rest==='warn'&&<span style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:9,color:'#92400E'}}>⚠ Restricción</span>}
-                          </div>
-                          <div style={{display:'flex',alignItems:'center',gap:1,flexShrink:0}}>
-                            <button onClick={()=>moveExInBlock(block.id,exIdx,-1)} disabled={exIdx===0} title="Subir" style={{background:'none',border:'none',cursor:exIdx===0?'default':'pointer',fontSize:12,color:exIdx===0?'#ddd':G4,padding:'2px 3px'}}>▲</button>
-                            <button onClick={()=>moveExInBlock(block.id,exIdx,1)} disabled={exIdx===block.exercises.length-1} title="Bajar" style={{background:'none',border:'none',cursor:exIdx===block.exercises.length-1?'default':'pointer',fontSize:12,color:exIdx===block.exercises.length-1?'#ddd':G4,padding:'2px 3px'}}>▼</button>
-                            <button onClick={()=>{setReplaceTarget({blockId:block.id,idx:exIdx});setSelBlock(block.id);setExSearch('');}} title="Cambiar por otro ejercicio" style={{background:'none',border:'1px solid #C4B5FD',borderRadius:5,cursor:'pointer',fontSize:11,color:'#7C3AED',padding:'2px 5px',fontWeight:700}}>⇄</button>
-                            <button onClick={()=>removeExFromBlock(block.id,be.exId)} title="Quitar" style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px'}}>×</button>
-                          </div>
-                        </div>
-                        {/* Parámetros individuales por ejercicio */}
-                        {(()=>{
-                          const modoT=exParams.modo?exParams.modo==='tiempo':/seg|min|\d+:\d{2}/.test(String(exParams.reps||'').toLowerCase());
-                          return(
-                          <div style={{marginBottom:5}}>
-                            <div style={{display:'flex',gap:4,marginBottom:4}}>
-                              <span style={{fontSize:8,color:G3,textTransform:'uppercase',alignSelf:'center'}}>Medir por:</span>
-                              {[['reps','Repeticiones'],['tiempo','⏱ Tiempo']].map(([mv,ml])=>(
-                                <button key={mv} onClick={()=>updateExParams(block.id,be.exId,{modo:mv})}
-                                  style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,cursor:'pointer',border:`1px solid ${(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:G2}`,background:(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:WH,color:(modoT?mv==='tiempo':mv==='reps')?WH:G4}}>{ml}</button>
-                              ))}
-                              {modoT&&<span style={{fontSize:8,color:G3,alignSelf:'center'}}>isométricos · cardio (ej: 45s, 2min)</span>}
-                            </div>
-                            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4}}>
-                              {[['series','Series'],['reps',modoT?'Tiempo/serie':'Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Desc.']].map(([k,lbl])=>{
-                                const dim=modoT&&k==='tempo';
-                                return(
-                                  <div key={k}>
-                                    <div style={{fontSize:8,color:dim?'#ccc':(modoT&&k==='reps'?brand.colorPrimary:G3),marginBottom:1,textTransform:'uppercase',fontWeight:modoT&&k==='reps'?700:400}}>{lbl}</div>
-                                    <input value={exParams[k]||''} onChange={e=>updateExParams(block.id,be.exId,{[k]:e.target.value})}
-                                      placeholder={modoT&&k==='reps'?'45s':dim?'n/a':''} disabled={dim}
-                                      style={{width:'100%',border:`1px solid ${modoT&&k==='reps'?brand.colorPrimary:G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:dim?'#f3f3f3':WH,color:dim?'#bbb':'#111',outline:'none'}}/>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          );
-                        })()}
-                        {/* Peso sugerido + real + anotaciones */}
-                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:4}}>
-                          <div>
-                            <div style={{fontSize:8,color:'#7C3AED',marginBottom:1,textTransform:'uppercase',fontWeight:700}}>💡 Peso sugerido</div>
-                            <div style={{position:'relative'}}>
-                              <input value={be.pesoSug||''} onChange={e=>updateExParam(block.id,be.exId,'pesoSug',e.target.value)}
-                                placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
-                                style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
-                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1,lineHeight:1.3}}>
-                                <strong style={{color:'#6D28D9'}}>{sug.reps} reps = {sug.pct}% del 1RM</strong> ({sug.rm1}kg)<br/>
-                                rango {sug.pesoRango} · {sug.formulaLabel}{sug.pctFueraRango?' · reps fuera de rango':''}
-                              </div>}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{fontSize:8,color:GN,marginBottom:1,textTransform:'uppercase',fontWeight:700}}>✓ Peso real usado</div>
-                            <input value={be.pesoReal||''} onChange={e=>updateExParam(block.id,be.exId,'pesoReal',e.target.value)}
-                              placeholder="kg"
-                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:'#F0FDF4',color:'#166534',outline:'none'}}/>
-                          </div>
-                          <div>
-                            <div style={{fontSize:8,color:G4,marginBottom:1,textTransform:'uppercase'}}>📝 Anotaciones</div>
-                            <input value={be.anotacion||''} onChange={e=>updateExParam(block.id,be.exId,'anotacion',e.target.value)}
-                              placeholder="Notas de esta serie..."
-                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
-                          </div>
-                        </div>
-                        {sug?.testVencido&&<div style={{fontSize:8,color:'#F59E0B',marginTop:3,fontWeight:700}}>⚠ Test de fuerza vencido ({sug.diasDesdeTest} días) — peso puede estar desactualizado</div>}
-                      </div>
-                    );
-                  })}
-                  {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&!replMode&&(
-                    <button onClick={()=>{setSelBlock(isSel?null:block.id);setExSearch('');}} style={{...s.btnBK,width:'100%',marginTop:4}}>{isSel?'✕ Cerrar':'+ Agregar ejercicio'}</button>
-                  )}
-                  {isSel&&(
-                    <div style={{marginTop:8,background:WH,border:`1px solid ${replMode?'#C4B5FD':G2}`,borderRadius:8,padding:10}}>
-                      {replMode&&(
-                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#F5F3FF',borderRadius:6,padding:'6px 9px',marginBottom:8}}>
-                          <div style={{fontSize:10.5,color:'#5B21B6',fontWeight:700}}>⇄ Reemplazando: {replEx?.nombre||'ejercicio'} <span style={{fontWeight:400,color:'#7C3AED'}}>— elegí el nuevo (mantiene series/reps)</span></div>
-                          <button onClick={()=>{setReplaceTarget(null);setSelBlock(null);setExSearch('');}} style={{background:'none',border:'none',color:'#7C3AED',cursor:'pointer',fontSize:11,fontWeight:700}}>Cancelar</button>
-                        </div>
-                      )}
-                      <input placeholder={`Buscar en ${bd.label}...`} value={exSearch} onChange={e=>setExSearch(e.target.value)} style={{...s.inp,marginBottom:8}}/>
-                      <div style={s.lbl}>Ejercicios del bloque</div>
-                      <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
-                        {exs.filter(e=>e.bloque===block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
-                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,block.params.reps);
-                          const added=block.exercises.some(be=>be.exId===ex.id);
-                          const rest=checkRestriction(ex,activeClient);
-                          const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':pickSug?'#FAF5FF':WH;
-                          return(
-                            <div key={ex.id} style={{background:bgColor,opacity:added?.4:1,borderBottom:`1px solid ${G2}`,borderLeft:pickSug?'3px solid #C4B5FD':'3px solid transparent',padding:'5px 6px'}}>
-                              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                                <div style={{flex:1}}>
-                                  <div style={{fontSize:11,fontWeight:600}}>{ex.nombre}
-                                    {rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>BLOQUEADO</span>}
-                                    {rest==='warn'&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>⚠ RESTRICCIÓN</span>}
-                                  </div>
-                                  <div style={{fontSize:10,color:G3}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
-                                  {pickSug&&<div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontWeight:700}}>💡 {pickSug.pesoSugerido} kg ({pickSug.pesoRango}) · {pickSug.pct}% 1RM{pickSug.repsTarget?` · ${pickSug.repsTarget} reps`:''}</div>}
-                                </div>
-                              {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:replMode?'#7C3AED':rest==='warn'?'#D97706':brand.colorPrimary,flexShrink:0}}>{replMode?'⇄':'+'}</button>}
-                              {!added&&rest==='block'&&<span style={{fontSize:10,color:R,fontWeight:700}}>🚫</span>}
-                              {added&&!replMode&&<span style={{fontSize:10,color:G3}}>✓</span>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <details>
-                        <summary style={{fontSize:10,color:G4,cursor:'pointer',fontWeight:700,userSelect:'none',padding:'4px 0'}}>OVERRIDE — otros bloques</summary>
-                        <div style={{maxHeight:120,overflowY:'auto',marginTop:6,borderTop:`1px solid ${G2}`,paddingTop:6}}>
-                          {exs.filter(e=>e.bloque!==block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
-                            const added=block.exercises.some(be=>be.exId===ex.id);
-                            const rest=checkRestriction(ex,activeClient);
-                            return(
-                              <div key={ex.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 6px',borderBottom:`1px solid ${G2}`,opacity:added?.4:1}}>
-                                <div><div style={{fontSize:11}}>{ex.nombre} <span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>{BLOCKS[ex.bloque]?.tag}</span>{rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:2}}>BLOQ.</span>}</div></div>
-                                {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnG,padding:'2px 7px',fontSize:10,color:'#92400E',borderColor:'#F59E0B'}}>{replMode?'⇄':'+'}</button>}
-                                {!added&&rest==='block'&&<span style={{fontSize:10,color:R}}>🚫</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </details>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {dia.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
-          <div style={s.card}>
-            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>Agregar bloque manual</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 90px 80px',gap:8}}>
-              <select value={addBType} onChange={e=>{setAddBType(e.target.value);setAddBPos('');}} style={s.sel}>
-                <option value=''>Tipo de bloque...</option>
-                {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} · pos: {v.pos.join(', ')}</option>)}
-              </select>
-              <select value={addBPos} onChange={e=>setAddBPos(e.target.value)} style={s.sel} disabled={!addBType}>
-                <option value=''>Pos.</option>
-                {addBType&&BLOCKS[addBType].pos.map(p=><option key={p} value={p}>{p}</option>)}
-              </select>
-              <button onClick={addBlock} disabled={!addBType||!addBPos} style={{...s.btnR,background:brand.colorPrimary,opacity:(!addBType||!addBPos)?0.5:1}}>Agregar</button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ── EXFORM — Componente propio (tiene useState, debe ser <JSX/>) ────────────
-  const ExForm=({ex, onSave, onClose, exs, s})=>{
-    const emptyExLocal={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:'',mediaUrl:'',mediaTipo:'imagen',mediaDesc:''};
-    const [form,setF2]=useState(ex||emptyExLocal);
-    const set=(k,v)=>setF2(f=>({...f,[k]:v}));
-    const regRef=exs.find(e=>e.id===form.regresion);
-    const progRef=exs.find(e=>e.id===form.progresion);
-    const isVideo=form.mediaUrl&&(form.mediaUrl.includes('youtube')||form.mediaUrl.includes('youtu.be')||form.mediaUrl.includes('vimeo'));
-    const getYTEmbed=(url)=>{
-      const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&\s]+)/);
-      return m?`https://www.youtube.com/embed/${m[1]}`:null;
-    };
-    return(
-      <OverlayWrap wide>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-          <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
-          <button onClick={onClose} style={s.btnG}>✕</button>
-        </div>
-        <div style={{maxHeight:'60vh',overflowY:'auto',paddingRight:4}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
-            <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>set('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
-            <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>set('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
-            {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
-              <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={s.inp}/></div>
-            ))}
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión (ID o texto)</span><input value={form.regresion||''} onChange={e=>set('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
-            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión (ID o texto)</span><input value={form.progresion||''} onChange={e=>set('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
-          </div>
-          {/* MEDIA — Imagen o Video */}
-          <div style={{background:G1,borderRadius:8,padding:'12px',marginTop:4,border:`1px solid ${G2}`}}>
-            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>📎 Imagen / Video del ejercicio</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
-              <div style={{gridColumn:'1/-1'}}>
-                <span style={s.lbl}>URL de imagen o video</span>
-                <input value={form.mediaUrl||''} onChange={e=>set('mediaUrl',e.target.value)} style={s.inp} placeholder="https://youtube.com/watch?v=... o https://i.imgur.com/..."/>
-                <div style={{fontSize:10,color:G3,marginTop:3}}>YouTube, Vimeo, o link directo a imagen (jpg, png, gif)</div>
-              </div>
-              <div><span style={s.lbl}>Tipo</span>
-                <select value={form.mediaTipo||'imagen'} onChange={e=>set('mediaTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
-                  <option value='imagen'>📷 Imagen</option>
-                  <option value='video'>🎥 Video (YouTube/Vimeo)</option>
-                  <option value='gif'>🎞️ GIF animado</option>
-                </select>
-              </div>
-              <div><span style={s.lbl}>Descripción del media</span><input value={form.mediaDesc||''} onChange={e=>set('mediaDesc',e.target.value)} style={s.inp} placeholder="Ej: Demostración técnica"/></div>
-            </div>
-            {/* Preview */}
-            {form.mediaUrl&&(
-              <div style={{background:WH,borderRadius:6,padding:8,border:`1px solid ${G2}`}}>
-                <div style={{fontSize:10,color:G3,marginBottom:6,fontWeight:700,textTransform:'uppercase'}}>Vista previa</div>
-                {isVideo&&getYTEmbed(form.mediaUrl)
-                  ?<div style={{position:'relative',paddingBottom:'40%',height:0,overflow:'hidden',borderRadius:6}}>
-                      <iframe src={getYTEmbed(form.mediaUrl)} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',border:'none',borderRadius:6}} allowFullScreen title="preview"/>
-                    </div>
-                  :<img src={form.mediaUrl} alt="preview" style={{maxWidth:'100%',maxHeight:180,borderRadius:6,objectFit:'cover',display:'block'}}
-                      onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='block'}}/>
-                }
-                <div style={{display:'none',fontSize:11,color:R,marginTop:4}}>⚠ No se pudo cargar la imagen. Verificá la URL.</div>
-              </div>
-            )}
-          </div>
-        </div>
-        <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
-      </OverlayWrap>
-    );
-  };
-
-  // ── TAB: BASE DE EJERCICIOS ───────────────────────────────────────────────
-  const DBTab=()=>{
-    const [editingExLocal,setEditingExLocal]=useState(null);
-    const [showExFormLocal,setShowExFormLocal]=useState(false);
-    const saveExLocal=(ex)=>{
-      const toSave=ex.id?ex:{...ex,id:genId('ex')};
-      dbSaveEjercicio(toSave).catch(e=>console.error('Error guardando ejercicio:',e));
-      setShowExFormLocal(false);setEditingExLocal(null);
-    };
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
-          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
-          <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:8,marginBottom:12}}>
-          <select value={dbFilter} onChange={e=>setDbFilter(e.target.value)} style={s.sel}>
-            <option value='all'>Todos ({exs.length})</option>
-            {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} ({exs.filter(e=>e.bloque===k).length})</option>)}
-          </select>
-          <input value={dbSearch} onChange={e=>setDbSearch(e.target.value)} placeholder="Buscar por nombre, músculo..." style={s.inp}/>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
-            <thead><tr style={{background:BK,color:WH}}>{['','Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
-            <tbody>
-              {filteredExs.map((ex,i)=>{
-                const rr=exs.find(e=>e.id===ex.regresion);const pr=exs.find(e=>e.id===ex.progresion);
-                const hasMedia=ex.mediaUrl&&ex.mediaUrl.length>0;
+            {/* Historial */}
+            <div style={s.card}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
+              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
+              {tests.map(t=>{
+                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
+                const rm1=t.rm1_real||t.rm1_calculado;
+                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
                 return(
-                  <tr key={ex.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
-                    <td style={{padding:'4px 6px',width:40}}>
-                      {hasMedia
-                        ?<div style={{width:34,height:34,borderRadius:4,overflow:'hidden',background:G2,flexShrink:0,cursor:'pointer'}} onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}}>
-                            {(ex.mediaTipo==='video'||ex.mediaUrl?.includes('youtube')||ex.mediaUrl?.includes('youtu.be'))
-                              ?<div style={{width:34,height:34,background:'#CC0000',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>▶</div>
-                              :<img src={ex.mediaUrl} alt="" style={{width:34,height:34,objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>
-                            }
-                          </div>
-                        :<div style={{width:34,height:34,borderRadius:4,background:G1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:G3}}>📷</div>
-                      }
-                    </td>
-                    <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.emoji} {BLOCKS[ex.bloque]?.tag}</span></td>
-                    <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
-                    <td style={{padding:'7px 8px',color:G4,fontSize:10,maxWidth:140}}>{ex.patron}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{NIVEL_EMOJI?.[ex.nivel]} {ex.nivel}</span></td>
-                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{rr?rr.nombre:ex.regresion||'—'}</td>
-                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{pr?pr.nombre:ex.progresion||'—'}</td>
-                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}>
-                      <button onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}} style={{...s.btnG,padding:'3px 7px',fontSize:10,marginRight:4}}>Editar</button>
-                      <button onClick={()=>dbDeleteEjercicio(ex.id).catch(e=>console.error('Error:',e))} style={{...s.btnG,padding:'3px 7px',fontSize:10,color:R,borderColor:R}}>Del</button>
-                    </td>
-                  </tr>
+                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
+                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
+                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
+                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
+                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
+                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
+                      </div>
+                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
+                    </div>
+                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
+                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
+                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
+                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
+                    </div>
+                  </div>
                 );
               })}
-              {filteredExs.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
-  // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
-  const ExportTab=()=>{
-    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
-    const hasSession=diasArmados.length>0;
-    const totalEx=diasArmados.reduce((a,d)=>a+d.blocks.reduce((x,b)=>x+b.exercises.length,0),0);
-    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
-    return(
-      <div style={{padding:'16px 14px'}}>
-        <div style={{background:BK,borderRadius:10,padding:'16px 18px',marginBottom:16,borderLeft:`4px solid ${hasSession?'#16A34A':brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH,marginBottom:6}}>{hasSession?`Plan listo: ${planNom}`:'Sin sesiones armadas'}</div>
-          {hasSession&&(
-            <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
-              {[['Nivel método',activeClient?NIVEL[activeClient.nivel].label:'—'],['Sesiones/semana',diasArmados.length],['Cliente',session.cliente||'Sin nombre'],['Ejercicios totales',totalEx],['Registro',`8 semanas`]].map(([k,v])=>(
-                <div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{k}</div><div style={{fontSize:13,color:WH,fontWeight:700}}>{v}</div></div>
-              ))}
             </div>
-          )}
-          {hasSession&&<div style={{marginTop:8,fontSize:10,color:G3}}>El PDF incluye los {diasArmados.length} día/s en un solo documento, separados por página, con grilla de 8 semanas para registrar pesos{planMeta?' y los plazos del plan':''}.</div>}
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-          <div style={{...s.card,borderTop:`4px solid ${brand.colorPrimary}`,padding:'20px 18px'}}>
-            <div style={{fontSize:24,marginBottom:8}}>📄</div>
-            <div style={{fontSize:15,fontWeight:800,marginBottom:8}}>Exportar a PDF</div>
-            <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px'}}>En la ventana de impresión elegí <strong>Guardar como PDF</strong> como destino.</div>
-            <button onClick={exportPDF} disabled={!hasSession} style={{...s.btnR,background:brand.colorPrimary,width:'100%',padding:'11px',opacity:!hasSession?.4:1}}>Imprimir / PDF</button>
-          </div>
-          <div style={{...s.card,borderTop:'4px solid #16A34A',padding:'20px 18px'}}>
-            <div style={{fontSize:24,marginBottom:8}}>📊</div>
-            <div style={{fontSize:15,fontWeight:800,marginBottom:8}}>Exportar a Google Sheets</div>
-            <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px'}}>CSV con nivel, semáforo y restricciones del cliente.</div>
-            <button onClick={exportCSV} disabled={!hasSession} style={{...s.btnGreen,width:'100%',padding:'11px',opacity:!hasSession?.4:1}}>Descargar CSV</button>
-          </div>
-        </div>
+          </>
+        )}
+        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
       </div>
     );
   };
 
-  // ── TAB: CENTRO ───────────────────────────────────────────────────────────
-  const BrandingTab=()=>{
-    const [local,setLocal]=useState({...brand});
-    const set=(k,v)=>setLocal(f=>({...f,[k]:v}));
-    return(
-      <div style={{padding:'16px 14px'}}>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-          <div>
-            <div style={s.card}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Identidad</div>
-              <div style={{marginBottom:10}}><span style={s.lbl}>Nombre</span><input value={local.gymName} onChange={e=>set('gymName',e.target.value)} style={s.inp}/></div>
-              <div style={{marginBottom:10}}><span style={s.lbl}>Subtítulo</span><input value={local.gymSub} onChange={e=>set('gymSub',e.target.value)} style={s.inp}/></div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                <div><span style={s.lbl}>Color primario</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
-                <div><span style={s.lbl}>Color fondo</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
-              </div>
-            </div>
-            <div style={s.card}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Logo</div>
-              <input ref={logoInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>setLocal(f=>({...f,logoImg:ev.target.result}));reader.readAsDataURL(file);}}/>
-              <div style={{display:'flex',gap:8,marginBottom:8}}>
-                <button onClick={()=>logoInputRef.current.click()} style={{...s.btnBK,flex:1}}>Subir logo</button>
-                {local.logoImg&&<button onClick={()=>set('logoImg',null)} style={{...s.btnG,color:R,borderColor:R}}>Quitar</button>}
-              </div>
-              {local.logoImg?<img src={local.logoImg} alt="Logo" style={{maxHeight:50,maxWidth:'100%',objectFit:'contain',display:'block'}}/>:<div style={{background:G1,padding:10,textAlign:'center',borderRadius:6,color:G3,fontSize:11}}>Logo kettlebell por defecto</div>}
-            </div>
-            <button onClick={()=>setBrand(local)} style={{...s.btnR,background:local.colorPrimary,width:'100%',padding:'12px'}}>Aplicar cambios</button>
-          </div>
-          <div>
-            <div style={{background:local.colorBg,borderRadius:8,padding:'12px 16px',marginBottom:10,borderBottom:`3px solid ${local.colorPrimary}`}}>
-              {local.logoImg?(
-                <div style={{display:'flex',alignItems:'center',gap:12}}>
-                  <img src={local.logoImg} alt="logo" style={{height:44,objectFit:'contain',flexShrink:0}}/>
-                  <div>
-                    <div style={{fontFamily:'Arial Black,Arial,sans-serif',fontWeight:900,fontSize:18,color:local.colorPrimary,letterSpacing:2,lineHeight:1}}>{local.gymName||'NOMBRE'}</div>
-                    <div style={{fontFamily:'Arial,sans-serif',fontSize:10,color:WH,letterSpacing:'3px',marginTop:2}}>{local.gymSub||'SUBTÍTULO'}</div>
-                  </div>
-                </div>
-              ):<DefaultLogo h={44} gymName={local.gymName||'NOMBRE'} gymSub={local.gymSub||'SUBTÍTULO'}/>}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
 
-  const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
-  // ── TAB: REHABILITACIÓN ──────────────────────────────────────────────────
-  // ── NuevoEjercicioRehabComp — external (has useState) ───────────────────────
-  const NuevoEjercicioRehabComp=({region,fase,onSave,onClose,s})=>{
-    const [form,setF]=useState({id:'cr_'+genId(),nombre:'',desc:'',param:'3×10 rep',tejido:'',notas:''});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const REGIONES_LIST=Object.entries(REGIONES).map(([k,v])=>({k,label:v.label}));
-    const FASES_LIST=Object.entries(FASES_REHAB).map(([k,v])=>({k,label:v.label}));
+  const CustomTestsModal=({customTests,onSave,onClose,brand,s})=>{
+    const [local,setLocal]=useState(()=>[
+      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
+      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
+      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
+    ]);
+    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
     return(
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:460,marginBottom:20}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo ejercicio de rehabilitación</div>
+            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
             <button onClick={onClose} style={s.btnG}>✕</button>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            <div><span style={s.lbl}>Nombre del ejercicio *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-              <div><span style={s.lbl}>Región</span>
-                <select value={region} disabled style={{...s.sel,width:'100%',opacity:.7}}>
-                  {REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}
-                </select>
-              </div>
-              <div><span style={s.lbl}>Fase</span>
-                <select value={fase} disabled style={{...s.sel,width:'100%',opacity:.7}}>
-                  {FASES_LIST.map(f=><option key={f.k} value={f.k}>{f.label}</option>)}
-                </select>
+          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
+            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
+          </div>
+          {local.map((t,i)=>(
+            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div><span style={s.lbl}>Nombre del ejercicio</span>
+                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Patrón de movimiento</span>
+                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Protocolo de evaluación</span>
+                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
+                </div>
+                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
               </div>
             </div>
-            <div><span style={s.lbl}>Descripción / Procedimiento</span><textarea value={form.desc} onChange={e=>set('desc',e.target.value)} rows={3} style={{...s.inp,resize:'vertical'}} placeholder="Cómo realizar el ejercicio, puntos clave, precauciones..."/></div>
-            <div><span style={s.lbl}>Parámetros sugeridos</span><input value={form.param} onChange={e=>set('param',e.target.value)} placeholder="Ej: 3×12 rep · RPE 5–6 · hold 5 seg" style={s.inp}/></div>
-            <div><span style={s.lbl}>Tejido objetivo (opcional)</span><input value={form.tejido} onChange={e=>set('tejido',e.target.value)} placeholder="tendón, músculo, ligamento..." style={s.inp}/></div>
-            <div><span style={s.lbl}>Notas clínicas</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Evidencia, indicaciones especiales..." style={s.inp}/></div>
-          </div>
-          <button onClick={()=>{if(form.nombre.trim())onSave({...form,region,fase});}}
-            disabled={!form.nombre.trim()}
-            style={{...s.btnR,width:'100%',padding:'9px',marginTop:12,background:brand.colorPrimary,opacity:!form.nombre.trim()?.5:1}}>
-            💾 Guardar en base de datos
+          ))}
+          <button onClick={()=>{
+            const validos=local.filter(t=>t.nombre.trim());
+            onSave(validos);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
+            💾 Guardar ejercicios personalizados
           </button>
-          <div style={{fontSize:9,color:G3,textAlign:'center',marginTop:4}}>El ejercicio quedará disponible en futuros protocolos de {region} — {fase}</div>
         </div>
       </div>
     );
   };
 
-  const RehabTab=()=>{
+
+  const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose,brand,clients,s})=>{
+    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
+      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const p=PERIODIZACIONES[form.sistema_id];
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div><span style={s.lbl}>Sistema de periodización</span>
+              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
+                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
+              </select>
+            </div>
+            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
+              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
+              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
+              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
+                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
+                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
+                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
+                </div>))}
+              </div>
+            </div>)}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
+            </div>
+            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
+          </div>
+          <button onClick={()=>{
+            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
+            savePlan(planFinal).catch(e=>console.error(e));
+            const cli=clients.find(x=>x.id===selClientId);
+            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 Asignar plan
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── CustomTestsModal — gestión de 3 ejercicios personalizados ─────────────
+
+  const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests,brand,s})=>{
+    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
+      fecha:new Date().toISOString().split('T')[0],
+      peso_corporal:pac?.screening?.peso||'',
+      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
+    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const testsDisp=allTests||TESTS_FUERZA;
+    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
+    // Pull-ups: base = peso corporal
+    const esDom=form.test_id==='pull_ups';
+    const pesoLev=parseFloat(form.peso_levantado)||0;
+    const pesoCorp=parseFloat(form.peso_corporal)||0;
+    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
+    const formulaSel=form.formula||'epley_brzycki';
+    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
+    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div>
+              <span style={s.lbl}>Ejercicio</span>
+              <select value={form.test_id} onChange={e=>{
+                const t=testsDisp.find(x=>x.id===e.target.value);
+                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
+              }} style={{...s.sel,width:'100%'}}>
+                <optgroup label="── Ejercicios estándar ──">
+                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>
+                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
+                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>}
+              </select>
+            </div>
+            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
+              <strong>📋 Protocolo:</strong> {ti.protocolo}
+              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
+            </div>}
+            {/* SELECTOR DE FÓRMULA */}
+            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
+              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
+              <select value={form.formula||'epley_brzycki'} onChange={e=>{
+                const nuevaF=e.target.value;
+                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
+                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
+              }} style={{...s.sel,width:'100%'}}>
+                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
+              </select>
+              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
+                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
+              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
+              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
+                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
+                  {((form.formula||'epley_brzycki')==='lombardi'
+                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
+                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Preview 1RM */}
+            {rm1c&&(
+              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
+                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
+                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
+                </div>
+                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
+                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
+                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
+                </div>}
+              </div>
+            )}
+            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
+              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
+            </div>
+          </div>
+          <button onClick={()=>{
+            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
+            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
+            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 {editingTest?'Guardar cambios':'Guardar test'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── PlanFormComp — asignar plan de periodización ──────────────────────────
+
+  const RehabTab=({brand,clients,s})=>{
     const [rehabRegion,setRehabRegion]=useState('');
     const [rehabFase,setRehabFase]=useState('aguda');
     const [rehabTejido,setRehabTejido]=useState('');
@@ -3064,8 +1600,8 @@ export default function App(){
       if(!rehabSession.length)return;
       const region=rehabRegion?REGIONES[rehabRegion]:{label:'General',color:'#374151'};
       const fase=FASES_REHAB[rehabFase];
-      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:7px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#f9f9f9'}">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:7px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#f9f9f9'}">${e.desc}</td><td style="padding:7px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#f9f9f9'}">${e.reps}</td><td style="padding:7px 10px;font-size:11px;background:${i%2===0?'#fff':'#f9f9f9'}">${e.notas||''}</td></tr>`).join('');
-      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:28px;color:#111}@media print{body{padding:16px}}</style></head><body>
+      const rows=rehabSession.map((e,i)=>`<tr><td style="padding:8px 10px;font-weight:700;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${i+1}. ${e.nombre}${e.custom?' [CUSTOM]':''}</td><td style="padding:8px 10px;font-size:11px;color:#555;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.desc}</td><td style="padding:8px 10px;font-size:11px;text-align:center;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.reps}</td><td style="padding:8px 10px;font-size:11px;background:${i%2===0?'#fff':'#FAFAFA'};border-bottom:1px solid #eee">${e.notas||''}</td></tr>`).join('');
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Protocolo Rehab</title><style>${getPrintCSS(brand.colorPrimary)}</style></head><body>
         <div style="display:flex;justify-content:space-between;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:16px">
           <div><div style="font-size:22px;font-weight:900;color:${brand.colorPrimary}">${brand.gymName}</div><div style="font-size:10px;color:#888;letter-spacing:4px">${brand.gymSub}</div></div>
           <div style="text-align:right"><div style="font-size:15px;font-weight:800">Protocolo de Rehabilitación</div>
@@ -3091,7 +1627,7 @@ export default function App(){
 
     return(
       <div style={{padding:'12px 14px'}}>
-        {showAddEx&&<NuevoEjercicioRehabComp region={rehabRegion} fase={rehabFase} onSave={(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);}} onClose={()=>setShowAddEx(false)} s={s}/>}
+        {showAddEx&&<NuevoEjercicioRehabComp region={rehabRegion} fase={rehabFase} onSave={(ej)=>{saveCustomEx(ej).catch(console.error);setShowAddEx(false);}} onClose={()=>setShowAddEx(false)} s={s} brand={brand}/>}
 
         <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:`4px solid ${brand.colorPrimary}`}}>
           <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:3}}>🩹 Constructor de Sesión — Rehabilitación</div>
@@ -3247,365 +1783,2497 @@ export default function App(){
   };
 
   // ── FuerzaFormComp — crear Y editar tests de fuerza ─────────────────────
-  const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests})=>{
-    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
-      fecha:new Date().toISOString().split('T')[0],
-      peso_corporal:pac?.screening?.peso||'',
-      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
-    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
+
+  const NuevoEjercicioRehabComp=({region,fase,onSave,onClose,s,brand})=>{
+    const [form,setF]=useState({id:'cr_'+genId(),nombre:'',desc:'',param:'3×10 rep',tejido:'',notas:''});
     const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const testsDisp=allTests||TESTS_FUERZA;
-    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
-    // Pull-ups: base = peso corporal
-    const esDom=form.test_id==='pull_ups';
-    const pesoLev=parseFloat(form.peso_levantado)||0;
-    const pesoCorp=parseFloat(form.peso_corporal)||0;
-    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
-    const formulaSel=form.formula||'epley_brzycki';
-    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
-    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
+    const REGIONES_LIST=Object.entries(REGIONES).map(([k,v])=>({k,label:v.label}));
+    const FASES_LIST=Object.entries(FASES_REHAB).map(([k,v])=>({k,label:v.label}));
     return(
       <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:460,marginBottom:20}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
+            <div style={{fontWeight:800,fontSize:14}}>➕ Nuevo ejercicio de rehabilitación</div>
             <button onClick={onClose} style={s.btnG}>✕</button>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div>
-              <span style={s.lbl}>Ejercicio</span>
-              <select value={form.test_id} onChange={e=>{
-                const t=testsDisp.find(x=>x.id===e.target.value);
-                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
-              }} style={{...s.sel,width:'100%'}}>
-                <optgroup label="── Ejercicios estándar ──">
-                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>
-                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
-                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>}
-              </select>
-            </div>
-            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
-              <strong>📋 Protocolo:</strong> {ti.protocolo}
-              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
-            </div>}
-            {/* SELECTOR DE FÓRMULA */}
-            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
-              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
-              <select value={form.formula||'epley_brzycki'} onChange={e=>{
-                const nuevaF=e.target.value;
-                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
-                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
-              }} style={{...s.sel,width:'100%'}}>
-                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
-              </select>
-              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
-                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
+          <div style={{display:'flex',flexDirection:'column',gap:7}}>
+            <div><span style={s.lbl}>Nombre del ejercicio *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+              <div><span style={s.lbl}>Región</span>
+                <select value={region} disabled style={{...s.sel,width:'100%',opacity:.7}}>
+                  {REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}
+                </select>
               </div>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha</span><input type="date" value={form.fecha} onChange={e=>set('fecha',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
-              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
-              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
-                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
-                  {((form.formula||'epley_brzycki')==='lombardi'
-                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
-                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+              <div><span style={s.lbl}>Fase</span>
+                <select value={fase} disabled style={{...s.sel,width:'100%',opacity:.7}}>
+                  {FASES_LIST.map(f=><option key={f.k} value={f.k}>{f.label}</option>)}
                 </select>
               </div>
             </div>
-            {/* Preview 1RM */}
-            {rm1c&&(
-              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <div>
-                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
-                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
-                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
-                </div>
-                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
-                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
-                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
-                </div>}
-              </div>
-            )}
-            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
-              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
-            </div>
+            <div><span style={s.lbl}>Descripción / Procedimiento</span><textarea value={form.desc} onChange={e=>set('desc',e.target.value)} rows={3} style={{...s.inp,resize:'vertical'}} placeholder="Cómo realizar el ejercicio, puntos clave, precauciones..."/></div>
+            <div><span style={s.lbl}>Parámetros sugeridos</span><input value={form.param} onChange={e=>set('param',e.target.value)} placeholder="Ej: 3×12 rep · RPE 5–6 · hold 5 seg" style={s.inp}/></div>
+            <div><span style={s.lbl}>Tejido objetivo (opcional)</span><input value={form.tejido} onChange={e=>set('tejido',e.target.value)} placeholder="tendón, músculo, ligamento..." style={s.inp}/></div>
+            <div><span style={s.lbl}>Notas clínicas</span><input value={form.notas} onChange={e=>set('notas',e.target.value)} placeholder="Evidencia, indicaciones especiales..." style={s.inp}/></div>
           </div>
-          <button onClick={()=>{
-            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
-            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
-            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 {editingTest?'Guardar cambios':'Guardar test'}
+          <button onClick={()=>{if(form.nombre.trim())onSave({...form,region,fase});}}
+            disabled={!form.nombre.trim()}
+            style={{...s.btnR,width:'100%',padding:'9px',marginTop:12,background:brand.colorPrimary,opacity:!form.nombre.trim()?.5:1}}>
+            💾 Guardar en base de datos
           </button>
+          <div style={{fontSize:9,color:G3,textAlign:'center',marginTop:4}}>El ejercicio quedará disponible en futuros protocolos de {region} — {fase}</div>
         </div>
       </div>
     );
   };
 
-  // ── PlanFormComp — asignar plan de periodización ──────────────────────────
-  const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose})=>{
-    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
-      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const p=PERIODIZACIONES[form.sistema_id];
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div><span style={s.lbl}>Sistema de periodización</span>
-              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
-                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
-              </select>
-            </div>
-            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
-              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
-              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
-              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
-                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
-                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
-                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
-                </div>))}
-              </div>
-            </div>)}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha de inicio</span><input type="date" value={form.fecha_inicio} onChange={e=>set('fecha_inicio',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
-            </div>
-            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
-          </div>
-          <button onClick={()=>{
-            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
-            savePlan(planFinal).catch(e=>console.error(e));
-            const cli=clients.find(x=>x.id===selClientId);
-            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 Asignar plan
-          </button>
-        </div>
-      </div>
-    );
-  };
 
-  // ── CustomTestsModal — gestión de 3 ejercicios personalizados ─────────────
-  const CustomTestsModal=({customTests,onSave,onClose})=>{
-    const [local,setLocal]=useState(()=>[
-      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
-      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
-      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
-    ]);
-    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
+  const BrandingTab=({brand,setBrand,s})=>{
+    const [local,setLocal]=useState({...brand});
+    const logoInputRef=useRef();
+    const set=(k,v)=>setLocal(f=>({...f,[k]:v}));
     return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
-            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
-          </div>
-          {local.map((t,i)=>(
-            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
-              <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                <div><span style={s.lbl}>Nombre del ejercicio</span>
-                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Patrón de movimiento</span>
-                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Protocolo de evaluación</span>
-                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
-                </div>
-                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
+      <div style={{padding:'16px 14px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div>
+            <div style={s.card}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Identidad</div>
+              <div style={{marginBottom:10}}><span style={s.lbl}>Nombre</span><input value={local.gymName} onChange={e=>set('gymName',e.target.value)} style={s.inp}/></div>
+              <div style={{marginBottom:10}}><span style={s.lbl}>Subtítulo</span><input value={local.gymSub} onChange={e=>set('gymSub',e.target.value)} style={s.inp}/></div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                <div><span style={s.lbl}>Color primario</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorPrimary} onChange={e=>set('colorPrimary',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
+                <div><span style={s.lbl}>Color fondo</span><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="color" value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{width:38,height:34,border:'none',cursor:'pointer',borderRadius:4,padding:2}}/><input value={local.colorBg} onChange={e=>set('colorBg',e.target.value)} style={{...s.inp,fontFamily:'monospace',fontSize:11}}/></div></div>
               </div>
             </div>
-          ))}
-          <button onClick={()=>{
-            const validos=local.filter(t=>t.nombre.trim());
-            onSave(validos);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
-            💾 Guardar ejercicios personalizados
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const FuerzaTab=()=>{
-    const [selClientId,setSelClientId]=useState('');
-    const pac=clients.find(x=>x.id===selClientId);
-    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
-    const [showForm,setShowForm]=useState(false);
-    const [editingTest,setEditingTest]=useState(null);
-    const [showPlan,setShowPlan]=useState(false);
-    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
-    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
-    const {customRows,saveCustom}=useCustomTests(selClientId||null);
-    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
-    const [showCustomEdit,setShowCustomEdit]=useState(false);
-    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
-    const migradoRef=useRef(new Set());
-    useEffect(()=>{
-      if(!selClientId||migradoRef.current.has(selClientId))return;
-      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
-      try{
-        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
-        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
-          migradoRef.current.add(selClientId);
-          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
-        }
-      }catch{}
-    },[selClientId,customRows,saveCustom]);
-
-    // Sync custom tests when client changes
-    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
-
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}}/>}
-        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)}/>}
-        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} onSave={(tests)=>{
-          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
-        }}/>}
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
-          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
-        </div>
-        {/* Selector de cliente */}
-        <div style={{...s.card,marginBottom:12}}>
-          <span style={s.lbl}>Seleccionar cliente</span>
-          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
-            <option value=''>— Seleccionar cliente —</option>
-            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
-          </select>
-        </div>
-        {pac&&(
-          <>
-            {/* Header del paciente */}
-            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
-                  <div style={{fontSize:11,color:G3,marginTop:2}}>
-                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
-                    {tests.length>0&&(()=>{
-                      const last=new Date(tests[0].fecha);
-                      const next=new Date(last);next.setMonth(next.getMonth()+4);
-                      const dias=Math.ceil((next-new Date())/86400000);
-                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
-                    })()}
+            <div style={s.card}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Logo</div>
+              <input ref={logoInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=ev=>setLocal(f=>({...f,logoImg:ev.target.result}));reader.readAsDataURL(file);}}/>
+              <div style={{display:'flex',gap:8,marginBottom:8}}>
+                <button onClick={()=>logoInputRef.current.click()} style={{...s.btnBK,flex:1}}>Subir logo</button>
+                {local.logoImg&&<button onClick={()=>set('logoImg',null)} style={{...s.btnG,color:R,borderColor:R}}>Quitar</button>}
+              </div>
+              {local.logoImg?<img src={local.logoImg} alt="Logo" style={{maxHeight:50,maxWidth:'100%',objectFit:'contain',display:'block'}}/>:<div style={{background:G1,padding:10,textAlign:'center',borderRadius:6,color:G3,fontSize:11}}>Logo kettlebell por defecto</div>}
+            </div>
+            <button onClick={()=>setBrand(local)} style={{...s.btnR,background:local.colorPrimary,width:'100%',padding:'12px'}}>Aplicar cambios</button>
+          </div>
+          <div>
+            <div style={{background:local.colorBg,borderRadius:8,padding:'12px 16px',marginBottom:10,borderBottom:`3px solid ${local.colorPrimary}`}}>
+              {local.logoImg?(
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <img src={local.logoImg} alt="logo" style={{height:44,objectFit:'contain',flexShrink:0}}/>
+                  <div>
+                    <div style={{fontFamily:'Arial Black,Arial,sans-serif',fontWeight:900,fontSize:18,color:local.colorPrimary,letterSpacing:2,lineHeight:1}}>{local.gymName||'NOMBRE'}</div>
+                    <div style={{fontFamily:'Arial,sans-serif',fontSize:10,color:WH,letterSpacing:'3px',marginTop:2}}>{local.gymSub||'SUBTÍTULO'}</div>
                   </div>
                 </div>
-                <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
-                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
-                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
+              ):<DefaultLogo h={44} gymName={local.gymName||'NOMBRE'} gymSub={local.gymSub||'SUBTÍTULO'}/>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TAB: REHABILITACIÓN ──────────────────────────────────────────────────
+  // ── NuevoEjercicioRehabComp — external (has useState) ───────────────────────
+
+  const DBTab=({exs,dbSaveEjercicio,dbDeleteEjercicio,brand,s})=>{
+    const [dbFilter,setDbFilter]=useState('all');
+    const [dbSearch,setDbSearch]=useState('');
+    const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
+    const [editingExLocal,setEditingExLocal]=useState(null);
+    const [showExFormLocal,setShowExFormLocal]=useState(false);
+    const saveExLocal=(ex)=>{
+      // Antes esto nunca marcaba custom:true en un ejercicio nuevo — quedaban
+      // indistinguibles de los 272 nativos de fábrica. Ahora, si no tiene id
+      // (alta nueva), se marca explícitamente.
+      const toSave=ex.id?ex:{...ex,id:genId('ex'),custom:true};
+      dbSaveEjercicio(toSave).catch(e=>console.error('Error guardando ejercicio:',e));
+      setShowExFormLocal(false);setEditingExLocal(null);
+    };
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
+          <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:8,marginBottom:12}}>
+          <select value={dbFilter} onChange={e=>setDbFilter(e.target.value)} style={s.sel}>
+            <option value='all'>Todos ({exs.length})</option>
+            {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} ({exs.filter(e=>e.bloque===k).length})</option>)}
+          </select>
+          <input value={dbSearch} onChange={e=>setDbSearch(e.target.value)} placeholder="Buscar por nombre, músculo..." style={s.inp}/>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+            <thead><tr style={{background:BK,color:WH}}>{['','Ejercicio','Bloque','Músculos','Patrón','Nivel','Reg.','Prog.',''].map((h,i)=><th key={i} style={{padding:'8px',textAlign:'left',fontWeight:700,whiteSpace:'nowrap',fontSize:10}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filteredExs.map((ex,i)=>{
+                const rr=exs.find(e=>e.id===ex.regresion);const pr=exs.find(e=>e.id===ex.progresion);
+                const hasMedia=ex.mediaUrl&&ex.mediaUrl.length>0;
+                return(
+                  <tr key={ex.id} style={{background:i%2===0?WH:G1,borderBottom:`1px solid ${G2}`}}>
+                    <td style={{padding:'4px 6px',width:40}}>
+                      {hasMedia
+                        ?<div style={{width:34,height:34,borderRadius:4,overflow:'hidden',background:G2,flexShrink:0,cursor:'pointer'}} onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}}>
+                            {(ex.mediaTipo==='video'||ex.mediaUrl?.includes('youtube')||ex.mediaUrl?.includes('youtu.be'))
+                              ?<div style={{width:34,height:34,background:'#CC0000',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>▶</div>
+                              :<img src={ex.mediaUrl} alt="" style={{width:34,height:34,objectFit:'cover'}} onError={e=>e.target.style.display='none'}/>
+                            }
+                          </div>
+                        :<div style={{width:34,height:34,borderRadius:4,background:G1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:G3}}>📷</div>
+                      }
+                    </td>
+                    <td style={{padding:'7px 8px',fontWeight:600,maxWidth:160,fontSize:12}}>{ex.nombre}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={s.tag(BLOCKS[ex.bloque]?.color||G4)}>{BLOCKS[ex.bloque]?.emoji} {BLOCKS[ex.bloque]?.tag}</span></td>
+                    <td style={{padding:'7px 8px',color:G4,maxWidth:160,fontSize:10}}>{ex.musculos}</td>
+                    <td style={{padding:'7px 8px',color:G4,fontSize:10,maxWidth:140}}>{ex.patron}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}><span style={{...s.tag(NIVEL_COLOR[ex.nivel]||G4),fontSize:9}}>{NIVEL_EMOJI?.[ex.nivel]} {ex.nivel}</span></td>
+                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{rr?rr.nombre:ex.regresion||'—'}</td>
+                    <td style={{padding:'7px 8px',color:G3,fontSize:10,maxWidth:100}}>{pr?pr.nombre:ex.progresion||'—'}</td>
+                    <td style={{padding:'7px 8px',whiteSpace:'nowrap'}}>
+                      <button onClick={()=>{setEditingExLocal(ex);setShowExFormLocal(true);}} style={{...s.btnG,padding:'3px 7px',fontSize:10,marginRight:4}}>Editar</button>
+                      <button onClick={()=>dbDeleteEjercicio(ex.id).catch(e=>console.error('Error:',e))} style={{...s.btnG,padding:'3px 7px',fontSize:10,color:R,borderColor:R}}>Del</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filteredExs.length===0&&<tr><td colSpan={9} style={{textAlign:'center',padding:24,color:G3}}>Sin resultados</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+  // ── TAB: EXPORTAR ─────────────────────────────────────────────────────────
+
+  const ExForm=({ex, onSave, onClose, exs, s})=>{
+    const emptyExLocal={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:'',mediaUrl:'',mediaTipo:'imagen',mediaDesc:''};
+    const [form,setF2]=useState(ex||emptyExLocal);
+    const set=(k,v)=>setF2(f=>({...f,[k]:v}));
+    const regRef=exs.find(e=>e.id===form.regresion);
+    const progRef=exs.find(e=>e.id===form.progresion);
+    const isVideo=form.mediaUrl&&(form.mediaUrl.includes('youtube')||form.mediaUrl.includes('youtu.be')||form.mediaUrl.includes('vimeo'));
+    const getYTEmbed=(url)=>{
+      const m=url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([^&\s]+)/);
+      return m?`https://www.youtube.com/embed/${m[1]}`:null;
+    };
+    return(
+      OverlayWrap({wide:true,children:(<>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:14}}>{form.id?'Editar':'Nuevo'} ejercicio</div>
+          <button onClick={onClose} style={s.btnG}>✕</button>
+        </div>
+        <div style={{maxHeight:'60vh',overflowY:'auto',paddingRight:4}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp}/></div>
+            <div><span style={s.lbl}>Bloque</span><select value={form.bloque} onChange={e=>set('bloque',e.target.value)} style={{...s.sel,width:'100%'}}>{Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+            <div><span style={s.lbl}>Nivel</span><select value={form.nivel} onChange={e=>set('nivel',e.target.value)} style={{...s.sel,width:'100%'}}>{['Principiante','Intermedio','Avanzado'].map(n=><option key={n}>{n}</option>)}</select></div>
+            {[['musculos','Músculos'],['contraccion','Contracción'],['patron','Patrón de movimiento'],['equipo','Equipamiento']].map(([k,lbl])=>(
+              <div key={k} style={{gridColumn:'1/-1'}}><span style={s.lbl}>{lbl}</span><input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={s.inp}/></div>
+            ))}
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Regresión (ID o texto)</span><input value={form.regresion||''} onChange={e=>set('regresion',e.target.value)} style={s.inp}/>{regRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {regRef.nombre}</div>}</div>
+            <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Progresión (ID o texto)</span><input value={form.progresion||''} onChange={e=>set('progresion',e.target.value)} style={s.inp}/>{progRef&&<div style={{fontSize:10,color:G3,marginTop:2}}>→ {progRef.nombre}</div>}</div>
+          </div>
+          {/* MEDIA — Imagen o Video */}
+          <div style={{background:G1,borderRadius:8,padding:'12px',marginTop:4,border:`1px solid ${G2}`}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>📎 Imagen / Video del ejercicio</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={s.lbl}>URL de imagen o video</span>
+                <input value={form.mediaUrl||''} onChange={e=>set('mediaUrl',e.target.value)} style={s.inp} placeholder="https://youtube.com/watch?v=... o https://i.imgur.com/..."/>
+                <div style={{fontSize:10,color:G3,marginTop:3}}>YouTube, Vimeo, o link directo a imagen (jpg, png, gif)</div>
+              </div>
+              <div><span style={s.lbl}>Tipo</span>
+                <select value={form.mediaTipo||'imagen'} onChange={e=>set('mediaTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value='imagen'>📷 Imagen</option>
+                  <option value='video'>🎥 Video (YouTube/Vimeo)</option>
+                  <option value='gif'>🎞️ GIF animado</option>
+                </select>
+              </div>
+              <div><span style={s.lbl}>Descripción del media</span><input value={form.mediaDesc||''} onChange={e=>set('mediaDesc',e.target.value)} style={s.inp} placeholder="Ej: Demostración técnica"/></div>
+            </div>
+            {/* Preview */}
+            {form.mediaUrl&&(
+              <div style={{background:WH,borderRadius:6,padding:8,border:`1px solid ${G2}`}}>
+                <div style={{fontSize:10,color:G3,marginBottom:6,fontWeight:700,textTransform:'uppercase'}}>Vista previa</div>
+                {isVideo&&getYTEmbed(form.mediaUrl)
+                  ?<div style={{position:'relative',paddingBottom:'40%',height:0,overflow:'hidden',borderRadius:6}}>
+                      <iframe src={getYTEmbed(form.mediaUrl)} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',border:'none',borderRadius:6}} allowFullScreen title="preview"/>
+                    </div>
+                  :<img src={form.mediaUrl} alt="preview" style={{maxWidth:'100%',maxHeight:180,borderRadius:6,objectFit:'cover',display:'block'}}
+                      onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='block'}}/>
+                }
+                <div style={{display:'none',fontSize:11,color:R,marginTop:4}}>⚠ No se pudo cargar la imagen. Verificá la URL.</div>
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={()=>onSave(form)} disabled={!form.nombre} style={{...s.btnR,width:'100%',marginTop:12,opacity:!form.nombre?.4:1}}>Guardar ejercicio</button>
+      </>)})
+    );
+  };
+
+  // ── TAB: BASE DE EJERCICIOS ───────────────────────────────────────────────
+
+  const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
+    if(!clientWizard)return null;
+    const [step,setStep]=useState(clientWizard.step||0);
+    const [form,setForm]=useState(()=>({...clientWizard.cli}));
+    const [sc,setSc]=useState(()=>({...clientWizard.cli.screening}));
+    const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+    const setSCK=(k,v)=>setSc(f=>({...f,[k]:v}));
+    const isNew=!clientWizard.cli.screeningCompleto;
+    const totalSteps=WIZARD_STEPS.length;
+
+    const finalize=()=>{
+      const flags={
+        impacto:sc.restriccionImpacto==='si',
+        overhead:sc.restriccionOverhead==='si',
+        cargaAxial:sc.restriccionCargaAxial==='si',
+      };
+      const resText=[
+        sc.restriccionImpacto==='si'?'Sin impacto':'',
+        sc.restriccionOverhead==='si'?'Sin overhead':'',
+        sc.restriccionCargaAxial==='si'?'Sin carga axial':'',
+        sc.otraRestriccion||'',
+      ].filter(Boolean).join(' · ');
+      const saved={
+        ...form,
+        nivel:sc.nivelAsignado,
+        semaforo:sc.semaforoAsignado,
+        restricciones:resText,
+        restricciones_flags:flags,
+        fechaEval:sc.fechaEvaluacion||new Date().toISOString().split('T')[0],
+        screeningCompleto:true,
+        screening:sc,
+      };
+      saveClient(saved);
+    };
+
+    const inp2=(k,placeholder='')=>(
+      <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder={placeholder} style={s.inp}/>
+    );
+    const sel2=(k,opts)=>(
+      <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+        {opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}
+      </select>
+    );
+
+    const renderStep=()=>{
+      switch(step){
+        // ── PASO 0: DATOS PERSONALES ──────────────────────────────────────
+        case 0: return(
+          <div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              <div><span style={s.lbl}>Nombre *</span><input value={form.nombre} onChange={e=>set('nombre',e.target.value)} style={s.inp} placeholder="Nombre"/></div>
+              <div><span style={s.lbl}>Apellido *</span><input value={form.apellido} onChange={e=>set('apellido',e.target.value)} style={s.inp} placeholder="Apellido"/></div>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={s.lbl}>🎯 Objetivo del cliente — condiciona criterios de evolución</span>
+                <input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="¿Qué quiere lograr? (Ej: volver a correr, trabajar sin dolor, levantar...)" style={s.inp}/>
+                <div style={{fontSize:10,color:G3,marginTop:3}}>Este objetivo personaliza los criterios de avance entre fases del método.</div>
+              </div>
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={s.lbl}>📅 Sistema de periodización asignado — habilitado según fase del método ({NIVEL[form.nivel]?.label||form.nivel})</span>
+                {(()=>{
+                  const compatibles=periodizacionesPorFase(form.nivel);
+                  const macro=MACRO_PLAN_METODO[form.nivel];
+                  const actualIncompatible=form.periodizacion&&!compatibles.find(p=>p.id===form.periodizacion);
+                  if(compatibles.length===0){
+                    return(
+                      <div style={{background:'#F3F4F6',border:'1px solid #D1D5DB',borderRadius:6,padding:'8px 10px',marginTop:2,fontSize:11,color:G4,lineHeight:1.5}}>
+                        Fase <strong>{NIVEL[form.nivel]?.label}</strong> no usa periodización de fuerza — {macro?.objetivo}
+                      </div>
+                    );
+                  }
+                  return(<>
+                    <select value={form.periodizacion||''} onChange={e=>{
+                      const val=e.target.value;
+                      const hoy=new Date().toISOString().split('T')[0];
+                      set('periodizacion',val);
+                      if(val){
+                        const per=PERIODIZACIONES[val];
+                        const semanas=per?parseDuracionSemanas(per.duracion):null;
+                        let finCalc='';
+                        if(semanas){const d=new Date(hoy+'T00:00:00');d.setDate(d.getDate()+semanas*7);finCalc=d.toISOString().split('T')[0];}
+                        set('periodizacionInicio',hoy);
+                        set('periodizacionFin',finCalc);
+                        // Snapshot de métricas al momento de asignar — es el "inicio" contra
+                        // el que se va a comparar en la mini evaluación de cierre.
+                        set('periodizacionSnapshotInicio',{fecha:hoy,peso:sc.peso||'',pctGrasa:sc.pctGrasa||'',imc:sc.imc||''});
+                      }else{
+                        set('periodizacionInicio','');set('periodizacionFin','');set('periodizacionSnapshotInicio',null);
+                      }
+                    }} style={{...s.sel,width:'100%',marginTop:2}}>
+                      <option value=''>— Sin sistema asignado —</option>
+                      {compatibles.map(v=>(
+                        <option key={v.id} value={v.id}>{v.id===macro?.periodizacion?'⭐ ':''}{v.nombre} · {v.duracion}</option>
+                      ))}
+                    </select>
+                    {form.periodizacion&&(
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:6}}>
+                        <div><span style={{...s.lbl,fontSize:9}}>Fecha de inicio</span><DateInput value={form.periodizacionInicio||''} onChange={v=>set('periodizacionInicio',v)} style={s.inp}/></div>
+                        <div>
+                          <span style={{...s.lbl,fontSize:9}}>Reevaluar / fin estimado</span>
+                          <DateInput value={form.periodizacionFin||''} onChange={v=>set('periodizacionFin',v)} style={s.inp}/>
+                        </div>
+                      </div>
+                    )}
+                    {macro?.periodizacion&&!form.periodizacion&&(
+                      <div style={{fontSize:10,color:G3,marginTop:3}}>⭐ Sugerida por defecto para esta fase: <strong>{PERIODIZACIONES[macro.periodizacion]?.nombre}</strong> — {macro.objetivo}</div>
+                    )}
+                    {actualIncompatible&&(
+                      <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'6px 10px',marginTop:4,fontSize:10,color:'#991B1B'}}>
+                        ⚠ La periodización asignada ({PERIODIZACIONES[form.periodizacion]?.nombre}) ya no es compatible con la fase actual — revisá si corresponde cambiarla.
+                      </div>
+                    )}
+                  </>);
+                })()}
+                {form.periodizacion&&PERIODIZACIONES[form.periodizacion]&&(
+                  <div style={{background:G1,borderRadius:5,padding:'6px 10px',marginTop:4,fontSize:10,color:G4,lineHeight:1.5}}>
+                    <strong>{PERIODIZACIONES[form.periodizacion].autor}</strong> · {PERIODIZACIONES[form.periodizacion].indicado_para}
+                  </div>
+                )}
+                <details style={{marginTop:6}}>
+                  <summary style={{fontSize:10,color:'#1D4ED8',cursor:'pointer',fontWeight:700}}>📈 Ver macro-plan sugerido a largo plazo</summary>
+                  <div style={{marginTop:4,display:'flex',flexDirection:'column',gap:4}}>
+                    {getMacroPlanSugerido(form.objetivo).map((paso,i)=>(
+                      <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',background:paso.fase===form.nivel?'#EFF6FF':G1,border:paso.fase===form.nivel?'1px solid #93C5FD':'1px solid transparent',borderRadius:5,padding:'6px 9px',fontSize:10}}>
+                        <strong style={{flexShrink:0,minWidth:90}}>{paso.label}</strong>
+                        <span style={{color:G4}}>{paso.periodizacion?PERIODIZACIONES[paso.periodizacion]?.nombre:'Protocolo clínico de rehab'} — {paso.nota||paso.objetivo}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+              <div><span style={s.lbl}>N° de documento *</span><input value={form.documento} onChange={e=>set('documento',e.target.value)} style={s.inp} placeholder="CI / Pasaporte"/></div>
+              <div><span style={s.lbl}>Celular *</span><input value={form.celular} onChange={e=>set('celular',e.target.value)} style={s.inp} placeholder="+598 9x xxx xxx"/></div>
+              <div><span style={s.lbl}>Fecha de nacimiento</span><DateInput value={sc.fechaNac} onChange={v=>setSCK('fechaNac',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Género</span>{sel2('genero',[['','Seleccionar'],['masculino','Masculino'],['femenino','Femenino']])}</div>
+              <div style={{gridColumn:'1/-1'}}><span style={s.lbl}>Ocupación</span><input value={sc.ocupacion} onChange={e=>setSCK('ocupacion',e.target.value)} style={s.inp} placeholder="Trabajo / actividad principal"/></div>
+              <div><span style={s.lbl}>Fecha de ingreso</span><DateInput value={form.fechaIngreso} onChange={v=>set('fechaIngreso',v)} style={s.inp}/></div>
+              {/* ── POLÍTICA DE REFERIDOS ── */}
+              <div style={{gridColumn:'1/-1',background:'#FFF9EC',border:'1px solid #FCD34D',borderRadius:7,padding:'10px 12px',marginTop:4}}>
+                <div style={{fontSize:11,fontWeight:700,color:'#92400E',marginBottom:6}}>🎁 Política de referidos</div>
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:8}}>
+                  <div>
+                    <span style={s.lbl}>¿Quién lo recomendó?</span>
+                    <input value={form.referidoPor||''} onChange={e=>set('referidoPor',e.target.value)} list="clientes-referido" style={s.inp} placeholder="Nombre del cliente que lo refirió"/>
+                    <datalist id="clientes-referido">
+                      {clients.map(cl=><option key={cl.id} value={`${cl.nombre} ${cl.apellido}`}/>)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <span style={s.lbl}>Canal</span>
+                    <select value={form.referidoTipo||''} onChange={e=>set('referidoTipo',e.target.value)} style={{...s.sel,width:'100%'}}>
+                      <option value="">— Seleccionar —</option>
+                      <option value="cliente">Cliente actual</option>
+                      <option value="redes">Redes sociales</option>
+                      <option value="paciente_fisio">Paciente de fisio</option>
+                      <option value="cartel">Cartel / vidriera</option>
+                      <option value="otro">Otro</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
-            {/* Plan activo */}
-            {planes.filter(p=>p.activo).length>0&&(()=>{
-              const plan=planes.filter(p=>p.activo)[0];
-              const ps=PERIODIZACIONES[plan.sistema_id];
-              return(
-                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
-                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
-                  {ps&&(
-                    <>
-                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
-                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
-                        {ps.fases.map((f,i)=>(
-                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
-                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
-                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
-                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
-                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
-                    </>
-                  )}
-                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
+          </div>
+        );
+        // ── PASO 1: HISTORIA DE SALUD ────────────────────────────────────
+        case 1: return(
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div><span style={s.lbl}>A1. ¿Condición médica diagnosticada actualmente?</span>{sel2('condicionMedica',[['no','No'],['si','Sí']])}{sc.condicionMedica==='si'&&<input value={sc.condicionDetalle||''} onChange={e=>setSCK('condicionDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Especificar condición"/>}</div>
+            <div><span style={s.lbl}>A2. ¿Toma medicación actualmente?</span>{sel2('medicacion',[['no','No'],['si','Sí']])}{sc.medicacion==='si'&&<input value={sc.medicacionDetalle||''} onChange={e=>setSCK('medicacionDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Especificar medicación"/>}</div>
+            <div><span style={s.lbl}>A3. ¿Lesiones activas o dolor crónico?</span>{sel2('lesionesActivas',[['no','No'],['si','Sí — dolor activo'],['historia','Historia de lesiones']])}{sc.lesionesActivas!=='no'&&<input value={sc.lesionesDetalle||''} onChange={e=>setSCK('lesionesDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Zona, tiempo, diagnóstico si lo tiene"/>}</div>
+            <div><span style={s.lbl}>A4. ¿Cirugías previas?</span>{sel2('cirugias',[['no','No'],['si','Sí']])}{sc.cirugias==='si'&&<input value={sc.cirugiasDetalle||''} onChange={e=>setSCK('cirugiasDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Tipo de cirugía y año"/>}</div>
+            <div><span style={s.lbl}>A5. ¿Dolor actual al movimiento?</span>{sel2('dolorActual',[['no','No'],['leve','Leve (1-3/10)'],['moderado','Moderado (4-6/10)'],['intenso','Intenso (7+/10)']])}{sc.dolorActual!=='no'&&<input value={sc.dolorDetalle||''} onChange={e=>setSCK('dolorDetalle',e.target.value)} style={{...s.inp,marginTop:6}} placeholder="Localización y tipo de dolor"/>}</div>
+          </div>
+        );
+        // ── PASO 2: HISTORIA DE ENTRENAMIENTO ────────────────────────────
+        case 2: return(
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div><span style={s.lbl}>B1. Nivel de actividad física actual</span>{sel2('nivelActividad',[['sedentario','Sedentario (−1 vez/sem)'],['levemente_activo','Levemente activo (1-2 veces/sem)'],['moderadamente_activo','Moderadamente activo (3-4 veces/sem)'],['muy_activo','Muy activo (5+ veces/sem)'],['atleta','Atleta / competidor']])}</div>
+            <div><span style={s.lbl}>B2. Experiencia previa en entrenamiento</span>{sel2('expEntrenamiento',[['sin_experiencia','Sin experiencia'],['menos_1_año','Menos de 1 año'],['1_3_años','1-3 años'],['mas_3_años','Más de 3 años'],['entrenamiento_dirigido','Entrenamiento dirigido/competitivo']])}</div>
+            <div><span style={s.lbl}>B3. ¿Está entrenando actualmente?</span>{sel2('entrenamientoActual',[['no','No'],['si_gym','Sí — gimnasio'],['si_deporte','Sí — deporte'],['si_otro','Sí — otro tipo de actividad']])}</div>
+            <div><span style={s.lbl}>B4. Experiencia con ejercicios específicos (libre)</span><input value={sc.expEjerciciosDetalle||''} onChange={e=>setSCK('expEjerciciosDetalle',e.target.value)} style={s.inp} placeholder="Ej: levantamiento olímpico, pilates, crossfit..."/></div>
+          </div>
+        );
+        // ── PASO 3: ESTILO DE VIDA Y OBJETIVOS ───────────────────────────
+        case 3: return(
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div><span style={s.lbl}>C1. Calidad del sueño</span>{sel2('sueño',[['bueno','Bueno (7-9h, reparador)'],['regular','Regular (interrumpido o insuficiente)'],['malo','Malo (menos de 6h o no reparador)']])}</div>
+            <div><span style={s.lbl}>C2. Nivel de estrés percibido</span>{sel2('estres',[['bajo','Bajo'],['moderado','Moderado'],['alto','Alto'],['muy_alto','Muy alto — interfiere con la vida diaria']])}</div>
+            <div><span style={s.lbl}>D1. Objetivo principal</span>{sel2('objetivoPrincipal',[['salud_bienestar','Salud y bienestar general'],['perdida_grasa','Pérdida de grasa / composición corporal'],['hipertrofia','Aumento de masa muscular'],['fuerza','Ganancia de fuerza'],['rendimiento','Rendimiento deportivo'],['rehabilitacion','Rehabilitación / recuperación de lesión'],['otro','Otro']])}</div>
+            <div><span style={s.lbl}>D2. Expectativas adicionales / restricciones de tiempo</span><input value={sc.expectativas||''} onChange={e=>setSCK('expectativas',e.target.value)} style={s.inp} placeholder="Disponibilidad horaria, compromisos, limitaciones logísticas..."/></div>
+          </div>
+        );
+        // ── PASO 4: GUARDAR / AGENDAR EVALUACIÓN ────────────────────────
+        case 4: return(
+          <div>
+            <div style={{background:'#1a1a1a',border:'2px solid #CC0000',borderRadius:10,padding:'18px 16px',marginBottom:16,textAlign:'center'}}>
+              <div style={{fontSize:28,marginBottom:8}}>💾</div>
+              <div style={{fontWeight:800,fontSize:15,color:WH,marginBottom:6}}>Fase 1 completada</div>
+              <div style={{fontSize:12,color:G3,lineHeight:1.7}}>Los datos personales y la historia clínica de <strong style={{color:WH}}>{form.nombre} {form.apellido}</strong> están registrados.<br/>Podés guardar la ficha ahora y completar la evaluación funcional en otro momento.</div>
+            </div>
+            <div style={{...s.card,borderLeft:'4px solid #16A34A',marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:'#16A34A'}}>✓ Guardar y continuar después</div>
+              <div style={{fontSize:12,color:G4,lineHeight:1.6,marginBottom:12}}>La ficha queda guardada con semáforo ⏳ PENDIENTE. El cliente aparece en el directorio pero no está disponible para construir sesiones hasta completar la evaluación funcional.</div>
+              <button onClick={()=>{
+                const saved={...form,nivel:'activa',semaforo:'pendiente',restricciones:'',restricciones_flags:{impacto:false,overhead:false,cargaAxial:false},fechaEval:'',screeningCompleto:false,screening:{...emptyScreening(),...sc}};
+                saveClient(saved);
+              }} style={{...s.btnGreen,width:'100%',padding:'11px',fontSize:13}}>Guardar ficha — completar evaluación después</button>
+            </div>
+            <div style={{...s.card,borderLeft:'4px solid #D97706',marginBottom:12,background:'#FFFBEB'}}>
+              <div style={{fontWeight:700,fontSize:12,color:'#92400E',marginBottom:4}}>📅 Recordatorio</div>
+              <div style={{fontSize:12,color:'#78350F',lineHeight:1.6}}>Agendá una consulta de <strong>45–60 minutos</strong> para completar la evaluación funcional (Fases 2: composición corporal, postura, movilidad, capacidades físicas y banderas clínicas).<br/><br/>Hasta completarla, el cliente no tendrá semáforo asignado ni filtro de ejercicios activo.</div>
+            </div>
+            <div style={{...s.card,borderLeft:'4px solid #1D4ED8'}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:'#1D4ED8'}}>→ Continuar ahora con la Fase 2</div>
+              <div style={{fontSize:12,color:G4,marginBottom:0}}>Si el tiempo lo permite, continuá con la evaluación profesional en esta misma sesión.</div>
+            </div>
+          </div>
+        );
+        // ── PASO 5: COMPOSICIÓN CORPORAL ─────────────────────────────────
+        case 5: return(
+          <div>
+            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2 — Evaluación profesional.</strong> Completado por el equipo del centro.</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
+              <div><span style={s.lbl}>Fecha de evaluación</span><DateInput value={sc.fechaEvaluacion||''} onChange={v=>setSCK('fechaEvaluacion',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Evaluador/es</span><input value={sc.evaluador||''} onChange={e=>setSCK('evaluador',e.target.value)} style={s.inp} placeholder="Nombre y cargo"/></div>
+              <div><span style={s.lbl}>Derivado a</span>{sel2('derivadoA',[['','Seleccionar'],['clinica','Clínica'],['entrenamiento','Entrenamiento'],['ambos','Ambos']])}</div>
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8,letterSpacing:'.04em'}}>Antropometría básica</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:14}}>
+              {[['peso','Peso (kg)'],['talla','Talla (cm)'],['imc','IMC (kg/m²)'],['pctGrasa','% Grasa corporal'],['fcReposo','FC reposo (lpm)'],['ta','Tensión arterial']].map(([k,lbl])=>(
+                <div key={k}><span style={s.lbl}>{lbl}</span><input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={s.inp}/></div>
+              ))}
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8,letterSpacing:'.04em'}}>Circunferencias corporales (cm)</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8}}>
+              {[
+                ['per_cintura_escapular','Cintura escapular'],
+                ['per_brazo_d','Brazo derecho'],
+                ['per_brazo_i','Brazo izquierdo'],
+                ['per_cintura','Cintura (ombligo)'],
+                ['per_cadera','Cadera (trocánter)'],
+                ['per_muslo_d','Muslo derecho'],
+                ['per_muslo_i','Muslo izquierdo'],
+                ['per_pantorrilla_d','Pantorrilla derecha'],
+                ['per_pantorrilla_i','Pantorrilla izquierda'],
+              ].map(([k,lbl])=>(
+                <div key={k}><span style={s.lbl}>{lbl}</span><input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={s.inp} placeholder="cm"/></div>
+              ))}
+            </div>
+          </div>
+        );
+        // ── PASO 6: EVALUACIÓN POSTURAL ──────────────────────────────────
+        case 6: return(
+          <div>
+            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2.</strong> Registrar hallazgos posturales principales.</div>
+            {[
+              ['postura_cabeza','Alineación de cabeza',['Centrada','Lateralización D','Lateralización I','Antepulsión']],
+              ['postura_hombros','Nivel de hombros',['Simétrico','Elevado derecho','Elevado izquierdo']],
+              ['postura_columna_lat','Curva lumbar (lateral)',['Normal','Hiperlordosis','Rectificación']],
+              ['postura_columna_tor','Curva torácica',['Normal','Hipercifosis','Rectificación']],
+              ['postura_pelvis','Posición pélvica',['Neutra','Anteversión','Retroversión']],
+              ['postura_rodillas','Rodillas',['Neutro','Valgo bilateral','Varo bilateral','Hiperextensión']],
+              ['postura_pies','Pies',['Neutro','Pronación bilateral','Supinación bilateral','Asimétrico']],
+            ].map(([k,lbl,opts])=>(
+              <div key={k} style={{marginBottom:8,display:'grid',gridTemplateColumns:'160px 1fr',gap:8,alignItems:'center'}}>
+                <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
+                  <option value="">— sin evaluar</option>
+                  {opts.map(o=><option key={o}>{o}</option>)}
+                </select>
+              </div>
+            ))}
+            <div style={{marginTop:10}}><span style={s.lbl}>Observaciones posturales adicionales</span><textarea value={sc.postura_hallazgos||''} onChange={e=>setSCK('postura_hallazgos',e.target.value)} rows={3} placeholder="Detalles relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
+          </div>
+        );
+        // ── PASO 7: MOVILIDAD Y CONTROL MOTOR ────────────────────────────
+        case 7: return(
+          <div>
+            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
+              🩺 Marcá el estado de cada movimiento por lado. Dejá en <strong>—</strong> lo que no evalúes. Si medís los grados exactos, agregalos en el campo de cada fila.
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:6}}>Screening de movilidad articular</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:2}}>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Movimiento · Referencia</div>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Der/Bil</div>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
+            </div>
+            {[
+              ['mov_tobillo','Dorsiflexión tobillo','Normal ≥20° · Disfunc <10°',{region:'tobillo',mov:'Dorsiflexión'}],
+              ['mov_cad_rot','Rotación interna cadera','Normal 40-45° · Disfunc <30°',null],
+              ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°',{region:'cadera',mov:'Flexión'}],
+              ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°',null],
+              ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°',{region:'hombro',mov:'Flexión'}],
+              ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°',null],
+              ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°',null],
+            ].map(([k,lbl,ref,poseDef])=>(
+              <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
+                    <div style={{fontSize:9,color:G3}}>{ref}</div>
+                  </div>
+                  {['DBil','Izq'].map(side=>(
+                    <select key={side} value={sc[k+'_'+side]||''} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
+                      <option value="">—</option>
+                      <option value="N">Óptimo</option>
+                      <option value="L">Limitado</option>
+                      <option value="ML">Muy limitado</option>
+                      <option value="D">Dolor</option>
+                    </select>
+                  ))}
                 </div>
-              );
-            })()}
-            {/* Grid resumen 1RM */}
-            <div style={{...s.card,marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
-                {allTests.map((tf,tfIdx)=>{
-                  const data=tests.filter(t=>t.test_id===tf.id);
-                  const last=data[0];
-                  const rm1=last?.rm1_real||last?.rm1_calculado;
-                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
-                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
-                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
-                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
+                <div style={{display:'grid',gridTemplateColumns:'1fr 70px',gap:6,marginTop:4,alignItems:'start'}}>
+                  <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,padding:'4px 8px'}}/>
+                  {poseDef
+                    ?<PoseROM movimiento={poseDef.mov} region={poseDef.region} onMedido={(grados,ladoM)=>{
+                        const label=ladoM==='right'?'Der':'Izq';
+                        setSCK(k+'_grados',(sc[k+'_grados']?sc[k+'_grados']+' / ':'')+`${label} ${grados}°`);
+                      }}/>
+                    :<div title="Rotación: no medible con confianza desde una sola foto 2D. Medición manual con goniómetro." style={{fontSize:9,color:'#94A3B8',textAlign:'center',padding:'6px 2px',border:'1px dashed #E2E8F0',borderRadius:6}}>Manual</div>
+                  }
+                </div>
+              </div>
+            ))}
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
+            {[
+              ['cm_squat','Deep squat / Overhead squat',['Óptimo','Compensaciones leves','Compensaciones marcadas','No puede realizarlo']],
+              ['cm_lunge','Estocada estática',['Óptimo D/I','Falla derecho','Falla izquierdo','Falla bilateral']],
+              ['cm_sls','Single leg stance (30s)',['Estable D/I','Inestable derecho','Inestable izquierdo','Inestable bilateral']],
+              ['cm_birddog','Bird-dog (rotary stability)',['Óptimo','Rotación pélvica','Inestabilidad marcada','No puede realizarlo']],
+              ['cm_deadbug','Dead bug (control lumbo-pélvico)',['Óptimo','Pierde neutro lumbar','No puede realizarlo']],
+              ['cm_bisagra','Bisagra de cadera con palo',['Óptimo','Compensaciones leves','Compensaciones marcadas','No puede realizarlo']],
+            ].map(([k,lbl,opts])=>(
+              <div key={k} style={{marginBottom:6,display:'grid',gridTemplateColumns:'1fr 180px',gap:8,alignItems:'center',background:G1,borderRadius:5,padding:'5px 8px'}}>
+                <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
+                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                  <option value="">— sin evaluar</option>
+                  {opts.map(o=><option key={o}>{o}</option>)}
+                </select>
+              </div>
+            ))}
+            <div style={{marginTop:12,background:G1,borderRadius:8,padding:'10px 12px'}}>
+              <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4,textTransform:'uppercase'}}>Y Reach Test — Balance dinámico (cm)</div>
+              <div style={{display:'grid',gridTemplateColumns:'120px 1fr 1fr 1fr',gap:6,marginBottom:4}}>
+                <div/>
+                {['Anterior','Posteromedial','Posterolateral'].map(d=><div key={d} style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center',textTransform:'uppercase'}}>{d}</div>)}
+              </div>
+              {['Pierna derecha','Pierna izquierda'].map((pierna,pi)=>(
+                <div key={pi} style={{display:'grid',gridTemplateColumns:'120px 1fr 1fr 1fr',gap:6,marginBottom:6,alignItems:'center'}}>
+                  <span style={{fontSize:11,fontWeight:600}}>{pierna}</span>
+                  {['ant','pm','pl'].map(dir=>(
+                    <input key={dir} value={sc[`yreach_${pi===0?'d':'i'}_${dir}`]||''} onChange={e=>setSCK(`yreach_${pi===0?'d':'i'}_${dir}`,e.target.value)} placeholder="cm" style={{...s.inp,fontSize:11,textAlign:'center'}}/>
+                  ))}
+                </div>
+              ))}
+              <div style={{fontSize:10,color:G3,marginTop:4}}>Referencia: diferencia bilateral &gt;4 cm = asimetría significativa. Riesgo de lesión si &lt;89% del largo de pierna en dirección anterior.</div>
+            </div>
+            <div style={{marginTop:10}}><span style={s.lbl}>Observaciones movilidad y control motor</span><textarea value={sc.movilidad_hallazgos||''} onChange={e=>setSCK('movilidad_hallazgos',e.target.value)} rows={2} placeholder="Compensaciones, asimetrías relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
+          </div>
+        );
+        // ── PASO 8: PVFI — CAPACIDADES FÍSICAS ───────────────────────────
+        case 8: return(
+          <div>
+            <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:14}}>⚠️ <strong>No aplicar en perfil RESTAURA.</strong> Omitir tests con contraindicación clínica. Seleccionar el bloque según perfil del evaluado.</div>
+            <div style={{fontSize:12,fontWeight:800,color:BK,marginBottom:10,borderBottom:`2px solid ${R}`,paddingBottom:6}}>PVFI — Ficha de Valoración Funcional Integral</div>
+
+            {/* BLOQUE 1: ADULTO MAYOR / FRAGILIDAD */}
+            <div style={{marginBottom:16}}>
+              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🧓 BLOQUE 1 — Adulto mayor / Fragilidad <span style={{fontWeight:400,color:G3,marginLeft:8}}>+60 años o movilidad muy reducida</span></div>
+              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px',display:'flex',flexDirection:'column',gap:10}}>
+                {[
+                  {k:'pvfi_chair_stand',lbl:'1. 30s Chair Stand — Fuerza tren inferior',unit:'reps',ref:'🔴 <8 rep · 🟢 12–17 rep',obs:'pvfi_chair_stand_obs',obsPlaceholder:'Calidad del apoyo, uso de manos, fatiga'},
+                  {k:'pvfi_dino_d',lbl:'2. Dinamometría — Mano derecha',unit:'kg',ref:'H >27 kg · M >16 kg',obs:'pvfi_dino_d_obs',obsPlaceholder:'Asimetrías o dolor en el agarre'},
+                  {k:'pvfi_dino_i',lbl:'Dinamometría — Mano izquierda',unit:'kg',ref:'H >27 kg · M >16 kg',obs:null},
+                  {k:'pvfi_tug',lbl:'3. TUG Test — Agilidad y movilidad',unit:'seg',ref:'🔴 >20s · 🟢 <10s',obs:'pvfi_tug_obs',obsPlaceholder:'Equilibrio en el giro, fluidez de marcha'},
+                  {k:'pvfi_plancha_elev',lbl:'4. Plancha elevada — Resistencia core',unit:'seg',ref:'Mínimo >30 seg',obs:'pvfi_plancha_elev_obs',obsPlaceholder:'Compensación lumbar, control escapular'},
+                ].map(({k,lbl,unit,ref,obs,obsPlaceholder})=>(
+                  <div key={k} style={{background:G1,borderRadius:6,padding:'8px 10px'}}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:8,alignItems:'center',marginBottom:obs?6:0}}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:700}}>{lbl}</div>
+                        <div style={{fontSize:10,color:G3}}>{ref}</div>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:4}}>
+                        <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder="—" style={{...s.inp,textAlign:'center',fontSize:11}}/>
+                        <span style={{fontSize:10,color:G4,whiteSpace:'nowrap'}}>{unit}</span>
+                      </div>
+                    </div>
+                    {obs&&<input value={sc[obs]||''} onChange={e=>setSCK(obs,e.target.value)} placeholder={`Obs: ${obsPlaceholder}`} style={{...s.inp,fontSize:10,color:G4}}/>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* BLOQUE 2: ADULTO SEDENTARIO / INEXPERTO */}
+            <div style={{marginBottom:16}}>
+              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🏃 BLOQUE 2 — Adulto sedentario / Inexperto <span style={{fontWeight:400,color:G3,marginLeft:8}}>20–59 años</span></div>
+              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px',display:'flex',flexDirection:'column',gap:10}}>
+                {[
+                  {k:'pvfi_wallsit',lbl:'1. Wall Sit 90° — Resistencia tren inferior',unit:'seg',ref:'Pobre <25s · Promedio 35–50s · Pro >60s',obs:'pvfi_wallsit_obs',obsPlaceholder:'Temblor, valgo de rodilla'},
+                  {k:'pvfi_pushup_rod',lbl:'2. Push-Up en rodillas — Fuerza empuje',unit:'reps',ref:'Pobre <10 · Promedio 15–24 · Pro >25',obs:'pvfi_pushup_rod_obs',obsPlaceholder:'Estabilidad escapular, control de cadera'},
+                  {k:'pvfi_plancha_suelo',lbl:'3. Plancha frontal suelo — Resistencia core',unit:'seg',ref:'Pobre <30s · Promedio 45–75s · Pro >90s',obs:'pvfi_plancha_suelo_obs',obsPlaceholder:'Pérdida de alineación, dolor lumbar'},
+                  {k:'pvfi_row_iso',lbl:'4. Row isométrico / Suspensión — Fuerza tracción',unit:'seg',ref:'Mínimo >30 seg',obs:'pvfi_row_iso_obs',obsPlaceholder:'Capacidad de retracción escapular'},
+                  {k:'pvfi_dino2',lbl:'5. Dinamometría — Fuerza tren superior',unit:'kg',ref:'H >35 kg · M >22 kg',obs:'pvfi_dino2_obs',obsPlaceholder:'Fuerza relativa al peso corporal'},
+                ].map(({k,lbl,unit,ref,obs,obsPlaceholder})=>(
+                  <div key={k} style={{background:G1,borderRadius:6,padding:'8px 10px'}}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 90px',gap:8,alignItems:'center',marginBottom:obs?6:0}}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:700}}>{lbl}</div>
+                        <div style={{fontSize:10,color:G3}}>{ref}</div>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:4}}>
+                        <input value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} placeholder="—" style={{...s.inp,textAlign:'center',fontSize:11}}/>
+                        <span style={{fontSize:10,color:G4,whiteSpace:'nowrap'}}>{unit}</span>
+                      </div>
+                    </div>
+                    {obs&&<input value={sc[obs]||''} onChange={e=>setSCK(obs,e.target.value)} placeholder={`Obs: ${obsPlaceholder}`} style={{...s.inp,fontSize:10,color:G4}}/>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* BLOQUE 3: SEMÁFORO DE PRIORIDADES */}
+            <div style={{marginBottom:14}}>
+              <div style={{background:BK,color:WH,borderRadius:'6px 6px 0 0',padding:'7px 12px',fontSize:11,fontWeight:700}}>🚦 BLOQUE 3 — Semáforo de prioridades <span style={{fontWeight:400,color:G3,marginLeft:8}}>Criterio multidisciplinario</span></div>
+              <div style={{border:`1px solid ${G2}`,borderTop:'none',borderRadius:'0 0 6px 6px',padding:'10px 12px'}}>
+                {[
+                  ['pvfi_nivel_rojo','🔴 NIVEL ROJO — Rehabilitación / Adaptación','Riesgos funcionales o valores de fragilidad. Programa centrado en movilidad segura, estabilidad y fuerza base bajo supervisión estricta.'],
+                  ['pvfi_nivel_amarillo','🟡 NIVEL AMARILLO — Acondicionamiento','Valores en rangos mínimos o promedio bajo. Corregir asimetrías, mejorar técnica y aumentar capacidad de carga progresivamente.'],
+                  ['pvfi_nivel_verde','🟢 NIVEL VERDE — Optimización','Buen punto de partida. Listo para programas de rendimiento, hipertrofia o metas estéticas/deportivas.'],
+                ].map(([k,titulo,desc])=>(
+                  <div key={k} onClick={()=>setSCK('pvfi_nivel',k.replace('pvfi_nivel_',''))} style={{display:'grid',gridTemplateColumns:'1fr 32px',gap:8,alignItems:'center',marginBottom:8,border:`2px solid ${sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:G2}`,borderRadius:6,padding:'8px 10px',cursor:'pointer',background:sc.pvfi_nivel===k.replace('pvfi_nivel_','')?'#FEF2F2':WH}}>
+                    <div><div style={{fontSize:11,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4,marginTop:2}}>{desc}</div></div>
+                    <div style={{width:22,height:22,borderRadius:4,border:`2px solid ${sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:G2}`,background:sc.pvfi_nivel===k.replace('pvfi_nivel_','')?R:WH,display:'flex',alignItems:'center',justifyContent:'center',color:WH,fontSize:12,fontWeight:700,flexShrink:0}}>{sc.pvfi_nivel===k.replace('pvfi_nivel_','')&&'✓'}</div>
+                  </div>
+                ))}
+                <div style={{marginTop:8}}><span style={s.lbl}>Notas del equipo (fisio/entrenador)</span><textarea value={sc.pvfi_notas||''} onChange={e=>setSCK('pvfi_notas',e.target.value)} rows={2} placeholder="Observaciones integradas del equipo..." style={{...s.inp,resize:'vertical'}}/></div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
+                  <div><span style={s.lbl}>Próxima evaluación</span><DateInput value={sc.pvfi_proxima_eval||''} onChange={v=>setSCK('pvfi_proxima_eval',v)} style={s.inp}/></div>
+                  <div style={{display:'flex',alignItems:'flex-end'}}><div style={{fontSize:10,color:G3,lineHeight:1.5}}>Recomendado: 8–12 semanas desde la evaluación inicial.</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+        // ── PASO 9: BANDERAS CLÍNICAS ────────────────────────────────────
+        case 9: return(
+          <div>
+            <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🔒 <strong>Completado exclusivamente por fisioterapeuta.</strong> Lectura permitida al entrenador.</div>
+            <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:16}}>
+              {[
+                ['banderaRoja','🔴 Bandera Roja','Patología seria: tumor, fractura, infección, neurológico','Derivación médica inmediata'],
+                ['banderaNaranja','🟠 Bandera Naranja','Trastorno psicológico que influye en el dolor','Comunicación con salud mental'],
+                ['banderaAmarilla','🟡 Bandera Amarilla','Miedo al movimiento, catastrofismo, kinesiofobia','Abordaje educativo + progresión gradual'],
+              ].map(([k,titulo,desc,accion])=>(
+                <div key={k} style={{display:'grid',gridTemplateColumns:'1fr 100px',gap:8,alignItems:'center',background:G1,borderRadius:6,padding:'8px 10px'}}>
+                  <div><div style={{fontSize:12,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4}}>{desc}</div><div style={{fontSize:10,color:R,marginTop:2}}>{accion}</div></div>
+                  <select value={sc[k]||'no'} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel}}>
+                    <option value="no">No</option>
+                    <option value="si">Sí</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:8}}>Restricciones activas — alimentan el filtro de ejercicios</div>
+            {[
+              ['restriccionImpacto','🚫 Restricción de impacto','Sin saltos, carrera, pliometría → bloquea bloque Potencia'],
+              ['restriccionOverhead','🚫 Restricción overhead','Sin cargas sobre la cabeza → alerta en empuje vertical'],
+              ['restriccionCargaAxial','⚠️ Restricción carga axial','Sin sentadilla/peso muerto pesados → alerta en Fuerza bilateral'],
+            ].map(([k,titulo,desc])=>(
+              <div key={k} style={{display:'grid',gridTemplateColumns:'1fr 80px',gap:8,alignItems:'center',marginBottom:8,border:`1px solid ${G2}`,borderRadius:6,padding:'8px 10px'}}>
+                <div><div style={{fontSize:12,fontWeight:700}}>{titulo}</div><div style={{fontSize:10,color:G4}}>{desc}</div></div>
+                <select value={sc[k]||'no'} onChange={e=>setSCK(k,e.target.value)} style={s.sel}>
+                  <option value="no">No</option>
+                  <option value="si">Sí</option>
+                </select>
+              </div>
+            ))}
+            <div style={{marginTop:8}}><span style={s.lbl}>Otra restricción específica</span><input value={sc.otraRestriccion||''} onChange={e=>setSCK('otraRestriccion',e.target.value)} style={s.inp} placeholder="Especificar si aplica"/></div>
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:11,fontWeight:700,marginBottom:8}}>🚦 Semáforo de carga — Estado para el entrenador</div>
+              <div style={{display:'flex',gap:8}}>
+                {[['verde','🟢 Verde — Sin restricciones'],['amarillo','🟡 Amarillo — Restricciones parciales'],['rojo','🔴 Rojo — Solo clínica']].map(([v,l])=>{
+                  const sfv=SF[v];
                   return(
-                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
-                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
-                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
-                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
-                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
-                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
-                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
+                    <div key={v} onClick={()=>setSCK('semaforoAsignado',v)} style={{flex:1,padding:'10px 8px',borderRadius:8,border:`2px solid ${sc.semaforoAsignado===v?sfv.color:G2}`,background:sc.semaforoAsignado===v?sfv.bg:WH,cursor:'pointer',textAlign:'center',fontSize:11,fontWeight:sc.semaforoAsignado===v?700:400,color:sc.semaforoAsignado===v?sfv.color:'#333',transition:'all .15s'}}>
+                      {l}
                     </div>
                   );
                 })}
               </div>
             </div>
-            {/* Historial */}
-            <div style={s.card}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
-              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
-              {tests.map(t=>{
-                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
-                const rm1=t.rm1_real||t.rm1_calculado;
-                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
-                return(
-                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
-                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
-                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
-                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
-                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
-                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
-                      </div>
-                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
-                    </div>
-                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
-                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
-                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
-                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
-                    </div>
-                  </div>
-                );
-              })}
+          </div>
+        );
+        // ── PASO 10: POTENCIA Y SALTOS (SOLO DEPORTISTAS) ─────────────────
+        case 10: {
+          const bloqueado = sc.banderaRoja==='si' || sc.restriccionImpacto==='si';
+          if (bloqueado) return (
+            <div>
+              <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'18px 16px',textAlign:'center'}}>
+                <div style={{fontSize:28,marginBottom:6}}>🚫</div>
+                <div style={{fontSize:13,fontWeight:800,color:R,marginBottom:6}}>Sección bloqueada</div>
+                <div style={{fontSize:11,color:G4,lineHeight:1.5}}>
+                  {sc.banderaRoja==='si' && <>Hay una <strong>bandera roja</strong> activa (patología seria pendiente de derivación médica).<br/></>}
+                  {sc.restriccionImpacto==='si' && <>Hay una <strong>restricción de impacto</strong> activa (sin saltos/pliometría).<br/></>}
+                  Los tests de salto y potencia implican impacto y aterrizaje — no corresponde aplicarlos mientras estas condiciones estén vigentes. Resolvé la causa clínica primero.
+                </div>
+              </div>
             </div>
-          </>
+          );
+          const sexo = sc.genero;
+          const cmj = nivelCMJ(parseFloat(sc.pot_cmj), sexo);
+          const sj = nivelSJ(parseFloat(sc.pot_sj), sexo);
+          const broad = nivelBroadJump(parseFloat(sc.pot_broad), sexo);
+          const rsiVal = calcularRSI(parseFloat(sc.pot_drop_altura), parseFloat(sc.pot_drop_contacto));
+          const rsi = nivelRSI(rsiVal);
+          const lsiVal = calcularLSI(parseFloat(sc.pot_hop_dom), parseFloat(sc.pot_hop_nodom));
+          const lsi = nivelLSI(lsiVal);
+          const Campo = ({lbl, children, niv}) => (
+            <div style={{background:G1,borderRadius:6,padding:'8px 10px',marginBottom:8}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <span style={{fontSize:11,fontWeight:700,color:G4}}>{lbl}</span>
+                {niv && <span style={s.tag(niv.color)}>{niv.label}</span>}
+              </div>
+              {children}
+            </div>
+          );
+          return(
+            <div>
+              <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12,color:'#5B21B6'}}>
+                🏃 <strong>Solo para deportistas activos.</strong> No aplicar a población clínica, sedentaria o que entrena por salud/estética. Los niveles son <strong>orientativos y generales</strong>, no específicos por disciplina — usalos para seguir la progresión del deportista, no como corte diagnóstico.
+              </div>
+
+              <Campo lbl="CMJ — Salto con contramovimiento (manos en cadera)" niv={cmj}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_cmj||''} onChange={e=>setSCK('pot_cmj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                </div>
+              </Campo>
+
+              <Campo lbl="SJ — Squat jump (sin contramovimiento, manos en cadera)" niv={sj}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_sj||''} onChange={e=>setSCK('pot_sj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                  {sc.pot_cmj && sc.pot_sj && parseFloat(sc.pot_sj)>0 && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>Ratio CMJ/SJ: {(parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)).toFixed(2)} {parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)<1.05?'(bajo uso del ciclo elástico)':''}</span>}
+                </div>
+              </Campo>
+
+              <Campo lbl="Salto horizontal (broad jump)" niv={broad}>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_broad||''} onChange={e=>setSCK('pot_broad',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:110}}/>
+                  <span style={{fontSize:10,color:G3}}>cm</span>
+                </div>
+              </Campo>
+
+              <Campo lbl="Drop Jump — Reactive Strength Index (RSI)" niv={rsi}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_drop_altura||''} onChange={e=>setSCK('pot_drop_altura',e.target.value)} placeholder="Altura salto (cm)" style={{...s.inp,width:120}}/>
+                  <input type="number" value={sc.pot_drop_contacto||''} onChange={e=>setSCK('pot_drop_contacto',e.target.value)} placeholder="Contacto (seg)" step="0.01" style={{...s.inp,width:110}}/>
+                  {rsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>RSI = {rsiVal}</span>}
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Cajón 30cm de referencia · esta banda es aproximada, más dependiente del protocolo/equipo que el resto</div>
+              </Campo>
+
+              <Campo lbl="Salto unipodal (hop test) — simetría entre piernas" niv={lsi}>
+                <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                  <input type="number" value={sc.pot_hop_dom||''} onChange={e=>setSCK('pot_hop_dom',e.target.value)} placeholder="Pierna dominante (cm)" style={{...s.inp,width:140}}/>
+                  <input type="number" value={sc.pot_hop_nodom||''} onChange={e=>setSCK('pot_hop_nodom',e.target.value)} placeholder="Pierna no dom. (cm)" style={{...s.inp,width:140}}/>
+                  {lsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>LSI = {lsiVal}%</span>}
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Estándar de retorno deportivo: LSI ≥90% aceptable. Menor a 85% = mayor riesgo, especialmente post-lesión.</div>
+              </Campo>
+
+              <Campo lbl="Lanzamiento de balón medicinal (potencia tren superior)">
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <input type="number" value={sc.pot_mb_peso||''} onChange={e=>setSCK('pot_mb_peso',e.target.value)} placeholder="Peso balón (kg)" style={{...s.inp,width:120}}/>
+                  <input type="number" value={sc.pot_mb_dist||''} onChange={e=>setSCK('pot_mb_dist',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:120}}/>
+                </div>
+                <div style={{fontSize:8,color:'#999',marginTop:3}}>Sin tabla normativa consolidada (varía mucho por peso de balón y técnica) — se registra solo para seguimiento de progresión, sin nivel asignado.</div>
+              </Campo>
+            </div>
+          );
+        }
+        // ── PASO 10: SÍNTESIS Y PLAN ─────────────────────────────────────
+        case 11: return(
+          <div>
+            <div><span style={s.lbl}>Hallazgos principales</span><textarea value={sc.hallazgosPrincipales||''} onChange={e=>setSCK('hallazgosPrincipales',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
+            <div style={{marginTop:10}}><span style={s.lbl}>Prioridades de trabajo</span><textarea value={sc.prioridades||''} onChange={e=>setSCK('prioridades',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
+            <div style={{marginTop:14,fontSize:11,fontWeight:700,marginBottom:8}}>Asignación de nivel — Método Activa Integra</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+              {Object.entries(NIVEL).map(([k,v])=>(
+                <div key={k} onClick={()=>setSCK('nivelAsignado',k)} style={{padding:'12px',borderRadius:8,border:`2px solid ${sc.nivelAsignado===k?v.color:G2}`,background:sc.nivelAsignado===k?`${v.color}14`:WH,cursor:'pointer',transition:'all .15s'}}>
+                  <div style={{fontWeight:800,color:v.color,fontSize:12}}>{v.badge} · {v.label}</div>
+                  <div style={{fontSize:11,color:G4,marginTop:2}}>{v.desc}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}}>
+              <div><span style={s.lbl}>Frecuencia semanal</span><input value={sc.frecuencia||''} onChange={e=>setSCK('frecuencia',e.target.value)} style={s.inp} placeholder="ej: 3 sesiones"/></div>
+              <div><span style={s.lbl}>Duración por sesión</span><input value={sc.duracion||''} onChange={e=>setSCK('duracion',e.target.value)} style={s.inp} placeholder="ej: 60 min"/></div>
+              <div><span style={s.lbl}>Revisión programada</span><input value={sc.revision||''} onChange={e=>setSCK('revision',e.target.value)} style={s.inp} placeholder="ej: 8 semanas"/></div>
+            </div>
+            <div><span style={s.lbl}>Observaciones adicionales del equipo</span><textarea value={sc.observaciones||''} onChange={e=>setSCK('observaciones',e.target.value)} rows={2} placeholder="Cualquier información relevante para el plan inicial..." style={{...s.inp,resize:'vertical'}}/></div>
+            <div style={{marginTop:14,background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:8,padding:'12px 14px'}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>Resumen del alta</div>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Nivel</div><div style={{fontSize:13,fontWeight:700,color:NIVEL[sc.nivelAsignado]?.color}}>{NIVEL[sc.nivelAsignado]?.label}</div></div>
+                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Semáforo</div><div style={{fontSize:13,fontWeight:700,color:SF[sc.semaforoAsignado]?.color}}>{SF[sc.semaforoAsignado]?.emoji} {SF[sc.semaforoAsignado]?.label}</div></div>
+                <div><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>Restricciones activas</div><div style={{fontSize:12,fontWeight:700}}>{[sc.restriccionImpacto==='si'&&'Impacto',sc.restriccionOverhead==='si'&&'Overhead',sc.restriccionCargaAxial==='si'&&'Carga axial',sc.otraRestriccion].filter(Boolean).join(', ')||'Ninguna'}</div></div>
+              </div>
+            </div>
+          </div>
+        );
+        default: return null;
+      }
+    };
+
+    const canNext=step===0?(!!(form.nombre&&form.apellido&&form.documento&&form.celular)):step===4?true:true;
+    const isLast=step===totalSteps-1;
+
+    return(
+      OverlayWrap({wide:true,children:(<>
+        {/* Header del wizard */}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:15}}>{form.nombre?`${form.nombre} ${form.apellido}`:'Alta de nuevo cliente'}</div>
+            <div style={{fontSize:11,color:G3,marginTop:2}}>{WIZARD_STEPS[step].fase===1?'📋 Fase 1 — Autocompletado':WIZARD_STEPS[step].fase==='transicion'?'💾 Guardar progreso':'🩺 Fase 2 — Evaluación profesional'}</div>
+          </div>
+          <button onClick={()=>{setClientWizard(null);}} style={s.btnG}>✕</button>
+        </div>
+        {/* Barra de pasos */}
+        <div style={{display:'flex',gap:3,marginBottom:16,overflowX:'auto'}}>
+          {WIZARD_STEPS.map((ws,i)=>(
+            <div key={i} onClick={()=>i<step&&setStep(i)} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:6,background:i===step?BK:i<step?'#E5E7EB':G1,color:i===step?WH:i<step?G4:G3,fontSize:10,fontWeight:i===step?700:400,cursor:i<step?'pointer':'default',flexShrink:0,whiteSpace:'nowrap'}}>
+              <span>{i<step?'✓':ws.icon}</span>
+              <span style={{display:window.innerWidth>600?'inline':'none'}}>{ws.title}</span>
+              {window.innerWidth<=600&&<span>{i+1}</span>}
+            </div>
+          ))}
+        </div>
+        {/* Título del paso */}
+        <div style={{background:BK,borderRadius:8,padding:'10px 14px',marginBottom:14,borderLeft:`3px solid ${R}`}}>
+          <div style={{color:WH,fontWeight:700,fontSize:13}}>{WIZARD_STEPS[step].icon} Paso {step+1} de {totalSteps} — {WIZARD_STEPS[step].title}</div>
+        </div>
+        {/* Contenido */}
+        <div style={{maxHeight:'50vh',overflowY:'auto',paddingRight:4}}>
+          {renderStep()}
+        </div>
+        {/* Navegación */}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:16,paddingTop:12,borderTop:`1px solid ${G2}`}}>
+          <button onClick={()=>step>0&&setStep(p=>p-1)} disabled={step===0} style={{...s.btnG,opacity:step===0?.3:1}}>← Anterior</button>
+          <span style={{fontSize:11,color:G3}}>{step+1} / {totalSteps}</span>
+          {isLast
+            ?<button onClick={finalize} style={{...s.btnGreen,padding:'9px 20px'}}>✓ Completar alta</button>
+            :<button onClick={()=>canNext&&setStep(p=>p+1)} disabled={!canNext} style={{...s.btnR,opacity:!canNext?.4:1}}>Siguiente →</button>
+          }
+        </div>
+        {step===0&&(!form.nombre||!form.apellido||!form.documento||!form.celular)&&(
+          <div style={{fontSize:10,color:'#D97706',textAlign:'center',marginTop:6}}>* Nombre, apellido, documento y celular son obligatorios para continuar</div>
         )}
-        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
+      </>)})
+    );
+  };
+
+  // ─── BANNER SEMÁFORO ─────────────────────────────────────────────────────
+
+// ── Mini evaluación de cierre de periodización ──────────────────────────
+// Corta, a propósito: solo lo necesario para comparar inicio vs. fin y
+// decidir si se cumplieron los requisitos de avance. Genera un PDF listo
+// para mostrarle al cliente y queda registrada en periodizacionesHistorial.
+const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
+  const per=PERIODIZACIONES[cliente.periodizacion];
+  const snap=cliente.periodizacionSnapshotInicio||{};
+  const [pesoFin,setPesoFin]=useState(cliente.screening?.peso||'');
+  const [pctGrasaFin,setPctGrasaFin]=useState(cliente.screening?.pctGrasa||'');
+  const [notas,setNotas]=useState('');
+  const [cumplioObjetivo,setCumplioObjetivo]=useState(null); // true/false/null
+
+  const diff=(ini,fin)=>{
+    const a=parseFloat(ini),b=parseFloat(fin);
+    if(isNaN(a)||isNaN(b))return null;
+    const d=b-a;
+    return {valor:d,txt:(d>0?'+':'')+d.toFixed(1)};
+  };
+  const diffPeso=diff(snap.peso,pesoFin);
+  const diffGrasa=diff(snap.pctGrasa,pctGrasaFin);
+
+  const generarYCerrar=()=>{
+    const hoy=new Date().toISOString().split('T')[0];
+    const registro={
+      id:genId('pereval'),
+      periodizacionId:cliente.periodizacion,
+      periodizacionNombre:per?.nombre||cliente.periodizacion,
+      faseMetodo:cliente.nivel,
+      inicio:{fecha:snap.fecha||cliente.periodizacionInicio,peso:snap.peso,pctGrasa:snap.pctGrasa,imc:snap.imc},
+      fin:{fecha:hoy,peso:pesoFin,pctGrasa:pctGrasaFin},
+      cumplioObjetivo,notas,
+    };
+    const bc=brand.colorPrimary;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cierre de periodización — ${cliente.nombre}</title><style>${getPrintCSS(bc)}
+      .comp{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #e2e2e2;border-radius:6px;overflow:hidden;margin-bottom:14px}
+      .comp .col{padding:12px 14px}
+      .comp .col.fin{background:#F0FDF4;border-left:1px solid #e2e2e2}
+      .comp .lbl{font-size:9px;color:#999;text-transform:uppercase;margin-bottom:2px}
+      .comp .val{font-size:20px;font-weight:800}
+      </style></head><body>
+      <div class="doc-header"><div><div class="brand">${brand.gymName}</div><div class="brand-tag">Cierre de periodización</div></div><div class="doc-meta"><strong>${cliente.nombre} ${cliente.apellido}</strong><br/>${hoy}</div></div>
+      <div class="sec"><div class="sec-title">${registro.periodizacionNombre}</div><div class="sec-body filas">
+        <div class="fila"><span class="fila-label">Inicio</span><span class="fila-val">${registro.inicio.fecha||'—'}</span></div>
+        <div class="fila"><span class="fila-label">Cierre</span><span class="fila-val">${hoy}</span></div>
+        <div class="fila"><span class="fila-label">Fase del método</span><span class="fila-val">${NIVEL[cliente.nivel]?.label||cliente.nivel}</span></div>
+      </div></div>
+      <div class="comp">
+        <div class="col"><div class="lbl">Peso — Inicio</div><div class="val">${snap.peso||'—'} kg</div></div>
+        <div class="col fin"><div class="lbl">Peso — Cierre</div><div class="val" style="color:${diffPeso?(diffPeso.valor<0?'#16A34A':'#DC2626'):'#111'}">${pesoFin||'—'} kg ${diffPeso?`(${diffPeso.txt})`:''}</div></div>
+        <div class="col"><div class="lbl">% Grasa — Inicio</div><div class="val">${snap.pctGrasa||'—'}%</div></div>
+        <div class="col fin"><div class="lbl">% Grasa — Cierre</div><div class="val" style="color:${diffGrasa?(diffGrasa.valor<0?'#16A34A':'#DC2626'):'#111'}">${pctGrasaFin||'—'}% ${diffGrasa?`(${diffGrasa.txt})`:''}</div></div>
+      </div>
+      ${cumplioObjetivo!==null?`<div class="alerta ${cumplioObjetivo?'verde':'ambar'}">${cumplioObjetivo?'✓ Se cumplieron los requisitos de avance planteados para este ciclo.':'⚠ No se cumplieron todos los requisitos — evaluar extender o ajustar el ciclo.'}</div>`:''}
+      ${notas?`<div class="sec"><div class="sec-title">Notas del profesional</div><div class="sec-body">${notas}</div></div>`:''}
+      ${footerHTML({centro:brand.gymName,pieTexto:'Método Activa Integra'})}
+      <script>window.onload=()=>window.print()<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+
+    saveClient({
+      ...cliente,
+      periodizacionesHistorial:[...(cliente.periodizacionesHistorial||[]),registro],
+      // se cierra el ciclo — queda sin periodización asignada hasta que se elija la siguiente
+      periodizacion:'',periodizacionInicio:'',periodizacionFin:'',periodizacionSnapshotInicio:null,
+    });
+    onClose();
+  };
+
+  return OverlayWrap({children:(<>
+    <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>🎯 Mini evaluación de cierre</div>
+    <div style={{fontSize:11,color:G3,marginBottom:14}}>{per?.nombre} · {cliente.nombre} {cliente.apellido} · inició {snap.fecha||cliente.periodizacionInicio||'—'}</div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+      <div><span style={s.lbl}>Peso actual (kg)</span><input value={pesoFin} onChange={e=>setPesoFin(e.target.value)} style={s.inp} placeholder={snap.peso||'—'}/></div>
+      <div><span style={s.lbl}>% Grasa actual</span><input value={pctGrasaFin} onChange={e=>setPctGrasaFin(e.target.value)} style={s.inp} placeholder={snap.pctGrasa||'—'}/></div>
+    </div>
+    <div style={{marginBottom:10}}>
+      <span style={s.lbl}>¿Se cumplieron los requisitos de avance planteados para este ciclo?</span>
+      <div style={{display:'flex',gap:6,marginTop:3}}>
+        {[['Sí',true,'#16A34A'],['No',false,'#DC2626']].map(([lbl,v,c])=>(
+          <button key={lbl} onClick={()=>setCumplioObjetivo(v)} style={{fontSize:11,fontWeight:700,padding:'6px 14px',borderRadius:6,border:`1px solid ${cumplioObjetivo===v?c:G2}`,background:cumplioObjetivo===v?c:WH,color:cumplioObjetivo===v?WH:G4,cursor:'pointer'}}>{lbl}</button>
+        ))}
+      </div>
+    </div>
+    <div style={{marginBottom:14}}><span style={s.lbl}>Notas (opcional)</span><textarea value={notas} onChange={e=>setNotas(e.target.value)} style={{...s.inp,minHeight:60,resize:'vertical'}} placeholder="Observaciones sobre el cierre de este ciclo..."/></div>
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={onClose} style={{...s.btnG,flex:1}}>Cancelar</button>
+      <button onClick={generarYCerrar} style={{...s.btnR,flex:2,background:brand.colorPrimary}}>📄 Generar PDF y cerrar ciclo</button>
+    </div>
+  </>)});
+};
+
+export default function App(){
+  const s=mkS();
+  const [tab,setTab]=useState(()=>{
+    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
+  });
+  useEffect(()=>{
+    try { localStorage.setItem('activa_tab',tab); } catch {}
+  },[tab]);
+  // Ejercicios en tiempo real (Supabase) — seeded from DB0 on first run
+  const { exs, saveEjercicio: dbSaveEjercicio, deleteEjercicio: dbDeleteEjercicio, setExs } = useEjercicios(DB0);
+  // ── ESTADO DE PLAN SEMANAL ────────────────────────────────────────────────
+  // El plan agrupa de 1 a 5 sesiones (días) que comparten cliente/fecha/plan.
+  // Cada día = { id, obj, name, blocks, notas }. activeDia = día en edición.
+  const blankDia=(n=1)=>({id:genId('dia'),obj:null,name:`Día ${n}`,blocks:[],notas:''});
+  const [session,setSession]=useState({
+    cliente:'', clienteId:null, fecha:new Date().toISOString().split('T')[0],
+    planNombre:'', dias:[blankDia(1)], activeDia:0,
+    faseIdx:0, // qué fase de la periodización se está armando (no siempre la inicial — se puede adelantar trabajo)
+  });
+  // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
+  const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
+  const [clients, setClientsLocal] = useState([]);
+
+  // Sincronizar clientes de DB con estado local
+  useEffect(()=>{ setClientsLocal(dbClients); }, [dbClients]);
+
+  // Wrappers que persisten en DB Y actualizan estado local
+  const saveClientFn = useCallback(async (client) => {
+    await dbSaveClient(client);
+  }, [dbSaveClient]);
+
+  const deleteClientFn = useCallback(async (id) => {
+    await dbDeleteClient(id);
+    if(session.clienteId===id) setSession(p=>({...p,clienteId:null,cliente:''}));
+  }, [dbDeleteClient, session.clienteId]);
+
+  const updateClientFn = useCallback(async (id, updates) => {
+    await dbUpdateClient(id, updates);
+  }, [dbUpdateClient]);
+  const [showExForm,setShowExForm]=useState(false);
+  const [editingEx,setEditingEx]=useState(null);
+  const [expandedBlock,setExpandedBlock]=useState(null);
+  const [selBlock,setSelBlock]=useState(null);
+  const [replaceTarget,setReplaceTarget]=useState(null);
+  const [exSearch,setExSearch]=useState('');
+  const [overrideState,setOverrideState]=useState(null);
+  const [addBType,setAddBType]=useState('');
+  const [addBPos,setAddBPos]=useState('');
+  // brand ahora sincroniza entre dispositivos vía Supabase realtime (antes
+  // vivía solo en localStorage — ver useCentroConfig en db.js).
+  const { config: brand, saveConfig: setBrand } = useCentroConfig();
+  const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
+  const [clientWizard,setClientWizard]=useState(null);
+  const [clienteSearch,setClienteSearch]=useState('');
+  const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
+  const [miniEvalCliente,setMiniEvalCliente]=useState(null); // cliente con el modal de mini evaluación de cierre abierto
+  const [editandoCriterios,setEditandoCriterios]=useState(null); // fase cuya plantilla se está editando
+  const [informeCliente,setInformeCliente]=useState(null);
+
+  const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
+
+  const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
+  // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
+  const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
+  // Registro de planes del cliente activo + base de conocimiento de la IA
+  const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
+  // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
+  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
+  const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
+  // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
+  const ejecucionResumen=useMemo(()=>{
+    if(!ejecRegistros.length)return [];
+    const porEx={};
+    ejecRegistros.forEach(r=>{
+      if(r.peso_real==null&&!r.reps_real)return;
+      const nom=r.ejercicio_nombre||(exs.find(e=>e.id===r.ejercicio_id)?.nombre)||r.ejercicio_id;
+      (porEx[nom]=porEx[nom]||[]).push({sem:r.semana,peso:r.peso_real,reps:r.reps_real});
+    });
+    return Object.entries(porEx).map(([nom,arr])=>{
+      arr.sort((a,b)=>a.sem-b.sem);
+      const pts=arr.map(x=>`S${x.sem}: ${x.peso!=null?x.peso+'kg':''}${x.reps?'×'+x.reps:''}`.trim());
+      return `${nom} → ${pts.join(', ')}`;
+    });
+  },[ejecRegistros,exs]);
+  const {reglas:iaReglas,saveRegla:saveIaRegla,deleteRegla:deleteIaRegla}=useIAConocimiento();
+  const [showHistorial,setShowHistorial]=useState(false);
+  const [verEjecucion,setVerEjecucion]=useState(null);
+  const [compilarSel,setCompilarSel]=useState([]);
+  const [showEntrenarIA,setShowEntrenarIA]=useState(false);
+  // Fase activa del plan de periodización del cliente
+  const activeFasePlan=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
+  },[activeClient]);
+
+  // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
+  const numDias=session.dias?.length||1;
+  const activeDiaIdx=Math.min(session.activeDia||0,numDias-1);
+  const dia=session.dias?.[activeDiaIdx]||{obj:null,blocks:[],name:'',notas:''};
+  // Cronograma (plazos) del plan según la periodización del cliente y la fecha de inicio
+  const planMeta=useMemo(()=>{
+    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
+    return planTimeline(PERIODIZACIONES[activeClient.periodizacion],session.fecha);
+  },[activeClient,session.fecha]);
+
+  // Modifica SOLO el día activo (fn recibe el día y devuelve el día nuevo)
+  const setDia=(fn)=>setSession(p=>{
+    const idx=Math.min(p.activeDia||0,(p.dias?.length||1)-1);
+    return {...p,dias:(p.dias||[]).map((d,i)=>i===idx?fn(d):d)};
+  });
+  const addDia=()=>setSession(p=>{
+    if((p.dias?.length||0)>=6)return p;
+    return {...p,dias:[...p.dias,blankDia((p.dias?.length||0)+1)],activeDia:p.dias.length};
+  });
+  const removeDia=(idx)=>setSession(p=>{
+    if((p.dias?.length||1)<=1)return p;
+    const dias=p.dias.filter((_,i)=>i!==idx).map((d,i)=>({...d,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Día ${i+1}`}));
+    return {...p,dias,activeDia:Math.max(0,Math.min(p.activeDia,dias.length-1))};
+  });
+  const gotoDia=(idx)=>setSession(p=>({...p,activeDia:Math.max(0,Math.min(idx,(p.dias?.length||1)-1))}));
+  const setNumDias=(target)=>setSession(p=>{
+    const cur=p.dias?.length||1;
+    if(target===cur||target<1||target>6)return p;
+    if(target>cur){
+      const extra=Array.from({length:target-cur},(_,k)=>blankDia(cur+k+1));
+      return {...p,dias:[...p.dias,...extra]};
+    }
+    return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
+  });
+  const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
+
+  // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
+  // Resumen textual compacto de un plan (para la lista y como contexto de IA)
+  const resumirPlan=(dias)=>{
+    return (dias||[]).filter(d=>d.obj&&d.blocks.length).map((d,i)=>{
+      const ejs=d.blocks.flatMap(b=>b.exercises.map(be=>{
+        const ex=exs.find(e=>e.id===be.exId);const p=be.params||b.params;
+        return ex?`${ex.nombre} ${p.series||'?'}×${p.reps||'?'}`:null;
+      }).filter(Boolean));
+      return `${d.name||`Día ${i+1}`} (${OBJS[d.obj]?.label||d.obj}): ${ejs.join('; ')}`;
+    }).join(' | ');
+  };
+  const guardarPlanActual=async()=>{
+    if(!activeClient){alert('Vinculá un cliente antes de guardar el plan.');return;}
+    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasArmados.length){alert('No hay días con ejercicios para guardar.');return;}
+    const id=session.planId||genId('plan');
+    const registro={
+      id,
+      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
+      fecha_inicio:session.fecha,
+      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
+      periodizacion:activeClient.periodizacion||'',
+      nivel_metodo:activeClient.nivel||'',
+      num_dias:diasArmados.length,
+      estado:session.planEstado||'activo',
+      dias:session.dias,
+      plazos:planMeta||null,
+      resumen:resumirPlan(session.dias),
+      es_ejemplo:session.planEsEjemplo||false,
+      notas:session.planNotasGlobal||'',
+    };
+    try{
+      await saveGymPlan(registro);
+      setSession(p=>({...p,planId:id}));
+      alert('💾 Plan guardado en el historial del cliente.');
+    }catch(e){alert('Error al guardar el plan: '+e.message);}
+  };
+  const cargarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:plan.id,
+      planNombre:plan.nombre,
+      fecha:plan.fecha_inicio||p.fecha,
+      planEstado:plan.estado,
+      planEsEjemplo:plan.es_ejemplo,
+      dias:(plan.dias&&plan.dias.length)?plan.dias:[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setExpandedBlock(null);setSelBlock(null);
+    setTab('session');
+  };
+  const duplicarPlan=(plan)=>{
+    setSession(p=>({
+      ...p,
+      planId:null, // nuevo registro
+      planNombre:`${plan.nombre} (copia)`,
+      fecha:new Date().toISOString().split('T')[0],
+      planEstado:'activo',planEsEjemplo:false,
+      dias:(plan.dias&&plan.dias.length)?JSON.parse(JSON.stringify(plan.dias)):[blankDia(1)],
+      activeDia:0,
+    }));
+    setShowHistorial(false);setTab('session');
+  };
+  const cambiarEstadoPlan=async(plan,estado)=>{try{await saveGymPlan({...plan,estado});}catch(e){console.error(e);}};
+  const marcarEjemploPlan=async(plan,val)=>{try{await saveGymPlan({...plan,es_ejemplo:val});}catch(e){console.error(e);}};
+
+  // ─── LÓGICA DE SESIÓN ────────────────────────────────────────────────────
+  const applyAISession=(aiResult)=>{
+    // Orden canónico de bloques en una sesión
+    const ORDEN_BLOQUES=['movilidad','activacion','propiocepcion','prev_rehab','potencia','pliometria','fuerza','accesorios','zona_media','funcional','cardio','flex_recovery'];
+    let descartados=0;
+    const blocks=(aiResult.blocks||[])
+      .filter(b=>BLOCKS[b.type]) // solo tipos de bloque válidos
+      .map((b)=>{
+        // VALIDACIÓN CLAVE: cada ejercicio debe pertenecer al bloque correcto.
+        // El ejercicio en la DB tiene .bloque — debe coincidir con b.type.
+        const ejerciciosValidos=(b.exercises||[]).filter(e=>{
+          const ex=exs.find(x=>x.id===e.exId);
+          if(!ex){descartados++;return false;}
+          if(ex.bloque!==b.type){descartados++;return false;} // descarta ej. en bloque equivocado
+          return true;
+        });
+        return {type:b.type,params:b.params,exercises:ejerciciosValidos};
+      })
+      .filter(b=>b.exercises.length>0) // descarta bloques que quedaron vacíos
+      .sort((a,b)=>ORDEN_BLOQUES.indexOf(a.type)-ORDEN_BLOQUES.indexOf(b.type)) // ordena
+      .map((b,i)=>({
+        id:Date.now()+i,
+        type:b.type,
+        position:i+1,
+        exercises:b.exercises.map(e=>({
+          exId:e.exId,override:false,note:'',
+          params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
+          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
+        })),
+        params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
+      }));
+    setDia(d=>({...d,obj:d.obj||activeClient?.nivel||'activa',blocks,name:aiResult.nombre||d.name,notas:aiResult.objetivo_sesion||d.notas}));
+    if(descartados>0)setTimeout(()=>alert(`✅ Sesión aplicada.\n⚠ Se descartaron ${descartados} ejercicio(s) que la IA ubicó en un bloque incorrecto o no existían en la base.`),100);
+  };
+  const suggestBlocks=(obj)=>{
+    const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
+    setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
+  };
+  const addBlock=()=>{
+    if(!addBType||!addBPos||dia.blocks.length>=7)return;
+    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
+    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
+    setAddBType('');setAddBPos('');
+  };
+  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
+  const addExToBlock=(blockId,exId,override=false,note='')=>{
+    setDia(d=>({...d,blocks:d.blocks.map(b=>{
+      if(b.id!==blockId||b.exercises.length>=5)return b;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,b.params.reps):null;
+      const exEntry={exId,override,note,
+        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
+        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:''};
+      return{...b,exercises:[...b.exercises,exEntry]};
+    })}));
+  };
+  const updateExParam=(blockId,exId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,[key]:val}:be)};
+  })}));
+  const updateExParams=(blockId,exId,params)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const merged={...be,params:{...(be.params||{}),...params}};
+      // Recalcular peso sugerido al cambiar reps/modo, salvo que se haya fijado a mano
+      if(('reps'in params||'modo'in params)&&be.pesoSugAuto!==false){
+        const exObj=exs.find(e=>e.id===exId);
+        const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,merged.params.reps):null;
+        merged.pesoSug=(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'';
+      }
+      return merged;
+    })};
+  })}));
+  // El usuario escribe un peso a mano → deja de recalcularse solo
+  const setPesoSugManual=(blockId,exId,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,pesoSug:val,pesoSugAuto:false}:be)};
+  })}));
+  // Volver a modo automático y recalcular desde las reps actuales
+  const reAutoPesoSug=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>{
+      if(be.exId!==exId)return be;
+      const exObj=exs.find(e=>e.id===exId);
+      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,(be.params||{}).reps):null;
+      return{...be,pesoSugAuto:true,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):''};
+    })};
+  })}));
+  const removeExFromBlock=(blockId,exId)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.filter(e=>e.exId!==exId)};
+  })}));
+  // Mover un ejercicio dentro del bloque (por índice, sin perder el resto)
+  const moveExInBlock=(blockId,idx,dir)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();const j=idx+dir;
+    if(idx<0||idx>=arr.length||j<0||j>=arr.length)return b;
+    [arr[idx],arr[j]]=[arr[j],arr[idx]];
+    return{...b,exercises:arr};
+  })}));
+  // Reemplazar el ejercicio en una posición por otro, conservando series/reps/etc.
+  const replaceExInBlock=(blockId,idx,ex,override=false,note='')=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    const arr=b.exercises.slice();
+    if(idx<0||idx>=arr.length)return b;
+    const ns=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,(arr[idx].params||b.params).reps);
+    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:'',pesoSugAuto:true};
+    return{...b,exercises:arr};
+  })}));
+  const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
+  // Agrupar ejercicios: biserie / triserie / circuito, con letra de grupo (A/B/C/D)
+  const setExGrupo=(blockId,exId,grupo)=>setDia(d=>({...d,blocks:d.blocks.map(b=>{
+    if(b.id!==blockId)return b;
+    return{...b,exercises:b.exercises.map(be=>be.exId===exId?{...be,grupo}:be)};
+  })}));
+
+  const handlePickEx=(block,ex)=>{
+    const rest=checkRestriction(ex,activeClient);
+    if(rest==='block'){
+      alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
+      return;
+    }
+    const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
+    if(rest==='warn'){
+      setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:true,replaceIdx:repl});
+      return;
+    }
+    if(ex.bloque!==block.type){setOverrideState({blockId:block.id,ex,blockType:block.type,note:'',isRestriction:false,replaceIdx:repl});return;}
+    if(repl!=null){replaceExInBlock(block.id,repl,ex);setReplaceTarget(null);setSelBlock(null);setExSearch('');}
+    else{addExToBlock(block.id,ex.id);setSelBlock(null);setExSearch('');}
+  };
+  const confirmOverride=()=>{
+    if(!overrideState)return;
+    if(overrideState.replaceIdx!=null){replaceExInBlock(overrideState.blockId,overrideState.replaceIdx,overrideState.ex,true,overrideState.note);setReplaceTarget(null);}
+    else addExToBlock(overrideState.blockId,overrideState.ex.id,true,overrideState.note);
+    setOverrideState(null);setSelBlock(null);setExSearch('');
+  };
+
+  // ─── GUARDAR CLIENTE ────────────────────────────────────────────────────
+  const saveClient=(client)=>{
+    saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
+    setClientWizard(null);
+  };
+  // Genera (si hace falta) y copia el link del portal personal del cliente
+  const copiarPortalCliente=async(c)=>{
+    let token=c.portal_token;
+    if(!token){
+      token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+      try{await updateClientFn(c.id,{portal_token:token});}
+      catch(e){alert('No se pudo generar el acceso: '+e.message);return;}
+    }
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('📲 Link del portal copiado:\n\n'+link+'\n\nEnviáselo al cliente (WhatsApp). Con ese enlace entra a SU entrenamiento y carga los pesos/reps de cada semana. Solo ve sus propios datos.');}
+    catch(e){prompt('Copiá el link del portal de '+c.nombre+':',link);}
+  };
+  // Regenera el token: invalida el link anterior y crea uno nuevo
+  const regenerarPortalCliente=async(c)=>{
+    if(!confirm(`¿Regenerar el link de ${c.nombre}?\n\nEl link anterior dejará de funcionar. Tenés que enviarle el nuevo.`))return;
+    const token=(genId('tk')+Math.random().toString(36).slice(2,10)+Date.now().toString(36)).replace(/[^a-z0-9]/gi,'').slice(0,32);
+    try{await updateClientFn(c.id,{portal_token:token});}
+    catch(e){alert('No se pudo regenerar: '+e.message);return;}
+    const link=`${location.origin}/portal.html?t=${token}`;
+    try{await navigator.clipboard.writeText(link);alert('🔄 Link nuevo generado y copiado:\n\n'+link+'\n\nEl anterior ya no sirve. Enviale este al cliente.');}
+    catch(e){prompt('Nuevo link del portal de '+c.nombre+':',link);}
+  };
+  const deleteClient=(id)=>{
+    deleteClientFn(id).catch(e=>console.error('Error eliminando cliente:',e));
+  };
+
+  // ─── EXPORTAR PDF (PLAN COMPLETO: TODOS LOS DÍAS + PLAZOS + GRILLA 8 SEM) ──
+  const exportPDF=()=>{
+    const diasConBloques=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    if(!diasConBloques.length){alert('No hay días con bloques cargados para exportar.');return;}
+    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+
+    // Tabla de UN día (una fila por ejercicio + 8 celdas vacías para pesos semanales)
+    const tablaDia=(d)=>{
+      const rows=d.blocks.flatMap(b=>{
+        const bd=BLOCKS[b.type];const bg=bd.color;
+        if(b.exercises.length===0){
+          return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        }
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const exNombre=ex?ex.nombre:be.exId;
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
+          const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0
+            ?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`
+            :'';
+          return`<tr>
+            ${bloqueCel}
+            <td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td>
+            <td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>
+            ${celdasSem}
+          </tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr>
+          <th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}
+        </tr></thead><tbody>${rows}</tbody></table>
+        ${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+
+    // Secciones de cada día, separadas con salto de página
+    const seccionesDias=diasConBloques.map((d,i)=>{
+      const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}>
+        <div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${d.blocks.reduce((a,b)=>a+b.exercises.length,0)} ejercicios</div></div></div>
+        ${tablaDia(d)}
+      </section>`;
+    }).join('');
+
+    // ── PLAZOS DEL PLAN (punto 4) ──
+    let plazosHtml='';
+    if(planMeta){
+      const faseRows=planMeta.fases.map(f=>`<tr>
+        <td style="padding:5px 9px;font-weight:700;font-size:10px;">${f.nombre}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.semanasLabel||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.fIni&&f.fFin?`${f.fIni} → ${f.fFin}`:'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.reps||'—'}</td>
+        <td style="padding:5px 9px;font-size:10px;text-align:center;">${f.intensidad||'—'}</td>
+        <td style="padding:5px 9px;font-size:9px;color:#555;">${f.objetivo||''}</td>
+      </tr>`).join('');
+      const totalTxt=planMeta.secuencial&&planMeta.totalSemanas
+        ?`<strong>${planMeta.totalSemanas} semanas</strong>${planMeta.fechaFin?` · ${planMeta.fechaInicio} → ${planMeta.fechaFin}`:''}`
+        :`${planMeta.duracionTexto} <span style="color:#888;">(fases no secuenciales en el tiempo)</span>`;
+      const faseMetodo=activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:(activeClient?activeClient.nivel:'—');
+      plazosHtml=`<section class="plazos">
+        <div class="sec-title">📅 Plazos del plan — ${planMeta.nombre}</div>
+        <div style="font-size:10px;color:#555;margin:2px 0 8px;">Autor/base: ${planMeta.autor||'—'} · Duración total: ${totalTxt}</div>
+        <div style="font-size:10px;color:#555;margin-bottom:8px;">Fase del Método Activa Integra: <strong style="color:${brand.colorPrimary};">${(faseMetodo||'').toUpperCase()}</strong> · El cronograma de abajo corresponde a las fases del <strong>plan asignado</strong> (no del método).</div>
+        <table class="plan"><thead><tr><th>Fase del plan</th><th style="text-align:center;">Semanas</th><th style="text-align:center;">Fechas estimadas</th><th style="text-align:center;">Reps</th><th style="text-align:center;">Intensidad</th><th>Objetivo</th></tr></thead><tbody>${faseRows}</tbody></table>
+      </section>`;
+    }
+
+    const sfBanner=activeClient?`<div class="sf" style="background:${SF[activeClient.semaforo].bg};border:1px solid ${SF[activeClient.semaforo].border};"><strong>${SF[activeClient.semaforo].emoji} SEMÁFORO ${SF[activeClient.semaforo].label}</strong>${activeClient.restricciones?` · ${activeClient.restricciones}`:''}</div>`:'';
+    const logoHtml=brand.logoImg
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      .sf{margin-bottom:12px;padding:9px 13px;border-radius:6px;font-size:11px}
+      .sec-title{font-size:14px;font-weight:800;color:${brand.colorPrimary};margin-top:4px}
+      .plazos{margin-bottom:16px;padding-bottom:14px;border-bottom:2px dashed #ddd}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:6px;margin-bottom:2px}
+      .dia-num{background:${brand.colorPrimary};color:#fff;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+      .dia-title{font-size:15px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:6px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${planNom}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:800;color:#111">${planNom}</div>
+          <div style="font-size:10px;color:#666;margin-top:3px">Cliente: ${session.cliente||'—'}${activeClient?` · Nivel: ${NIVEL[activeClient.nivel].label}`:''} · Inicio: ${session.fecha} · ${diasConBloques.length} sesión/es por semana</div>
+        </div>
+      </div>
+      ${sfBanner}
+      ${plazosHtml}
+      ${seccionesDias}
+      <div class="leyenda">S1–S8 = semanas 1 a 8 del plan. El cliente anota en cada celda el peso (kg) realmente utilizado esa semana. La columna % 1RM indica la intensidad teórica de las reps prescritas según el test de fuerza.</div>
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Generado ${new Date().toLocaleDateString('es-UY')}</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+  };
+
+  // Compila varios planes guardados (fases del bloque) en UN solo PDF, en orden
+  const compilarBloquePDF=(planes)=>{
+    const lista=(planes||[]).filter(p=>Array.isArray(p.dias)&&p.dias.some(d=>d.obj&&(d.blocks||[]).length>0));
+    if(lista.length===0){alert('Elegí al menos un plan con días armados para compilar.');return;}
+    const ord=[...lista].sort((a,b)=>{const fa=a.fecha_inicio||'',fb=b.fecha_inicio||'';if(!fa&&!fb)return 0;if(!fa)return 1;if(!fb)return -1;return fa<fb?-1:fa>fb?1:0;});
+    const SEMANAS=8;
+    const semHdr=Array.from({length:SEMANAS},(_,i)=>`<th style="width:34px;text-align:center;background:#333;">S${i+1}</th>`).join('');
+    const celdasSem=Array.from({length:SEMANAS},()=>`<td style="border:1px solid #cfcfcf;height:22px;min-width:34px;background:#fff;"></td>`).join('');
+    const tablaDia=(d)=>{
+      const rows=(d.blocks||[]).flatMap(b=>{
+        const bd=BLOCKS[b.type]||{color:'#333',label:b.type,emoji:''};const bg=bd.color;
+        if((b.exercises||[]).length===0)return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
+        return b.exercises.map((be,idx)=>{
+          const ex=exs.find(e=>e.id===be.exId);const exNombre=ex?ex.nombre:be.exId;const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');const pctTxt=sug?`${sug.pct}%`:'—';
+          const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
+          const bloqueCel=idx===0?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`:'';
+          return`<tr>${bloqueCel}<td style="padding:4px 8px;"><div style="font-weight:700;font-size:10px;">${be.grupo?`<span style="background:${GRUPO_COL[be.grupo.id]||'#7C3AED'};color:#fff;font-size:7px;padding:1px 5px;border-radius:99px;font-weight:700;margin-right:4px;">${grupoTagTxt(be.grupo)}</span>`:''}${exNombre}${be.override?' <span style="background:#FEE2E2;color:#CC0000;font-size:7px;padding:1px 4px;border-radius:99px;font-weight:700;">OVR</span>':''}</div><div style="font-size:8px;color:#888;">${detalle}</div></td><td style="padding:4px 6px;text-align:center;font-weight:700;color:#4C1D95;font-size:10px;">${pctTxt}${cargaSug?`<div style="font-size:8px;color:#7C3AED;font-weight:400;">${cargaSug} kg</div>`:''}</td>${celdasSem}</tr>`;
+        });
+      }).join('');
+      return`<table class="plan"><thead><tr><th style="width:26px;">#</th><th>Bloque</th><th>Ejercicio · series×reps · tempo</th><th style="width:54px;text-align:center;">% 1RM<br><span style="font-weight:400;font-size:7px;">/ sug.</span></th>${semHdr}</tr></thead><tbody>${rows}</tbody></table>${d.notas?`<div class="notas"><strong>Notas del día:</strong> ${d.notas}</div>`:''}`;
+    };
+    const fasesSecc=ord.map((pl,pi)=>{
+      const dias=(pl.dias||[]).filter(d=>d.obj&&(d.blocks||[]).length>0);
+      const rango=pl.fecha_inicio?`${pl.fecha_inicio}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}`:'';
+      const seccionesDias=dias.map((d,i)=>{
+        const nivelLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+        return`<section class="dia" ${i>0?'style="page-break-before:always;"':''}><div class="dia-hdr"><div class="dia-num">${i+1}</div><div><div class="dia-title">${d.name||`Día ${i+1}`}</div><div class="dia-sub">${nivelLbl} · ${(d.blocks||[]).reduce((a,b)=>a+(b.exercises||[]).length,0)} ejercicios</div></div></div>${tablaDia(d)}</section>`;
+      }).join('');
+      return`<div class="fase" style="page-break-before:always;"><div class="fase-hdr"><div class="fase-num">FASE ${pi+1}</div><div><div class="fase-title">${pl.nombre}</div><div class="fase-sub">${rango?`${rango} · `:''}${(pl.periodizacion||'').replace(/_/g,' ')} · ${dias.length} sesión/es por semana</div></div></div>${seccionesDias}</div>`;
+    }).join('');
+    const idxRows=ord.map((pl,pi)=>`<tr><td style="padding:5px 9px;font-weight:700;font-size:11px;">Fase ${pi+1}</td><td style="padding:5px 9px;font-size:11px;">${pl.nombre}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.fecha_inicio||'—'}${pl.fecha_fin_estimada?` → ${pl.fecha_fin_estimada}`:''}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${(pl.periodizacion||'').replace(/_/g,' ')||'—'}</td><td style="padding:5px 9px;font-size:10px;text-align:center;">${pl.num_dias||((pl.dias||[]).filter(d=>d.obj).length)} día/s</td></tr>`).join('');
+    const logoHtml=brand.logoImg
+      ?`<div style="display:flex;align-items:center;gap:12px"><img src="${brand.logoImg}" style="height:46px;object-fit:contain;flex-shrink:0;"/><div><div style="font-family:Arial Black,Arial,sans-serif;font-weight:900;font-size:20px;color:${brand.colorPrimary};letter-spacing:2px;line-height:1">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:3.5px;margin-top:3px">${brand.gymSub}</div></div></div>`
+      :`<div><div style="font-size:20px;font-weight:900;color:${brand.colorPrimary};letter-spacing:2px;">${brand.gymName}</div><div style="font-size:9px;color:#888;letter-spacing:4px;">${brand.gymSub}</div></div>`;
+    const css=`*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;background:#fff;color:#111;padding:22px}
+      .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${brand.colorPrimary};padding-bottom:12px;margin-bottom:14px}
+      table.plan{width:100%;border-collapse:collapse;margin-top:8px}
+      table.plan th{background:#1a1a1a;color:#fff;padding:6px 8px;font-size:9px;text-align:left;text-transform:uppercase;letter-spacing:.04em;border:1px solid #1a1a1a}
+      table.plan td{border-bottom:1px solid #e0e0e0;font-size:10px}
+      table.idx{width:100%;border-collapse:collapse;margin-top:14px}
+      table.idx th{background:#1a1a1a;color:#fff;padding:7px 9px;font-size:10px;text-align:left;text-transform:uppercase}
+      table.idx td{border-bottom:1px solid #e0e0e0}
+      .cover-title{font-size:26px;font-weight:900;color:${brand.colorPrimary};margin-top:26px;letter-spacing:1px}
+      .cover-sub{font-size:13px;color:#555;margin-top:6px}
+      .fase-hdr{display:flex;align-items:center;gap:12px;background:${brand.colorPrimary};color:#fff;padding:12px 16px;border-radius:8px;margin-bottom:10px}
+      .fase-num{background:rgba(255,255,255,.22);border-radius:6px;padding:6px 12px;font-weight:900;font-size:14px;flex-shrink:0}
+      .fase-title{font-size:18px;font-weight:900}
+      .fase-sub{font-size:10px;opacity:.9;margin-top:2px}
+      .dia-hdr{display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px}
+      .dia-num{background:#1a1a1a;color:#fff;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+      .dia-title{font-size:14px;font-weight:800;color:#111}
+      .dia-sub{font-size:10px;color:#777}
+      .notas{margin-top:8px;background:#f9f9f9;border-left:4px solid ${brand.colorPrimary};padding:8px 12px;font-size:10px;color:#555}
+      .leyenda{margin-top:14px;font-size:9px;color:#888;font-style:italic}
+      .footer{margin-top:18px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px}
+      @page{size:A4 landscape;margin:12mm}
+      @media print{body{padding:0}}`;
+    const nombreBloque=`Bloque de entrenamiento — ${activeClient?`${activeClient.nombre} ${activeClient.apellido}`:'Cliente'}`;
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${nombreBloque}</title><style>${css}</style></head><body>
+      <div class="hdr"><div>${logoHtml}</div><div style="text-align:right"><div style="font-size:16px;font-weight:800;color:#111">Plan por fases</div><div style="font-size:10px;color:#666;margin-top:3px">Generado ${new Date().toLocaleDateString('es-UY')}</div></div></div>
+      <div class="cover-title">${nombreBloque}</div>
+      <div class="cover-sub">${ord.length} fases · ${activeClient?`Nivel: ${NIVEL[activeClient.nivel].label}`:''}</div>
+      <table class="idx"><thead><tr><th>#</th><th>Fase</th><th style="text-align:center;">Fechas</th><th style="text-align:center;">Periodización</th><th style="text-align:center;">Sesiones</th></tr></thead><tbody>${idxRows}</tbody></table>
+      <div class="leyenda">Cada fase arranca en página nueva. S1–S8 = semanas de esa fase; el cliente anota el peso real usado. Las fases se ordenan por fecha de inicio.</div>
+      ${fasesSecc}
+      <div class="footer">${brand.gymName} · ${brand.gymSub} · Método Activa Integra</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+    const w=window.open('','_blank');w.document.write(html);w.document.close();
+  };
+
+  const exportCSV=()=>{
+    const headers=['Día','Posición','Bloque','Ejercicio','Override','Series','Reps','RPE','Tempo','Descanso','% 1RM','Peso sug. (kg)',...Array.from({length:8},(_,i)=>`Sem ${i+1}`),'Cliente','Nivel','Plan','Fecha inicio'];
+    const rows=[];
+    const nivelLabel=activeClient?NIVEL[activeClient.nivel].label:'';
+    const planNom=session.planNombre||'';
+    (session.dias||[]).forEach((d,di)=>{
+      if(!d.obj)return;
+      const diaLbl=d.name||`Día ${di+1}`;
+      const objLbl=d.obj&&OBJS[d.obj]?OBJS[d.obj].label:'';
+      d.blocks.forEach(b=>{
+        const bd=BLOCKS[b.type];
+        if(b.exercises.length===0){rows.push([diaLbl,b.position,bd.label,'(sin ejercicios)','',b.params.series,b.params.reps,b.params.rpe,b.params.tempo,b.params.descanso,'','','','','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);return;}
+        b.exercises.forEach(be=>{
+          const ex=exs.find(e=>e.id===be.exId);
+          const pr=be.params||b.params;
+          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          rows.push([diaLbl,b.position,bd.label,(be.grupo?`[${grupoTagTxt(be.grupo)}] `:'')+(ex?ex.nombre:be.exId),be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
+        });
+      });
+    });
+    const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${(planNom||'plan').replace(/\s/g,'_')}_${session.fecha}.csv`;a.click();URL.revokeObjectURL(url);
+  };
+
+  // ── InformeClienteModal — informe de evaluación gym + PDF + análisis IA ────
+
+  const SemaforoBanner=({cliente})=>{
+    if(!cliente)return null;
+    const sf=SF[cliente.semaforo];
+    const nv=NIVEL[cliente.nivel];
+    return(
+      <div style={{background:sf.bg,border:`1.5px solid ${sf.border}`,borderRadius:8,padding:'10px 14px',marginBottom:10,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{fontSize:22,flexShrink:0}}>{sf.emoji}</div>
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2}}>
+              <span style={{fontWeight:800,fontSize:12,color:sf.color}}>SEMÁFORO {sf.label}</span>
+              <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99}}>{nv.badge} {nv.label}</span>
+              {!cliente.screeningCompleto&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99,border:'1px solid #F59E0B'}}>EVALUACIÓN PENDIENTE</span>}
+            </div>
+            {cliente.restricciones
+              ?<div style={{fontSize:11,color:'#444'}}><strong>Restricciones:</strong> {cliente.restricciones}</div>
+              :<div style={{fontSize:11,color:G3}}>Sin restricciones documentadas</div>
+            }
+            {cliente.semaforo==='rojo'&&<div style={{fontSize:11,color:R,fontWeight:700,marginTop:4}}>⚠ Solo fisioterapia — Derivar antes de programar entrenamiento</div>}
+            {cliente.semaforo==='pendiente'&&<div style={{fontSize:11,color:'#D97706',marginTop:2}}>El filtro de ejercicios se activa al completar la evaluación funcional.</div>}
+            {cliente.periodizacion&&PERIODIZACIONES[cliente.periodizacion]&&(()=>{
+              const p=PERIODIZACIONES[cliente.periodizacion];
+              const f=p.fases[0];
+              return(
+                <div style={{marginTop:5,background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:5,padding:'6px 9px'}}>
+                  <div style={{fontSize:9,color:'#7C3AED',fontWeight:700,textTransform:'uppercase',marginBottom:2}}>📅 Periodización activa</div>
+                  <div style={{fontSize:11,color:'#4C1D95',fontWeight:700}}>{p.nombre}</div>
+                  <div style={{fontSize:10,color:'#6D28D9',display:'flex',gap:10,flexWrap:'wrap',marginTop:2}}>
+                    <span>Fase: <strong>{f?.nombre}</strong></span>
+                    <span>Reps: <strong>{f?.reps}</strong></span>
+                    <span>Intensidad: <strong>{f?.intensidad}</strong></span>
+                    <span>RIR: <strong>{f?.rir}</strong></span>
+                  </div>
+                  <div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontStyle:'italic'}}>{f?.objetivo}</div>
+                </div>
+              );
+            })()}
+            {cliente.objetivo&&(
+              <div style={{marginTop:6,background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:5,padding:'5px 8px'}}>
+                <div style={{fontSize:9,color:'#1D4ED8',fontWeight:700,textTransform:'uppercase',marginBottom:2}}>🎯 Objetivo · Criterios de evolución activos</div>
+                <div style={{fontSize:10,color:'#1D4ED8',marginBottom:3,fontStyle:'italic'}}>"{cliente.objetivo}"</div>
+                {generarCriteriosPersonalizados(cliente.objetivo,cliente.nivel||'activa','',null).slice(0,3).map((crit,i)=>(
+                  <div key={i} style={{fontSize:10,color:'#374151',display:'flex',gap:4,marginBottom:1}}>
+                    <span style={{color:FASES_METODO[cliente.nivel]?.color||'#374151',fontWeight:700,flexShrink:0}}>→</span>{crit}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnG,flexShrink:0,fontSize:10,padding:'3px 8px'}}>Desvincular</button>
       </div>
     );
   };
 
+  // ── TAB: CLIENTES ──────────────────────────────────────────────────────────
+
+  const ClientesTab=()=>{
+    const q=clienteSearch.trim().toLowerCase();
+    const clientesFiltrados=q?clients.filter(c=>{
+      const hay=[c.nombre,c.apellido,c.documento,c.celular,c.objetivo].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    }):clients;
+    return(
+    <div style={{padding:'12px 14px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700}}>Directorio de clientes</div>
+          <div style={{fontSize:11,color:G4}}>{clients.length} clientes · Método Activa Integra v4.0</div>
+        </div>
+        <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
+      </div>
+      {clients.length>0&&(
+        <div style={{position:'relative',marginBottom:12}}>
+          <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',fontSize:13,color:G3}}>🔎</span>
+          <input value={clienteSearch} onChange={e=>setClienteSearch(e.target.value)} placeholder="Buscar por nombre, apellido, CI, celular u objetivo..." style={{...s.inp,paddingLeft:30,width:'100%'}}/>
+          {clienteSearch&&<button onClick={()=>setClienteSearch('')} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:G3,fontSize:13,cursor:'pointer'}}>✕</button>}
+        </div>
+      )}
+      {clients.length===0&&(
+        <div style={{...s.card,textAlign:'center',padding:36,borderStyle:'dashed'}}>
+          <div style={{fontSize:28,marginBottom:8}}>👤</div>
+          <div style={{fontWeight:700,marginBottom:4}}>Sin clientes registrados</div>
+          <div style={{fontSize:12,color:G3,marginBottom:16,lineHeight:1.6}}>El alta incluye datos personales + screening funcional completo.<br/>El semáforo y el filtro de ejercicios se activan al finalizar la evaluación.</div>
+          <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
+        </div>
+      )}
+      {clients.length>0&&clientesFiltrados.length===0&&(
+        <div style={{...s.card,textAlign:'center',padding:24,borderStyle:'dashed',color:G3}}>Sin resultados para "{clienteSearch}"</div>
+      )}
+      <div style={{display:'grid',gap:8}}>
+        {clientesFiltrados.map(c=>{
+          const sf=SF[c.semaforo];
+          const nv=NIVEL[c.nivel];
+          const isLinked=session.clienteId===c.id;
+          return(
+            <div key={c.id} style={{...s.card,borderLeft:`4px solid ${c.screeningCompleto?sf.color:'#D1D5DB'}`,marginBottom:0,padding:'12px 14px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}}>
+                    <span style={{fontWeight:700,fontSize:14}}>{c.nombre} {c.apellido}</span>
+                    {c.documento&&<span style={{fontSize:10,color:G3}}>CI {c.documento}</span>}
+                    <span style={{fontSize:15}}>{sf.emoji}</span>
+                    <span style={{background:nv.color,color:WH,fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:99}}>{nv.emoji} {nv.badge} {nv.label}</span>
+                    {!c.screeningCompleto&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #F59E0B'}}>⏳ Evaluación pendiente</span>}
+                  {c.periodizacion&&<span style={{background:PERIODIZACIONES[c.periodizacion]?.compatible_fases?.includes(c.nivel)?'#F5F3FF':'#FEF2F2',color:PERIODIZACIONES[c.periodizacion]?.compatible_fases?.includes(c.nivel)?'#7C3AED':'#991B1B',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:`1px solid ${PERIODIZACIONES[c.periodizacion]?.compatible_fases?.includes(c.nivel)?'#C4B5FD':'#FCA5A5'}`}} title={PERIODIZACIONES[c.periodizacion]?.compatible_fases?.includes(c.nivel)?'':'Periodización ya no compatible con la fase actual'}>{PERIODIZACIONES[c.periodizacion]?.compatible_fases?.includes(c.nivel)?'📅':'⚠️'} {PERIODIZACIONES[c.periodizacion]?.nombre?.split(' ').slice(0,2).join(' ')}</span>}
+                    {isLinked&&<span style={{background:'#DCFCE7',color:'#16A34A',fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:99,border:'1px solid #86EFAC'}}>● EN SESIÓN</span>}
+                  </div>
+                  {c.objetivo&&(
+                    <div style={{background:'#EFF6FF',border:'1px solid #BFDBFE',borderRadius:5,padding:'5px 8px',margin:'4px 0'}}>
+                      <div style={{fontSize:9,color:'#1D4ED8',fontWeight:700,marginBottom:2}}>🎯 {FASES_METODO[c.nivel]?.badge} {FASES_METODO[c.nivel]?.label} — Criterios de evolución</div>
+                      <div style={{fontSize:10,color:'#1E40AF',fontStyle:'italic',marginBottom:2}}>"{c.objetivo}"</div>
+                      {generarCriteriosPersonalizados(c.objetivo,c.nivel||'activa','',null).slice(0,2).map((crit,i)=>(
+                        <div key={i} style={{fontSize:10,color:'#374151',display:'flex',gap:4}}>
+                          <span style={{color:FASES_METODO[c.nivel]?.color||'#374151',fontWeight:700,flexShrink:0}}>→</span>{crit}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:10,color:G3}}>
+                    {c.celular&&<span>📱 {c.celular}</span>}
+                    {c.restricciones&&<span style={{color:'#444',fontSize:11}}><strong>Restricciones:</strong> {c.restricciones}</span>}
+                    {c.fechaEval&&<span>Eval: {c.fechaEval}</span>}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                  {!c.screeningCompleto&&(
+                    <button onClick={()=>setClientWizard({cli:c,step:5})} style={{...s.btnR,fontSize:10,padding:'4px 10px'}}>Completar evaluación →</button>
+                  )}
+                  {c.screeningCompleto&&!isLinked&&(
+                    <button onClick={()=>{setSession(p=>({...p,clienteId:c.id,cliente:`${c.nombre} ${c.apellido}`}));setTab('session');}} style={{...s.btnBK,fontSize:10,padding:'4px 10px'}}>Usar en sesión →</button>
+                  )}
+                  {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
+                  {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
+                  {c.periodizacion&&c.periodizacionSnapshotInicio&&<button onClick={()=>setMiniEvalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FFFBEB',color:'#92400E',borderColor:'#FDE68A'}}>🎯 Cerrar ciclo</button>}
+                  {c.screeningCompleto&&<button onClick={()=>setAvanceAbierto(avanceAbierto===c.id?null:c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:avanceAbierto===c.id?NIVEL[c.nivel]?.color:'#ECFDF5',color:avanceAbierto===c.id?WH:'#059669',borderColor:'#6EE7B7'}}>📈 Avance de fase</button>}
+                  <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
+                  {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
+                  <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Editar</button>
+                  <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
+                </div>
+              </div>
+              {avanceAbierto===c.id&&(()=>{
+                const sig=siguienteFase(c.nivel);
+                const sc=c.screening||{};
+                const ultimoAnalisis=sc._ultimoAnalisisIA||{};
+                const banderaActiva=sc.banderaRoja==='si'||sc.banderaNaranja==='si';
+                const {criticos,secundarios}=generarCriteriosAvancePersonalizados({
+                  objetivo:c.objetivo, fase:c.nivel,
+                  criteriosBase:criteriosAvanceTemplate[c.nivel]||[],
+                  deficienciasFuncionales:ultimoAnalisis.deficiencias_funcionales||[],
+                  deficienciasFuerza:ultimoAnalisis.deficiencias_fuerza||[],
+                  banderaActiva,
+                });
+                const estado=c.criterios_avance_estado||{};
+                const cumplidos=criticos.filter(it=>estado[it.id]).length;
+                const todosCumplidos=criticos.length>0&&cumplidos===criticos.length;
+                const toggleItem=(itId)=>{
+                  const nuevoEstado={...estado,[itId]:!estado[itId]};
+                  saveClient({...c,criterios_avance_estado:nuevoEstado});
+                };
+                const confirmarAvance=()=>{
+                  if(!todosCumplidos||!sig)return;
+                  saveClient({...c,nivel:sig,criterios_avance_estado:{}});
+                  setAvanceAbierto(null);
+                  alert(`✅ ${c.nombre} avanzó a fase ${NIVEL[sig].label}. El checklist se reinició para la nueva fase.`);
+                };
+                return(
+                  <div style={{marginTop:8,paddingTop:10,borderTop:`1px dashed ${G2}`}}>
+                    {!sig
+                      ? <div style={{fontSize:11,color:G3,fontStyle:'italic'}}>RINDE es la última fase del método — no hay avance formal más allá de esto.</div>
+                      : criticos.length===0
+                        ? <div style={{fontSize:11,color:G3}}>No hay criterios cargados para {NIVEL[c.nivel]?.label}. Cargalos con "✎ Editar plantilla" abajo.</div>
+                        : <>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
+                              <span style={{fontSize:11,fontWeight:700,color:G4}}>Requisitos para avanzar de {NIVEL[c.nivel]?.label} → {NIVEL[sig]?.label}</span>
+                              <span style={{fontSize:10,fontWeight:700,color:todosCumplidos?'#16A34A':G3}}>{cumplidos}/{criticos.length}</span>
+                            </div>
+                            <div style={{fontSize:9,color:'#94A3B8',marginBottom:6}}>Generados a partir del objetivo declarado y los hallazgos de la última evaluación de {c.nombre} — no es la misma lista para todos los clientes de esta fase.</div>
+                            {criticos.map(it=>(
+                              <label key={it.id} style={{display:'flex',gap:7,alignItems:'flex-start',padding:'4px 2px',cursor:'pointer',fontSize:11,color:G4}}>
+                                <input type="checkbox" checked={!!estado[it.id]} onChange={()=>toggleItem(it.id)} style={{marginTop:2}}/>
+                                <span style={{textDecoration:estado[it.id]?'line-through':'none',color:estado[it.id]?'#16A34A':G4}}>
+                                  {it.origen==='evaluacion'&&<span style={{background:'#FEF2F2',color:RJ,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:99,marginRight:5}}>DETECTADO</span>}
+                                  {it.origen==='bandera'&&<span style={{background:'#FEF2F2',color:RJ,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:99,marginRight:5}}>🚩</span>}
+                                  {it.texto}
+                                </span>
+                              </label>
+                            ))}
+                            {secundarios.length>0&&(
+                              <div style={{marginTop:8,background:'#F8FAFC',borderRadius:6,padding:'6px 8px'}}>
+                                <div style={{fontSize:9,fontWeight:700,color:'#94A3B8',marginBottom:3}}>CONTEXTO SEGÚN OBJETIVO (no bloquean, orientan)</div>
+                                {secundarios.map(it=>(
+                                  <div key={it.id} style={{fontSize:10,color:'#64748B',padding:'2px 0'}}>→ {it.texto}</div>
+                                ))}
+                              </div>
+                            )}
+                            <button onClick={confirmarAvance} disabled={!todosCumplidos} style={{...s.btnGreen,width:'100%',marginTop:8,padding:'8px',opacity:todosCumplidos?1:.4,cursor:todosCumplidos?'pointer':'not-allowed'}}>
+                              {todosCumplidos?`✓ Confirmar avance a ${NIVEL[sig].label}`:`Faltan ${criticos.length-cumplidos} requisito/s para avanzar`}
+                            </button>
+                          </>
+                    }
+                    <button onClick={()=>setEditandoCriterios(editandoCriterios===c.nivel?null:c.nivel)} style={{fontSize:9,color:'#7C3AED',background:'none',border:'none',cursor:'pointer',marginTop:8,padding:0}}>✎ {editandoCriterios===c.nivel?'Cerrar edición':'Editar plantilla base de '+NIVEL[c.nivel]?.label}</button>
+                    {editandoCriterios===c.nivel&&<EditorCriteriosFase fase={c.nivel} criteriosAvanceTemplate={criteriosAvanceTemplate} saveCriteriosFase={saveCriteriosFase} s={s}/>}
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })}
+      </div>
+      {clients.length>0&&(()=>{
+        const alertas=clients
+          .map(c=>({c,al:calcularAlertaPeriodizacion(c)}))
+          .filter(({al})=>al&&(al.proxima||al.vencida))
+          .sort((a,b)=>a.al.diasRestantes-b.al.diasRestantes);
+        return alertas.length>0&&(
+          <div style={{...s.card,marginTop:8,background:'#FFFBEB',border:'1px solid #FDE68A'}}>
+            <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:'#92400E'}}>⏰ Periodizaciones a revisar</div>
+            <div style={{display:'flex',flexDirection:'column',gap:5}}>
+              {alertas.map(({c,al})=>(
+                <div key={c.id} onClick={()=>setClientWizard({cli:c,step:0})} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:WH,borderRadius:5,padding:'6px 10px',cursor:'pointer',borderLeft:`3px solid ${al.vencida?R:'#D97706'}`}}>
+                  <div>
+                    <span style={{fontSize:11,fontWeight:700}}>{c.nombre} {c.apellido}</span>
+                    <span style={{fontSize:10,color:G4,marginLeft:6}}>{al.mensaje}</span>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:700,color:al.vencida?R:'#D97706'}}>{al.vencida?`Venció hace ${Math.abs(al.diasRestantes)}d`:al.diasRestantes===0?'Hoy':`en ${al.diasRestantes}d`}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+      {clients.length>0&&(
+        <div style={{...s.card,marginTop:8,background:G1}}>
+          <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4}}>Resumen</div>
+          <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+            {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{v.label}</div><div style={{fontSize:18,fontWeight:700,color:v.color}}>{n}</div></div>;})}
+            <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20,display:'flex',gap:14}}>
+              {Object.entries(SF).map(([k,v])=>{const n=clients.filter(c=>c.semaforo===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3}}>{v.emoji}</div><div style={{fontSize:16,fontWeight:700,color:v.color}}>{n}</div></div>;})}
+            </div>
+            <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20}}>
+              <div style={{fontSize:9,color:G3}}>Evaluaciones pendientes</div>
+              <div style={{fontSize:16,fontWeight:700,color:'#D97706'}}>{clients.filter(c=>!c.screeningCompleto).length}</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+  };
+
+  // ── BARRA DE DÍAS DEL PLAN (sesiones por semana 1–5) ──────────────────────
+  const DiaTabs=()=>(
+    <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`,padding:'10px 12px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:8}}>
+        <div style={{fontSize:12,fontWeight:700,color:'#111'}}>🗓️ Sesiones por semana</div>
+        <div style={{display:'flex',gap:4,alignItems:'center'}}>
+          {[1,2,3,4,5,6].map(n=>(
+            <button key={n} onClick={()=>setNumDias(n)} style={{width:28,height:28,borderRadius:6,border:`1px solid ${numDias===n?brand.colorPrimary:G2}`,background:numDias===n?brand.colorPrimary:WH,color:numDias===n?WH:G4,fontWeight:800,fontSize:12,cursor:'pointer'}}>{n}</button>
+          ))}
+          <span style={{fontSize:10,color:G3,marginLeft:4}}>día/s</span>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {(session.dias||[]).map((d,i)=>{
+          const act=i===activeDiaIdx;
+          const nEj=d.blocks.reduce((a,b)=>a+b.exercises.length,0);
+          return(
+            <div key={d.id} onClick={()=>gotoDia(i)} style={{cursor:'pointer',display:'flex',alignItems:'center',gap:6,background:act?brand.colorPrimary:'#f1f1f1',color:act?WH:'#333',borderRadius:8,padding:'6px 10px',border:`1px solid ${act?brand.colorPrimary:G2}`}}>
+              <span style={{fontWeight:800,fontSize:12}}>{i+1}</span>
+              <div style={{lineHeight:1.1}}>
+                <div style={{fontSize:11,fontWeight:700}}>{d.name||`Día ${i+1}`}</div>
+                <div style={{fontSize:8,opacity:.85}}>{d.obj?`${OBJS[d.obj].label} · ${nEj} ej.`:'sin armar'}</div>
+              </div>
+              {numDias>1&&<span onClick={(e)=>{e.stopPropagation();removeDia(i);}} style={{marginLeft:2,fontSize:14,lineHeight:1,opacity:.7}}>×</span>}
+            </div>
+          );
+        })}
+        {numDias<6&&<button onClick={addDia} style={{...s.btnG,fontSize:11,padding:'6px 10px',borderStyle:'dashed'}}>+ Día</button>}
+      </div>
+    </div>
+  );
+
+  // ── TAB: SESIÓN ────────────────────────────────────────────────────────────
+  const SessionTab=()=>{
+    if(!dia.obj)return(
+      <div style={{padding:'16px 14px'}}>
+        {DiaTabs()}
+        {clients.filter(c=>c.screeningCompleto).length>0&&(
+          <div style={{...s.card,marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Vincular cliente a la sesión</div>
+            <select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%',marginBottom:activeClient?8:0}}>
+              <option value=''>Sin cliente vinculado</option>
+              {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
+            </select>
+            {activeClient&&SemaforoBanner({cliente:activeClient})}
+          </div>
+        )}
+        {clients.filter(c=>!c.screeningCompleto).length>0&&(
+          <div style={{...s.card,marginBottom:16,background:'#FFFBEB',borderColor:'#FCD34D'}}>
+            <div style={{fontSize:11,color:'#92400E'}}>⏳ {clients.filter(c=>!c.screeningCompleto).length} cliente/s con evaluación pendiente — no disponibles para sesión hasta completar el screening.</div>
+          </div>
+        )}
+        {/* PERIODIZACIÓN ACTIVA DEL CLIENTE — condiciona la elección */}
+        {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+          const per=PERIODIZACIONES[activeClient.periodizacion];
+          const fase=per.fases[0];
+          return(
+            <div style={{background:'#1a0a2e',borderRadius:10,padding:'14px 16px',marginBottom:14,border:'1px solid #4C1D95',borderLeft:'4px solid #7C3AED'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:800,color:'#C4B5FD'}}>📅 Periodización activa del cliente</div>
+                  <div style={{fontSize:11,color:'#9F7AEA',marginTop:1}}>{per.nombre} · {per.autor}</div>
+                </div>
+                <span style={{background:'#4C1D95',color:'#E9D5FF',fontSize:10,fontWeight:700,padding:'3px 10px',borderRadius:99}}>{per.duracion}</span>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(per.fases.length,4)},1fr)`,gap:6,marginBottom:10}}>
+                {per.fases.map((f,i)=>(
+                  <div key={i} style={{background:i===0?'#4C1D95':'#2d1b69',borderRadius:6,padding:'7px 8px',border:i===0?'1px solid #7C3AED':'1px solid #3b1f7a'}}>
+                    <div style={{fontSize:9,fontWeight:700,color:i===0?'#E9D5FF':'#9F7AEA',marginBottom:3}}>{i===0?'▶ ':''}{f.nombre}</div>
+                    <div style={{fontSize:11,color:i===0?WH:'#C4B5FD',fontWeight:i===0?700:400}}>{f.reps} reps</div>
+                    <div style={{fontSize:9,color:'#9F7AEA'}}>{f.intensidad}</div>
+                    <div style={{fontSize:9,color:'#9F7AEA'}}>RIR {f.rir}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'#2d1b69',borderRadius:7,padding:'8px 10px',fontSize:11}}>
+                <div style={{color:'#E9D5FF',fontWeight:700,marginBottom:2}}>🎯 Fase activa: {fase.nombre}</div>
+                <div style={{display:'flex',gap:14,flexWrap:'wrap',color:'#C4B5FD',fontSize:10}}>
+                  <span>Series sugeridas: <strong style={{color:WH}}>3–5</strong></span>
+                  <span>Reps sugeridas: <strong style={{color:WH}}>{fase.reps}</strong></span>
+                  <span>Intensidad: <strong style={{color:WH}}>{fase.intensidad}</strong></span>
+                  <span>RIR: <strong style={{color:WH}}>{fase.rir}</strong></span>
+                  <span>Volumen: <strong style={{color:WH}}>{fase.volumen}</strong></span>
+                </div>
+                <div style={{color:'#9F7AEA',fontSize:10,marginTop:4,fontStyle:'italic'}}>{fase.objetivo}</div>
+              </div>
+              <div style={{marginTop:8,fontSize:10,color:'#7C3AED',fontStyle:'italic'}}>
+                💡 La estructura de sesión sugerida abajo está preseleccionada según el nivel del cliente. Los parámetros de series, reps, RPE y tempo deben ajustarse manualmente al indicado arriba.
+              </div>
+            </div>
+          );
+        })()}
+        {/* PLAZOS DEL PLAN — duración total y fases con fechas (punto 4) */}
+        {planMeta&&(
+          <div style={{background:'#0A3D62',borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:'4px solid #1BAA86'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:800,color:'#7FE9CE'}}>📆 Plazos del plan asignado</div>
+                <div style={{fontSize:10,color:'#9FD9EC',marginTop:1}}>{planMeta.nombre}</div>
+              </div>
+              <span style={{background:'#1BAA86',color:'#04261C',fontSize:10,fontWeight:800,padding:'3px 10px',borderRadius:99}}>
+                {planMeta.secuencial&&planMeta.totalSemanas?`${planMeta.totalSemanas} semanas`:planMeta.duracionTexto}
+              </span>
+            </div>
+            {planMeta.secuencial&&planMeta.fechaFin&&(
+              <div style={{fontSize:10,color:'#9FD9EC',marginBottom:8}}>Inicio: <strong style={{color:WH}}>{planMeta.fechaInicio}</strong> · Fin estimado: <strong style={{color:WH}}>{planMeta.fechaFin}</strong> <span style={{opacity:.7}}>(según fecha del plan)</span></div>
+            )}
+            <div style={{display:'flex',flexDirection:'column',gap:5}}>
+              {planMeta.fases.map((f,i)=>(
+                <div key={i} style={{background:'#0d4f7d',borderRadius:6,padding:'7px 10px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                  <span style={{background:'#1BAA86',color:'#04261C',fontWeight:800,fontSize:10,width:20,height:20,borderRadius:5,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{i+1}</span>
+                  <div style={{flex:1,minWidth:140}}>
+                    <div style={{fontSize:11,fontWeight:700,color:WH}}>{f.nombre}</div>
+                    <div style={{fontSize:9,color:'#9FD9EC'}}>{f.semanasLabel}{f.fIni&&f.fFin?` · ${f.fIni} → ${f.fFin}`:''}</div>
+                  </div>
+                  <div style={{fontSize:9,color:'#7FE9CE',textAlign:'right'}}>{f.reps} reps · {f.intensidad}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:8,fontSize:9,color:'#9FD9EC',fontStyle:'italic'}}>Estas son las fases del <strong style={{color:'#7FE9CE'}}>plan</strong> (ej. periodización). La fase del <strong style={{color:'#7FE9CE'}}>Método</strong> ({activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:activeClient?.nivel}) es transversal y se mantiene en el encabezado.</div>
+          </div>
+        )}
+        <div style={{background:BK,borderRadius:10,padding:'18px 16px',marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
+          <div style={{fontSize:15,fontWeight:800,color:WH,marginBottom:4}}>Nivel del método — Día {activeDiaIdx+1}</div>
+          <div style={{fontSize:12,color:G3}}>La sugerencia de bloques se adapta al continuum Activa Integra.</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+          {Object.entries(OBJS).map(([k,o])=>{
+            const nv=NIVEL[o.nivelKey];
+            return(
+              <div key={k} onClick={()=>suggestBlocks(k)} style={{cursor:'pointer',background:BK,borderRadius:10,padding:'18px 16px',border:`1px solid #333`,borderTop:`4px solid ${nv.color}`,position:'relative',overflow:'hidden'}}>
+                <div style={{position:'absolute',top:0,right:0,width:70,height:70,background:nv.color,opacity:.08,borderRadius:'0 0 0 70px'}}/>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                  <div style={{width:38,height:38,background:nv.color,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:WH,fontWeight:900,flexShrink:0}}>{nv.badge}</div>
+                  <div><div style={{fontSize:15,fontWeight:800,color:WH}}>{o.label}</div><div style={{fontSize:11,color:G3,marginTop:1}}>{o.desc}</div></div>
+                </div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                  {o.blocks.map((b,i)=>(
+                    <span key={b} style={{display:'inline-flex',alignItems:'center',gap:4,background:'#2a2a2a',border:`1px solid #3a3a3a`,borderRadius:99,padding:'3px 8px'}}>
+                      <span style={{color:nv.color,fontSize:9,fontWeight:800}}>{i+1}</span>
+                      <span style={{color:G3,fontSize:9,fontWeight:600}}>{BLOCKS[b].label}</span>
+                    </span>
+                  ))}
+                </div>
+                <div style={{marginTop:10,fontSize:10,color:'#555',display:'flex',justifyContent:'space-between'}}>
+                  <span>{o.blocks.length} bloques</span><span style={{color:nv.color,fontWeight:700}}>SELECCIONAR →</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+    const statusColor=dia.blocks.length>=5&&dia.blocks.length<=7?'#16A34A':R;
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {DiaTabs()}
+        <div style={{...s.card,marginBottom:12,borderLeft:`4px solid ${brand.colorPrimary}`}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+            <div><span style={s.lbl}>Nombre del plan</span><input value={session.planNombre} onChange={e=>setSession(p=>({...p,planNombre:e.target.value}))} placeholder="Ej: Plan pérdida de grasa 16 sem" style={s.inp}/></div>
+            <div><span style={s.lbl}>Fecha inicio del plan</span><DateInput value={session.fecha} onChange={v=>setSession(p=>({...p,fecha:v}))} style={s.inp}/></div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:8}}>
+            <div><span style={s.lbl}>Nombre del día {activeDiaIdx+1}</span><input value={dia.name} onChange={e=>setDia(d=>({...d,name:e.target.value}))} style={s.inp}/></div>
+            <div>
+              <span style={s.lbl}>Cliente</span>
+              {clients.filter(c=>c.screeningCompleto).length>0
+                ?<select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%'}}>
+                    <option value=''>Sin cliente</option>
+                    {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido}</option>)}
+                  </select>
+                :<input value={session.cliente} onChange={e=>setSession(p=>({...p,cliente:e.target.value}))} placeholder="Nombre del cliente" style={s.inp}/>
+              }
+            </div>
+          </div>
+          <div><span style={s.lbl}>Notas del día {activeDiaIdx+1}</span><input value={dia.notas} onChange={e=>setDia(d=>({...d,notas:e.target.value}))} placeholder="Observaciones, indicaciones de esta sesión..." style={s.inp}/></div>
+          {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+            const per=PERIODIZACIONES[activeClient.periodizacion];
+            const faseIdx=Math.min(session.faseIdx||0,per.fases.length-1);
+            return(
+              <div style={{marginTop:10,background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:7,padding:'8px 10px'}}>
+                <span style={s.lbl}>📅 Fase de "{per.nombre}" que estás armando ahora — por defecto la IA asumía siempre la inicial, acá elegís cuál</span>
+                <select value={faseIdx} onChange={e=>setSession(p=>({...p,faseIdx:parseInt(e.target.value)}))} style={{...s.sel,width:'100%',marginTop:3}}>
+                  {per.fases.map((f,i)=>(
+                    <option key={i} value={i}>Fase {i+1}/{per.fases.length} — {f.nombre} ({f.semanas}) · {f.reps} reps, RIR {f.rir}</option>
+                  ))}
+                </select>
+                <div style={{fontSize:10,color:'#6D28D9',marginTop:3}}>{per.fases[faseIdx]?.objetivo}</div>
+              </div>
+            );
+          })()}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={session.faseIdx||0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
+            <div style={{display:'flex',gap:6,alignItems:'center'}}>
+              <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
+              <span style={{...s.tag(statusColor)}}>{dia.blocks.length}/5-7 bloques</span>
+              {activeClient&&<span style={{fontSize:12}}>{SF[activeClient.semaforo].emoji}</span>}
+            </div>
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={guardarPlanActual} style={{...s.btnBK,fontSize:11,padding:'5px 10px',background:'#16A34A'}}>💾 Guardar plan</button>
+              {activeClient&&<button onClick={()=>setShowHistorial(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>📂 Historial{gymPlanes.length?` (${gymPlanes.length})`:''}</button>}
+              <button onClick={()=>setShowEntrenarIA(true)} style={{...s.btnG,fontSize:11,padding:'5px 10px'}}>🧠 Entrenar IA</button>
+              <button onClick={()=>setTab('export')} style={{...s.btnBK,fontSize:11,padding:'5px 10px'}}>Exportar plan →</button>
+              <button onClick={()=>setDia(d=>({...d,obj:null,blocks:[]}))} style={s.btnG}>↺ Rearmar día</button>
+              <button onClick={resetPlan} style={s.btnG}>← Nuevo plan</button>
+            </div>
+          </div>
+        </div>
+        {activeClient&&SemaforoBanner({cliente:activeClient})}
+        {/* ── MODAL: HISTORIAL DE PLANES DEL CLIENTE ── */}
+        {showHistorial&&(
+          OverlayWrap({wide:true,children:(<>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:17,fontWeight:800}}>📂 Historial de planes — {activeClient?.nombre} {activeClient?.apellido}</div>
+              <button onClick={()=>setShowHistorial(false)} style={s.btnG}>✕</button>
+            </div>
+            {gymPlanes.length>0&&(
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,background:compilarSel.length?'#F5F3FF':'#F8F8F8',border:`1px solid ${compilarSel.length?'#C4B5FD':G2}`,borderRadius:8,padding:'8px 12px',marginBottom:10,flexWrap:'wrap'}}>
+                <div style={{fontSize:11,color:G4}}>🧩 <strong>Compilar bloque:</strong> marcá las fases y unilas en un solo PDF (se ordenan por fecha de inicio). {compilarSel.length>0&&<span style={{color:'#6D28D9',fontWeight:700}}>{compilarSel.length} seleccionada/s</span>}</div>
+                <div style={{display:'flex',gap:6}}>
+                  {compilarSel.length>0&&<button onClick={()=>setCompilarSel([])} style={{...s.btnG,fontSize:10,padding:'5px 10px'}}>Limpiar</button>}
+                  <button onClick={()=>compilarBloquePDF(gymPlanes.filter(p=>compilarSel.includes(p.id)))} disabled={compilarSel.length<1} style={{...s.btnR,fontSize:10,padding:'5px 12px',background:'#6D28D9',opacity:compilarSel.length<1?.5:1,cursor:compilarSel.length<1?'default':'pointer'}}>🧩 Compilar {compilarSel.length>0?`(${compilarSel.length}) `:''}en un PDF</button>
+                </div>
+              </div>
+            )}
+            {gymPlanes.length===0
+              ?<div style={{fontSize:13,color:G3,padding:'20px 0',textAlign:'center'}}>Todavía no hay planes guardados para este cliente.<br/>Armá un plan y tocá <strong>💾 Guardar plan</strong>.</div>
+              :<div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:'60vh',overflowY:'auto'}}>
+                {gymPlanes.map(pl=>{
+                  const estCol=pl.estado==='completado'?'#16A34A':pl.estado==='reemplazado'?'#999':R;
+                  const selB=compilarSel.includes(pl.id);
+                  return(
+                    <div key={pl.id} style={{border:`1px solid ${selB?'#C4B5FD':G2}`,borderLeft:`4px solid ${estCol}`,borderRadius:8,padding:'10px 12px',background:selB?'#FAF8FF':WH}}>
+                      <div style={{flex:1,minWidth:200}}>
+                        <div style={{fontSize:13,fontWeight:800}}>{pl.nombre} {pl.es_ejemplo&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 6px',borderRadius:99,fontWeight:700}}>⭐ EJEMPLO IA</span>}</div>
+                        <div style={{fontSize:10,color:G3,marginTop:1}}>{pl.fecha_inicio||'sin fecha'} · {pl.num_dias} día/s · {(pl.periodizacion||'').replace(/_/g,' ')} · <span style={{color:estCol,fontWeight:700}}>{pl.estado}</span></div>
+                        {pl.resumen&&<div style={{fontSize:9,color:'#888',marginTop:3,lineHeight:1.4}}>{pl.resumen.slice(0,180)}{pl.resumen.length>180?'…':''}</div>}
+                      </div>
+                      <div style={{display:'flex',gap:5,flexWrap:'wrap',marginTop:8}}>
+                        <button onClick={()=>setCompilarSel(sl=>sl.includes(pl.id)?sl.filter(x=>x!==pl.id):[...sl,pl.id])} style={{...s.btnG,fontSize:10,padding:'4px 9px',background:selB?'#6D28D9':WH,color:selB?'#fff':'#6D28D9',borderColor:'#6D28D9',fontWeight:700}}>{selB?'☑ En el bloque':'☐ Al bloque'}</button>
+                        <button onClick={()=>cargarPlan(pl)} style={{...s.btnBK,fontSize:10,padding:'4px 9px'}}>Abrir</button>
+                        <button onClick={()=>duplicarPlan(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>Duplicar</button>
+                        {pl.estado!=='completado'&&<button onClick={()=>cambiarEstadoPlan(pl,'completado')} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>✓ Completar</button>}
+                        <button onClick={()=>marcarEjemploPlan(pl,!pl.es_ejemplo)} style={{...s.btnG,fontSize:10,padding:'4px 9px'}}>{pl.es_ejemplo?'Quitar ejemplo':'⭐ Marcar ejemplo'}</button>
+                        <button onClick={()=>setVerEjecucion(pl)} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:'#16A34A',borderColor:'#16A34A'}}>📊 Ejecución</button>
+                        <button onClick={()=>{if(confirm('¿Eliminar este plan del historial?'))deleteGymPlan(pl.id);}} style={{...s.btnG,fontSize:10,padding:'4px 9px',color:R}}>Eliminar</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            }
+            <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Los planes marcados como ⭐ ejemplo y el historial reciente se le pasan a la IA como contexto al generar nuevas sesiones.</div>
+          </>)})
+        )}
+        {/* ── MODAL: ENTRENAR IA (base de conocimiento) ── */}
+        {showEntrenarIA&&(()=>{
+          const AMB={entrenamiento:'Entrenamiento',rehab:'Rehabilitación',nutricion:'Nutrición',evaluacion:'Evaluaciones',general:'General'};
+          return(
+            OverlayWrap({wide:true,children:(<>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <div style={{fontSize:17,fontWeight:800}}>🧠 Entrenar IA — Reglas y criterio</div>
+                <button onClick={()=>setShowEntrenarIA(false)} style={s.btnG}>✕</button>
+              </div>
+              <div style={{fontSize:11,color:G3,marginBottom:12,lineHeight:1.5}}>Escribí tus principios de planificación, tratamiento o evaluación. La IA los lee y los aplica en cada recomendación. Ej: <em>"Para principiantes, nunca superar 3 series las primeras 2 semanas"</em> o <em>"En RESTAURA priorizar isométricos sin dolor antes que rango completo"</em>.</div>
+              <NuevaReglaIA onSave={r=>saveIaRegla(r)} genId={genId}/>
+              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'48vh',overflowY:'auto',marginTop:12}}>
+                {iaReglas.length===0
+                  ?<div style={{fontSize:12,color:G3,textAlign:'center',padding:'16px 0'}}>Sin reglas todavía. Agregá la primera arriba.</div>
+                  :iaReglas.map(r=>(
+                    <div key={r.id} style={{border:`1px solid ${G2}`,borderRadius:8,padding:'8px 10px',opacity:r.activo?1:.5}}>
+                      <div style={{display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+                        <div style={{flex:1}}>
+                          <span style={{background:BK,color:WH,fontSize:8,padding:'1px 7px',borderRadius:99,fontWeight:700,textTransform:'uppercase'}}>{AMB[r.ambito]||r.ambito}</span>
+                          <div style={{fontSize:12,color:'#111',marginTop:4,lineHeight:1.4}}>{r.regla}</div>
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                          <button onClick={()=>saveIaRegla({...r,activo:!r.activo})} style={{...s.btnG,fontSize:9,padding:'3px 7px'}}>{r.activo?'Pausar':'Activar'}</button>
+                          <button onClick={()=>{if(confirm('¿Eliminar esta regla?'))deleteIaRegla(r.id);}} style={{...s.btnG,fontSize:9,padding:'3px 7px',color:R}}>Eliminar</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+              <div style={{fontSize:9,color:G3,marginTop:10,fontStyle:'italic'}}>Las reglas activas de ámbito "Entrenamiento" y "General" se inyectan al generar sesiones. Las de Rehab/Nutrición/Evaluaciones se sumarán a esos generadores en la próxima fase.</div>
+            </>)})
+          );
+        })()}
+        {verEjecucion&&<EjecucionModal plan={verEjecucion} exs={exs} onClose={()=>setVerEjecucion(null)}/>}
+        {/* BLOQUEO TOTAL SEMÁFORO ROJO */}
+        {activeClient&&activeClient.semaforo==='rojo'&&(
+          <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'16px 14px',marginBottom:12,textAlign:'center'}}>
+            <div style={{fontSize:18,marginBottom:6}}>🔴</div>
+            <div style={{fontSize:13,fontWeight:800,color:R,marginBottom:4}}>SEMÁFORO ROJO — Entrenamiento bloqueado</div>
+            <div style={{fontSize:12,color:'#666'}}>No es posible agregar ejercicios a un cliente con semáforo rojo.<br/>Derivar a fisioterapia antes de retomar el entrenamiento.</div>
+          </div>
+        )}
+        {overrideState&&(
+          OverlayWrap({children:(<>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:overrideState.isRestriction?R:'#92400E'}}>
+              {overrideState.isRestriction?'⚠ Restricción clínica activa':'Confirmar Override de bloque'}
+            </div>
+            {overrideState.isRestriction
+              ?<div style={{fontSize:12,color:G4,marginBottom:10,lineHeight:1.5}}>
+                  <strong>{overrideState.ex.nombre}</strong> activa una restricción de <strong>{activeClient?.nombre}</strong>.<br/>
+                  Patrón: <em>{overrideState.ex.patron}</em><br/>
+                  <span style={{color:R}}>Solo continuar con justificación clínica documentada.</span>
+                </div>
+              :<div style={{fontSize:12,color:G4,marginBottom:10}}><strong>{overrideState.ex.nombre}</strong> pertenece a <strong>{BLOCKS[overrideState.ex.bloque]?.label}</strong>, no a <strong>{BLOCKS[overrideState.blockType]?.label}</strong>.</div>
+            }
+            <span style={s.lbl}>Justificación {overrideState.isRestriction?'clínica (obligatoria)':'(opcional)'}</span>
+            <input value={overrideState.note} onChange={e=>setOverrideState(p=>({...p,note:e.target.value}))} placeholder="Especificar justificación..." style={{...s.inp,marginBottom:10}}/>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={confirmOverride} disabled={overrideState.isRestriction&&!overrideState.note} style={{...s.btnR,flex:1,opacity:overrideState.isRestriction&&!overrideState.note?.4:1}}>Confirmar con override</button>
+              <button onClick={()=>setOverrideState(null)} style={{...s.btnG,flex:1}}>Cancelar</button>
+            </div>
+          </>)})
+        )}
+        {/* CONTADOR DE DURACIÓN DE LA SESIÓN (por día, se recalcula y reinicia en cada sesión) */}
+        {(()=>{
+          const dur=calcularDuracionSesion(dia.blocks);
+          const col=colorDuracion(dur.totalMin);
+          const totEx=dia.blocks.reduce((a,b)=>a+b.exercises.length,0);
+          return(
+            <div style={{background:WH,border:`1px solid ${G2}`,borderLeft:`4px solid ${col.color}`,borderRadius:8,padding:'10px 14px',marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:800,color:'#111'}}>⏱ Duración estimada — {dia.name||`Día ${activeDiaIdx+1}`}</div>
+                  <div style={{fontSize:9,color:G3,marginTop:1}}>Calent. {dur.calentamiento}′ · Trabajo {dur.ejercicios}′ · Transic. {dur.transiciones}′ · Vuelta calma {dur.vueltaCalma}′ · {totEx} ejercicio/s</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <span style={{fontSize:28,fontWeight:800,color:col.color,lineHeight:1}}>{dur.totalMin}</span>
+                  <span style={{fontSize:12,color:col.color}}> min</span>
+                  <div style={{fontSize:10,color:col.color,fontWeight:700}}>{col.label}</div>
+                </div>
+              </div>
+              <div style={{background:G2,borderRadius:99,height:5,overflow:'hidden',marginTop:7}}>
+                <div style={{width:Math.min(dur.totalMin/90*100,100)+'%',background:col.color,height:'100%',borderRadius:99,transition:'width .4s'}}/>
+              </div>
+            </div>
+          );
+        })()}
+        {dia.blocks.map(block=>{
+          const bd=BLOCKS[block.type];
+          const isExp=expandedBlock===block.id;
+          const isSel=selBlock===block.id;
+          const replMode=!!(replaceTarget&&replaceTarget.blockId===block.id);
+          const replEx=replMode?exs.find(e=>e.id===block.exercises[replaceTarget.idx]?.exId):null;
+          return(
+            <div key={block.id} style={{border:`1px solid ${G2}`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
+              <div style={s.bHdr(block.type)}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{background:brand.colorPrimary,color:WH,width:22,height:22,borderRadius:4,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>{block.position}</div>
+                  <span style={{fontWeight:700,fontSize:13}}>{bd.label}</span>
+                  {block.exercises.length>0&&<span style={{background:'rgba(255,255,255,.2)',borderRadius:99,fontSize:10,padding:'1px 6px'}}>{block.exercises.length} ej.</span>}
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>setExpandedBlock(isExp?null:block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>{isExp?'▲':'▼'}</button>
+                  <button onClick={()=>removeBlock(block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>✕</button>
+                </div>
+              </div>
+              {isExp&&(
+                <div style={{padding:'10px 12px',background:'#fafafa',borderTop:`1px solid ${G2}`}}>
+                  {/* SUGERENCIAS DE PESO DEL BLOQUE */}
+                  {activeClientTests?.length>0&&block.exercises.length>0&&(()=>{
+                    const sugs=sugerirPesosBloque(block.exercises,exs,activeClientTests,activeFasePlan);
+                    if(!sugs.length)return null;
+                    return(
+                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',marginBottom:8}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'#7C3AED',marginBottom:6}}>
+                          💡 Sugerencias de peso para este bloque
+                          {activeFasePlan&&<span style={{fontSize:9,color:'#9F7AEA',fontWeight:400,marginLeft:6}}>— {activeFasePlan.nombre} · {activeFasePlan.reps} reps · RIR {activeFasePlan.rir}</span>}
+                        </div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:5}}>
+                          {sugs.map(({exId,nombre,sugerencia:sg})=>(
+                            <div key={exId} style={{background:'#EDE9FE',borderRadius:5,padding:'5px 8px'}}>
+                              <div style={{fontSize:9,color:'#6D28D9',fontWeight:700,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nombre}</div>
+                              <div style={{fontSize:14,fontWeight:800,color:'#4C1D95'}}>{sg.pesoSugerido} <span style={{fontSize:9,fontWeight:400}}>kg</span></div>
+                              <div style={{fontSize:8,color:'#7C3AED'}}>rango: {sg.pesoRango}</div>
+                              <div style={{fontSize:8,color:'#9F7AEA'}}>{sg.pct}% de {sg.rm1}kg 1RM</div>
+                              {sg.testVencido&&<div style={{fontSize:8,color:'#F59E0B',fontWeight:700}}>⚠ Test vencido</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {/* Sugerencia de periodización activa */}
+                  {activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion]&&(()=>{
+                    const per=PERIODIZACIONES[activeClient.periodizacion];
+                    const fase=per.fases[0];
+                    return(
+                      <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'6px 10px',marginBottom:8,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                        <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>📅 {per.nombre} · {fase.nombre}</span>
+                        {[['Reps',fase.reps],['Intensidad',fase.intensidad],['RIR',fase.rir],['Volumen',fase.volumen]].map(([k,v])=>(
+                          <span key={k} style={{fontSize:9,color:'#4C1D95'}}>{k}: <strong>{v}</strong></span>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6,marginBottom:10}}>
+                    {[['series','Series'],['reps','Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Descanso']].map(([k,lbl])=>(
+                      <div key={k}><span style={s.lbl}>{lbl}</span><input value={block.params[k]} onChange={e=>updateParams(block.id,k,e.target.value)} style={s.inp}/></div>
+                    ))}
+                  </div>
+                  {block.exercises.map((be,exIdx)=>{
+                    const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
+                    const rest=checkRestriction(ex,activeClient);
+                    const exParams=be.params||block.params;
+                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,exParams.reps);
+                    // Seed peso sugerido the first time
+                    if(sug&&be.pesoSug===''&&sug.pesoSugerido){
+                      setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
+                    }
+                    return(
+                      <div key={be.exId+'_'+exIdx} style={{background:rest==='warn'?'#FFFBEB':WH,border:`1px solid ${rest==='warn'?'#FCD34D':sug?'#C4B5FD':G2}`,borderLeft:be.grupo?`4px solid ${GRUPO_COL[be.grupo.id]||'#7C3AED'}`:(rest==='warn'?'1px solid #FCD34D':`1px solid ${sug?'#C4B5FD':G2}`),borderRadius:7,padding:'8px 10px',marginBottom:6}}>
+                        {/* Cabecera ejercicio */}
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:5}}>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:700}}><span style={{color:G3,fontWeight:600}}>{exIdx+1}.</span> {ex.nombre}</div>
+                            <div style={{fontSize:10,color:G3,marginTop:1}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
+                            {be.override&&<div style={s.ovFlag}>OVERRIDE · {be.note||'sin nota'}</div>}
+                            {rest==='warn'&&<span style={{background:'#FEF3C7',border:'1px solid #F59E0B',borderRadius:4,padding:'1px 6px',fontSize:9,color:'#92400E'}}>⚠ Restricción</span>}
+                          </div>
+                          <div style={{display:'flex',alignItems:'center',gap:1,flexShrink:0}}>
+                            <button onClick={()=>moveExInBlock(block.id,exIdx,-1)} disabled={exIdx===0} title="Subir" style={{background:'none',border:'none',cursor:exIdx===0?'default':'pointer',fontSize:12,color:exIdx===0?'#ddd':G4,padding:'2px 3px'}}>▲</button>
+                            <button onClick={()=>moveExInBlock(block.id,exIdx,1)} disabled={exIdx===block.exercises.length-1} title="Bajar" style={{background:'none',border:'none',cursor:exIdx===block.exercises.length-1?'default':'pointer',fontSize:12,color:exIdx===block.exercises.length-1?'#ddd':G4,padding:'2px 3px'}}>▼</button>
+                            <button onClick={()=>{setReplaceTarget({blockId:block.id,idx:exIdx});setSelBlock(block.id);setExSearch('');}} title="Cambiar por otro ejercicio" style={{background:'none',border:'1px solid #C4B5FD',borderRadius:5,cursor:'pointer',fontSize:11,color:'#7C3AED',padding:'2px 5px',fontWeight:700}}>⇄</button>
+                            <button onClick={()=>removeExFromBlock(block.id,be.exId)} title="Quitar" style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:18,lineHeight:1,padding:'0 2px'}}>×</button>
+                          </div>
+                        </div>
+                        {/* Agrupación: biserie / triserie / circuito */}
+                        {(()=>{
+                          const g=be.grupo||null;const col=g?(GRUPO_COL[g.id]||'#7C3AED'):'#999';
+                          return(
+                            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,flexWrap:'wrap'}}>
+                              <span style={{fontSize:8,color:G3,textTransform:'uppercase',fontWeight:700}}>⛓ Agrupar:</span>
+                              <select value={g?g.tipo:''} onChange={e=>{const t=e.target.value;setExGrupo(block.id,be.exId,t?{tipo:t,id:(g&&g.id)||'A'}:null);}}
+                                style={{border:`1px solid ${G2}`,borderRadius:4,padding:'2px 5px',fontSize:10,background:WH,outline:'none'}}>
+                                <option value="">Individual</option>
+                                <option value="bi">Biserie</option>
+                                <option value="tri">Triserie</option>
+                                <option value="circuito">Circuito</option>
+                              </select>
+                              {g&&<select value={g.id} onChange={e=>setExGrupo(block.id,be.exId,{...g,id:e.target.value})}
+                                style={{border:`1px solid ${col}`,borderRadius:4,padding:'2px 5px',fontSize:10,color:col,fontWeight:700,background:WH,outline:'none'}}>
+                                {['A','B','C','D'].map(L=><option key={L} value={L}>Grupo {L}</option>)}
+                              </select>}
+                              {g&&<span style={{background:col,color:'#fff',borderRadius:99,fontSize:8,fontWeight:800,padding:'2px 8px'}}>🔗 {GRUPO_LBL[g.tipo]} {g.id}</span>}
+                            </div>
+                          );
+                        })()}
+                        {/* Parámetros individuales por ejercicio */}
+                        {(()=>{
+                          const modoT=exParams.modo?exParams.modo==='tiempo':/seg|min|\d+:\d{2}/.test(String(exParams.reps||'').toLowerCase());
+                          return(
+                          <div style={{marginBottom:5}}>
+                            <div style={{display:'flex',gap:4,marginBottom:4}}>
+                              <span style={{fontSize:8,color:G3,textTransform:'uppercase',alignSelf:'center'}}>Medir por:</span>
+                              {[['reps','Repeticiones'],['tiempo','⏱ Tiempo']].map(([mv,ml])=>(
+                                <button key={mv} onClick={()=>updateExParams(block.id,be.exId,{modo:mv})}
+                                  style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,cursor:'pointer',border:`1px solid ${(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:G2}`,background:(modoT?mv==='tiempo':mv==='reps')?brand.colorPrimary:WH,color:(modoT?mv==='tiempo':mv==='reps')?WH:G4}}>{ml}</button>
+                              ))}
+                              {modoT&&<span style={{fontSize:8,color:G3,alignSelf:'center'}}>isométricos · cardio (ej: 45s, 2min)</span>}
+                            </div>
+                            <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:4}}>
+                              {[['series','Series'],['reps',modoT?'Tiempo/serie':'Reps'],['rpe','RPE'],['tempo','Tempo'],['descanso','Desc.']].map(([k,lbl])=>{
+                                const dim=modoT&&k==='tempo';
+                                return(
+                                  <div key={k}>
+                                    <div style={{fontSize:8,color:dim?'#ccc':(modoT&&k==='reps'?brand.colorPrimary:G3),marginBottom:1,textTransform:'uppercase',fontWeight:modoT&&k==='reps'?700:400}}>{lbl}</div>
+                                    <input value={exParams[k]||''} onChange={e=>updateExParams(block.id,be.exId,{[k]:e.target.value})}
+                                      placeholder={modoT&&k==='reps'?'45s':dim?'n/a':''} disabled={dim}
+                                      style={{width:'100%',border:`1px solid ${modoT&&k==='reps'?brand.colorPrimary:G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:dim?'#f3f3f3':WH,color:dim?'#bbb':'#111',outline:'none'}}/>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          );
+                        })()}
+                        {/* Peso sugerido + real + anotaciones */}
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr',gap:4}}>
+                          <div>
+                            <div style={{fontSize:8,color:'#7C3AED',marginBottom:1,textTransform:'uppercase',fontWeight:700,display:'flex',alignItems:'center',gap:4}}>
+                              💡 Peso sugerido
+                              {be.pesoSugAuto===false
+                                ? <button onClick={()=>reAutoPesoSug(block.id,be.exId)} title="Volver a cálculo automático según reps" style={{background:'#EDE9FE',border:'1px solid #C4B5FD',borderRadius:4,color:'#6D28D9',cursor:'pointer',fontSize:8,fontWeight:700,padding:'0 4px'}}>↻ manual</button>
+                                : <span title="Se recalcula solo al cambiar las reps" style={{background:'#DCFCE7',color:'#166534',borderRadius:4,fontSize:8,fontWeight:700,padding:'0 4px'}}>auto</span>}
+                            </div>
+                            <div style={{position:'relative'}}>
+                              <input value={be.pesoSug||''} onChange={e=>setPesoSugManual(block.id,be.exId,e.target.value)}
+                                placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
+                                style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
+                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1,lineHeight:1.3}}>
+                                <strong style={{color:'#6D28D9'}}>{sug.reps} reps = {sug.pct}% del 1RM</strong> ({sug.rm1}kg)<br/>
+                                rango {sug.pesoRango} · {sug.formulaLabel}{sug.pctFueraRango?' · reps fuera de rango':''}
+                              </div>}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:GN,marginBottom:1,textTransform:'uppercase',fontWeight:700}}>✓ Peso real usado</div>
+                            <input value={be.pesoReal||''} onChange={e=>updateExParam(block.id,be.exId,'pesoReal',e.target.value)}
+                              placeholder="kg"
+                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:'#F0FDF4',color:'#166534',outline:'none'}}/>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:G4,marginBottom:1,textTransform:'uppercase'}}>📝 Anotaciones</div>
+                            <input value={be.anotacion||''} onChange={e=>updateExParam(block.id,be.exId,'anotacion',e.target.value)}
+                              placeholder="Notas de esta serie..."
+                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
+                          </div>
+                        </div>
+                        {sug?.testVencido&&<div style={{fontSize:8,color:'#F59E0B',marginTop:3,fontWeight:700}}>⚠ Test de fuerza vencido ({sug.diasDesdeTest} días) — peso puede estar desactualizado</div>}
+                      </div>
+                    );
+                  })}
+                  {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&!replMode&&(
+                    <button onClick={()=>{setSelBlock(isSel?null:block.id);setExSearch('');}} style={{...s.btnBK,width:'100%',marginTop:4}}>{isSel?'✕ Cerrar':'+ Agregar ejercicio'}</button>
+                  )}
+                  {isSel&&(
+                    <div style={{marginTop:8,background:WH,border:`1px solid ${replMode?'#C4B5FD':G2}`,borderRadius:8,padding:10}}>
+                      {replMode&&(
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#F5F3FF',borderRadius:6,padding:'6px 9px',marginBottom:8}}>
+                          <div style={{fontSize:10.5,color:'#5B21B6',fontWeight:700}}>⇄ Reemplazando: {replEx?.nombre||'ejercicio'} <span style={{fontWeight:400,color:'#7C3AED'}}>— elegí el nuevo (mantiene series/reps)</span></div>
+                          <button onClick={()=>{setReplaceTarget(null);setSelBlock(null);setExSearch('');}} style={{background:'none',border:'none',color:'#7C3AED',cursor:'pointer',fontSize:11,fontWeight:700}}>Cancelar</button>
+                        </div>
+                      )}
+                      <input placeholder={`Buscar en ${bd.label}...`} value={exSearch} onChange={e=>setExSearch(e.target.value)} style={{...s.inp,marginBottom:8}}/>
+                      <div style={s.lbl}>Ejercicios del bloque</div>
+                      <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
+                        {exs.filter(e=>e.bloque===block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
+                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,block.params.reps);
+                          const added=block.exercises.some(be=>be.exId===ex.id);
+                          const rest=checkRestriction(ex,activeClient);
+                          const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':pickSug?'#FAF5FF':WH;
+                          return(
+                            <div key={ex.id} style={{background:bgColor,opacity:added?.4:1,borderBottom:`1px solid ${G2}`,borderLeft:pickSug?'3px solid #C4B5FD':'3px solid transparent',padding:'5px 6px'}}>
+                              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontSize:11,fontWeight:600}}>{ex.nombre}
+                                    {rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>BLOQUEADO</span>}
+                                    {rest==='warn'&&<span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:4}}>⚠ RESTRICCIÓN</span>}
+                                  </div>
+                                  <div style={{fontSize:10,color:G3}}>{ex.musculos} · <span style={{color:NIVEL_COLOR[ex.nivel]}}>{ex.nivel}</span></div>
+                                  {pickSug&&<div style={{fontSize:9,color:'#7C3AED',marginTop:2,fontWeight:700}}>💡 {pickSug.pesoSugerido} kg ({pickSug.pesoRango}) · {pickSug.pct}% 1RM{pickSug.repsTarget?` · ${pickSug.repsTarget} reps`:''}</div>}
+                                </div>
+                              {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnR,padding:'3px 8px',fontSize:10,background:replMode?'#7C3AED':rest==='warn'?'#D97706':brand.colorPrimary,flexShrink:0}}>{replMode?'⇄':'+'}</button>}
+                              {!added&&rest==='block'&&<span style={{fontSize:10,color:R,fontWeight:700}}>🚫</span>}
+                              {added&&!replMode&&<span style={{fontSize:10,color:G3}}>✓</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <details>
+                        <summary style={{fontSize:10,color:G4,cursor:'pointer',fontWeight:700,userSelect:'none',padding:'4px 0'}}>OVERRIDE — otros bloques</summary>
+                        <div style={{maxHeight:120,overflowY:'auto',marginTop:6,borderTop:`1px solid ${G2}`,paddingTop:6}}>
+                          {exs.filter(e=>e.bloque!==block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
+                            const added=block.exercises.some(be=>be.exId===ex.id);
+                            const rest=checkRestriction(ex,activeClient);
+                            return(
+                              <div key={ex.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'4px 6px',borderBottom:`1px solid ${G2}`,opacity:added?.4:1}}>
+                                <div><div style={{fontSize:11}}>{ex.nombre} <span style={{background:'#FEF3C7',color:'#92400E',fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700}}>{BLOCKS[ex.bloque]?.tag}</span>{rest==='block'&&<span style={{background:'#FEF2F2',color:R,fontSize:8,padding:'1px 5px',borderRadius:99,fontWeight:700,marginLeft:2}}>BLOQ.</span>}</div></div>
+                                {(!added||replMode)&&rest!=='block'&&<button onClick={()=>handlePickEx(block,ex)} style={{...s.btnG,padding:'2px 7px',fontSize:10,color:'#92400E',borderColor:'#F59E0B'}}>{replMode?'⇄':'+'}</button>}
+                                {!added&&rest==='block'&&<span style={{fontSize:10,color:R}}>🚫</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {/* Series semanales por grupo muscular (conteo fraccionado) — toda la sesión, todos los días */}
+        {(()=>{
+          const acumPorMusculo={};
+          (session.dias||[]).forEach(d=>{
+            (d.blocks||[]).forEach(b=>{
+              (b.exercises||[]).forEach(be=>{
+                const ex=exs.find(e=>e.id===be.exId);if(!ex)return;
+                const series=parseFloat((be.params||b.params||{}).series)||0;if(series<=0)return;
+                parseMusculosFraccion(ex.musculos).forEach(({nombre,fraccion})=>{
+                  acumPorMusculo[nombre]=(acumPorMusculo[nombre]||0)+series*fraccion;
+                });
+              });
+            });
+          });
+          const filas=Object.entries(acumPorMusculo).sort((a,b)=>b[1]-a[1]);
+          if(filas.length===0)return null;
+          const nivelTag=(v)=>v<10?{txt:'Bajo',c:'#D97706'}:v<=20?{txt:'Óptimo',c:'#16A34A'}:{txt:'Alto',c:'#CC0000'};
+          return(
+            <div style={{...s.card,marginTop:10,background:'#FAFAFF',border:'1px solid #E0DDFA'}}>
+              <div style={{fontSize:12,fontWeight:800,marginBottom:2,color:'#4C1D95'}}>🧮 Series semanales por grupo muscular</div>
+              <div style={{fontSize:9,color:G3,marginBottom:9}}>Conteo fraccionado (principal=1, secundario=0.5, terciario=0.25) sobre los {numDias} día/s de esta sesión. Referencia orientativa: 10-20 series/semana por grupo.</div>
+              <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                {filas.map(([m,v])=>{const nv=nivelTag(v);const pct=Math.min(100,(v/20)*100);
+                  return(
+                    <div key={m} style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{width:110,fontSize:10,fontWeight:600,color:G4,flexShrink:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m}</div>
+                      <div style={{flex:1,background:'#EDEBFB',borderRadius:99,height:8,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',background:nv.c,borderRadius:99}}/></div>
+                      <div style={{width:64,textAlign:'right',fontSize:10,fontWeight:800,color:nv.c,flexShrink:0}}>{Math.round(v*100)/100} · {nv.txt}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{fontSize:8,color:'#999',marginTop:8,fontStyle:'italic'}}>Si un ejercicio suma a un músculo que no corresponde, reordená el campo "Músculos" de ese ejercicio en 📚 Ejercicios (el orden define principal/secundario/terciario).</div>
+            </div>
+          );
+        })()}
+        {dia.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
+          <div style={s.card}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>Agregar bloque manual</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 90px 80px',gap:8}}>
+              <select value={addBType} onChange={e=>{setAddBType(e.target.value);setAddBPos('');}} style={s.sel}>
+                <option value=''>Tipo de bloque...</option>
+                {Object.entries(BLOCKS).map(([k,v])=><option key={k} value={k}>{v.label} · pos: {v.pos.join(', ')}</option>)}
+              </select>
+              <select value={addBPos} onChange={e=>setAddBPos(e.target.value)} style={s.sel} disabled={!addBType}>
+                <option value=''>Pos.</option>
+                {addBType&&BLOCKS[addBType].pos.map(p=><option key={p} value={p}>{p}</option>)}
+              </select>
+              <button onClick={addBlock} disabled={!addBType||!addBPos} style={{...s.btnR,background:brand.colorPrimary,opacity:(!addBType||!addBPos)?0.5:1}}>Agregar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ── EXFORM — Componente propio (tiene useState, debe ser <JSX/>) ────────────
+  const ExportTab=()=>{
+    const diasArmados=(session.dias||[]).filter(d=>d.obj&&d.blocks.length>0);
+    const hasSession=diasArmados.length>0;
+    const totalEx=diasArmados.reduce((a,d)=>a+d.blocks.reduce((x,b)=>x+b.exercises.length,0),0);
+    const planNom=session.planNombre||(activeClient?`Plan de ${activeClient.nombre} ${activeClient.apellido}`:'Plan de entrenamiento');
+    return(
+      <div style={{padding:'16px 14px'}}>
+        <div style={{background:BK,borderRadius:10,padding:'16px 18px',marginBottom:16,borderLeft:`4px solid ${hasSession?'#16A34A':brand.colorPrimary}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH,marginBottom:6}}>{hasSession?`Plan listo: ${planNom}`:'Sin sesiones armadas'}</div>
+          {hasSession&&(
+            <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+              {[['Nivel método',activeClient?NIVEL[activeClient.nivel].label:'—'],['Sesiones/semana',diasArmados.length],['Cliente',session.cliente||'Sin nombre'],['Ejercicios totales',totalEx],['Registro',`8 semanas`]].map(([k,v])=>(
+                <div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{k}</div><div style={{fontSize:13,color:WH,fontWeight:700}}>{v}</div></div>
+              ))}
+            </div>
+          )}
+          {hasSession&&<div style={{marginTop:8,fontSize:10,color:G3}}>El PDF incluye los {diasArmados.length} día/s en un solo documento, separados por página, con grilla de 8 semanas para registrar pesos{planMeta?' y los plazos del plan':''}.</div>}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div style={{...s.card,borderTop:`4px solid ${brand.colorPrimary}`,padding:'20px 18px'}}>
+            <div style={{fontSize:24,marginBottom:8}}>📄</div>
+            <div style={{fontSize:15,fontWeight:800,marginBottom:8}}>Exportar a PDF</div>
+            <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px'}}>En la ventana de impresión elegí <strong>Guardar como PDF</strong> como destino.</div>
+            <button onClick={exportPDF} disabled={!hasSession} style={{...s.btnR,background:brand.colorPrimary,width:'100%',padding:'11px',opacity:!hasSession?.4:1}}>Imprimir / PDF</button>
+          </div>
+          <div style={{...s.card,borderTop:'4px solid #16A34A',padding:'20px 18px'}}>
+            <div style={{fontSize:24,marginBottom:8}}>📊</div>
+            <div style={{fontSize:15,fontWeight:800,marginBottom:8}}>Exportar a Google Sheets</div>
+            <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px'}}>CSV con nivel, semáforo y restricciones del cliente.</div>
+            <button onClick={exportCSV} disabled={!hasSession} style={{...s.btnGreen,width:'100%',padding:'11px',opacity:!hasSession?.4:1}}>Descargar CSV</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TAB: CENTRO ───────────────────────────────────────────────────────────
   const HeaderLogo=()=>brand.logoImg?(
     <div style={{display:'flex',alignItems:'center',gap:12}}>
       <img src={brand.logoImg} alt="logo" style={{height:46,objectFit:'contain',flexShrink:0}}/>
@@ -3619,7 +4287,8 @@ export default function App(){
   return(
     <div style={s.page}>
       {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
-      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand}/>}
+      {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand} setSession={setSession} setTab={setTab} iaReglas={iaReglas}/>}
+      {miniEvalCliente&&<MiniEvaluacionModal cliente={miniEvalCliente} saveClient={saveClient} onClose={()=>setMiniEvalCliente(null)} brand={brand} s={s}/>}
       {dbLoading&&(
         <div style={{position:'fixed',top:0,left:0,right:0,background:'#0A3D62',color:'#fff',textAlign:'center',padding:'6px',fontSize:11,zIndex:9999,fontFamily:'Arial,sans-serif'}}>
           ⏳ Conectando con la base de datos...
@@ -3673,9 +4342,9 @@ export default function App(){
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='clientes'&&ClientesTab()}
         {tab==='session'&&SessionTab()}
-        {tab==='fuerza'&&<FuerzaTab/>}
+        {tab==='fuerza'&&<FuerzaTab brand={brand} clients={clients} s={s} saveClientFn={saveClientFn}/>}
         {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}
-        {tab==='rehab'&&<RehabTab/>}
+        {tab==='rehab'&&<RehabTab brand={brand} clients={clients} s={s}/>}
         {tab==='fisio'&&<FisioActiva
           brand={brand}
           gymClients={clients}
@@ -3686,8 +4355,8 @@ export default function App(){
           }}
         />}
         {tab==='export'&&ExportTab()}
-        {tab==='db'&&<DBTab/>}
-        {tab==='brand'&&<BrandingTab/>}
+        {tab==='db'&&<DBTab exs={exs} dbSaveEjercicio={dbSaveEjercicio} dbDeleteEjercicio={dbDeleteEjercicio} brand={brand} s={s}/>}
+        {tab==='brand'&&<BrandingTab brand={brand} setBrand={setBrand} s={s}/>}
       </div>
     </div>
   );

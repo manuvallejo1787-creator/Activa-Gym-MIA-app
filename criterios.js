@@ -1,503 +1,330 @@
-// db.js — Capa de datos con fallback a estado local si Supabase no está disponible
-import { useState, useEffect, useCallback } from 'react'
-import { supabase, isSupabaseReady } from './supabase.js'
+// criterios.js — Archivo compartido entre FisioActiva y ACTIVA Gym App
+// Fuente única de verdad para fases, semáforos y criterios de evolución
 
-export const genId = (prefix = 'id') =>
-  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
+// ─── FASES DEL MÉTODO ACTIVA INTEGRA ─────────────────────────────────────
+export const FASES_METODO={
+  restaura:{
+    label:'RESTAURA', badge:'N0', color:'#374151', semaforo:'rojo', emoji:'🔴',
+    criterios_ingreso:[
+      'Dolor activo > 4/10 en reposo',
+      'Déficit ROM > 30%',
+      'Fuerza < 3/5 MRC',
+      'Red flag descartada previamente',
+    ],
+    criterios_avance:[
+      'EVA ≤ 3/10 en movimiento',
+      'ROM > 70% del normal',
+      'Fuerza ≥ 3/5 MRC',
+      'Control motor básico presente',
+      'Sin signos inflamatorios activos',
+    ],
+    objetivos:[
+      'Control del dolor y la inflamación',
+      'Restaurar movilidad básica',
+      'Activar musculatura estabilizadora',
+      'Reeducar patrones de movimiento',
+      'Preparar para carga funcional',
+    ],
+    semaforo_avance:'amarillo',
+    desc_clinica:'Fase de rehabilitación activa. Conduce el fisioterapeuta. El entrenador no interviene hasta semáforo amarillo.',
+  },
+  activa:{
+    label:'ACTIVA', badge:'N1', color:'#1D4ED8', semaforo:'amarillo', emoji:'🟡',
+    criterios_ingreso:[
+      'EVA ≤ 3/10 en movimiento',
+      'ROM > 70% del normal',
+      'Fuerza ≥ 3/5 MRC',
+      'Tolerancia a la carga básica',
+    ],
+    criterios_avance:[
+      'EVA ≤ 2/10',
+      'ROM > 85% del normal',
+      'Fuerza ≥ 4/5 MRC',
+      'Control motor funcional establecido',
+      'Y-Balance: asimetría < 6 cm',
+    ],
+    objetivos:[
+      'Recuperar rango de movimiento completo',
+      'Fortalecer cadenas musculares primarias',
+      'Mejorar control motor y propiocepción',
+      'Introducir carga progresiva',
+      'Integrar patrones funcionales de movimiento',
+    ],
+    semaforo_avance:'amarillo',
+    desc_clinica:'Fase de base de movimiento. El entrenador trabaja en coordinación con el fisio. Restricciones activas documentadas.',
+  },
+  potencia:{
+    label:'POTENCIA', badge:'N2', color:'#7C3AED', semaforo:'amarillo', emoji:'🟣',
+    criterios_ingreso:[
+      'EVA ≤ 2/10',
+      'ROM > 85% del normal',
+      'Fuerza 4/5 MRC',
+      'Y-Balance: asimetría < 6 cm',
+    ],
+    criterios_avance:[
+      'EVA ≤ 2/10',
+      'ROM > 90% del normal',
+      'Fuerza > 90% del lado contralateral',
+      'Y-Balance: asimetría < 4 cm',
+      'FMS ≥ 14/21',
+    ],
+    objetivos:[
+      'Maximizar fuerza funcional',
+      'Desarrollar potencia y velocidad',
+      'Optimizar control neuromuscular',
+      'Preparar retorno deportivo o laboral',
+      'Periodización de carga avanzada',
+    ],
+    semaforo_avance:'verde',
+    desc_clinica:'Fase de desarrollo de capacidades. El entrenador lidera. Fisio preventivo activo en monitoreo.',
+  },
+  rinde:{
+    label:'RINDE', badge:'N3', color:'#CC0000', semaforo:'verde', emoji:'🔥',
+    criterios_ingreso:[
+      'Alta clínica funcional emitida',
+      'Todos los criterios de alta cumplidos',
+    ],
+    criterios_avance:[
+      'Mantenimiento de capacidades',
+      'Prevención de recidivas',
+    ],
+    objetivos:[
+      'Alto rendimiento deportivo o funcional',
+      'Prevención primaria de lesiones',
+      'Optimización del rendimiento específico',
+      'Monitoreo ACWR en carga de entrenamiento',
+    ],
+    semaforo_avance:'verde',
+    desc_clinica:'Alto rendimiento. Fisio preventivo activo. Sin restricciones de carga.',
+  },
+};
 
-// ─── HOOK: Clientes del Gym ───────────────────────────────────────────────
-export function useGymClients() {
-  const [clients, setClients]   = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [error, setError]       = useState(null)
-  const [dbMode, setDbMode]     = useState(isSupabaseReady)
+// ─── GENERADOR DE CRITERIOS PERSONALIZADOS ────────────────────────────────
+// Toma el objetivo declarado por el paciente/cliente al inicio
+// y genera criterios de evolución adaptados que condicionan el avance entre fases
+export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_inicial='', rom_inicial_pct=null)=>{
+  const obj=(objetivo||'').toLowerCase();
 
-  const fetchClients = useCallback(async () => {
-    if (!isSupabaseReady) { setLoading(false); return }
-    try {
-      const { data, error: e } = await supabase
-        .from('gym_clients')
-        .select('*')
-        .order('created_at', { ascending: false })
-      if (e) throw e
-      setClients((data || []).map(mapClientFromDB))
-      setDbMode(true)
-    } catch (e) {
-      console.error('DB fetch error:', e.message)
-      setError(e.message)
-      setDbMode(false)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Clasificación del objetivo
+  const esDeportivo=obj.includes('deport')||obj.includes('jugar')||obj.includes('correr')||
+    obj.includes('fútbol')||obj.includes('entrenar')||obj.includes('competir')||
+    obj.includes('rugby')||obj.includes('tenis')||obj.includes('nataci')||obj.includes('ciclismo');
 
-  useEffect(() => {
-    fetchClients()
-    if (!isSupabaseReady) return
-    const ch = supabase.channel('gym_clients_rt_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'gym_clients' },
-        payload => {
-          if (payload.eventType === 'INSERT')
-            setClients(p => [mapClientFromDB(payload.new), ...p])
-          if (payload.eventType === 'UPDATE')
-            setClients(p => p.map(c => c.id === payload.new.id ? mapClientFromDB(payload.new) : c))
-          if (payload.eventType === 'DELETE')
-            setClients(p => p.filter(c => c.id !== payload.old.id))
-        })
-      .subscribe()
-    return () => supabase.removeChannel(ch)
-  }, [fetchClients])
+  const esLaboral=obj.includes('trabajo')||obj.includes('laboral')||obj.includes('oficio')||
+    obj.includes('profesion')||obj.includes('construcc')||obj.includes('carga');
 
-  const saveClient = useCallback(async (client) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase
-        .from('gym_clients')
-        .upsert(mapClientToDB(client), { onConflict: 'id' })
-      if (e) throw e
-    } else {
-      // Fallback local
-      setClients(p => p.find(x => x.id === client.id)
-        ? p.map(x => x.id === client.id ? client : x)
-        : [client, ...p])
-    }
-  }, [dbMode])
+  const esAVD=obj.includes('caminar')||obj.includes('subir')||obj.includes('vestir')||
+    obj.includes('vida diaria')||obj.includes('actividad diaria')||obj.includes('escalera')||
+    obj.includes('hijo')||obj.includes('nieto')||obj.includes('levantar');
 
-  const deleteClient = useCallback(async (id) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase.from('gym_clients').delete().eq('id', id)
-      if (e) throw e
-    } else {
-      setClients(p => p.filter(c => c.id !== id))
-    }
-  }, [dbMode])
+  const esFuerza=obj.includes('fuerza')||obj.includes('hipertrofia')||obj.includes('músculo')||
+    obj.includes('masa')||obj.includes('levantamiento');
 
-  const updateClient = useCallback(async (id, updates) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase
-        .from('gym_clients')
-        .update(mapClientUpdatesToDB(updates))
-        .eq('id', id)
-      if (e) throw e
-    } else {
-      setClients(p => p.map(c => c.id === id ? { ...c, ...updates } : c))
-    }
-  }, [dbMode])
+  const esEstetico=obj.includes('estétic')||obj.includes('composici')||obj.includes('figura')||
+    obj.includes('peso')||obj.includes('adelgaz');
 
-  return { clients, loading, error, dbMode, saveClient, deleteClient, updateClient, refetch: fetchClients }
-}
+  const esPreventivo=obj.includes('preveni')||obj.includes('evitar')||obj.includes('no lesion');
 
-// ─── HOOK: Pacientes FisioActiva ──────────────────────────────────────────
-export function useFisioPacientes() {
-  const [pacientes, setPacientes] = useState([])
-  const [loading, setLoading]    = useState(true)
-  const [error, setError]        = useState(null)
-  const [dbMode, setDbMode]      = useState(isSupabaseReady)
+  // Criterios base de la fase
+  const base=[...(FASES_METODO[fase]?.criterios_avance||[])];
 
-  const fetchPacientes = useCallback(async () => {
-    if (!isSupabaseReady) { setLoading(false); return }
-    try {
-      const [{ data: pacs, error: e1 }, { data: evals, error: e2 }] = await Promise.all([
-        supabase.from('fisio_pacientes').select('*').order('created_at', { ascending: false }),
-        supabase.from('fisio_evaluaciones').select('*').order('created_at', { ascending: true }),
-      ])
-      if (e1) throw e1
-      if (e2) throw e2
-      const combined = (pacs || []).map(p => ({
-        ...mapPacienteFromDB(p),
-        evaluaciones: (evals || []).filter(e => e.paciente_id === p.id).map(mapEvalFromDB),
-      }))
-      setPacientes(combined)
-      setDbMode(true)
-    } catch (e) {
-      console.error('DB fetch pacientes:', e.message)
-      setError(e.message)
-      setDbMode(false)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Criterios específicos al objetivo
+  const extras=[];
 
-  useEffect(() => {
-    fetchPacientes()
-    if (!isSupabaseReady) return
-    const ch1 = supabase.channel('fisio_pac_rt_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fisio_pacientes' },
-        () => fetchPacientes()).subscribe()
-    const ch2 = supabase.channel('fisio_eval_rt_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fisio_evaluaciones' },
-        () => fetchPacientes()).subscribe()
-    return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2) }
-  }, [fetchPacientes])
-
-  const savePaciente = useCallback(async (p) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase
-        .from('fisio_pacientes')
-        .upsert(mapPacienteToDB(p), { onConflict: 'id' })
-      if (e) throw e
-    } else {
-      setPacientes(prev => prev.find(x => x.id === p.id)
-        ? prev.map(x => x.id === p.id ? { ...x, ...p } : x)
-        : [{ ...p, evaluaciones: [] }, ...prev])
-    }
-  }, [dbMode])
-
-  const deletePaciente = useCallback(async (id) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase.from('fisio_pacientes').delete().eq('id', id)
-      if (e) throw e
-    } else {
-      setPacientes(p => p.filter(x => x.id !== id))
-    }
-  }, [dbMode])
-
-  const saveEvaluacion = useCallback(async (pacienteId, eval_) => {
-    if (dbMode && isSupabaseReady) {
-      const { error: e } = await supabase
-        .from('fisio_evaluaciones')
-        .upsert(mapEvalToDB(pacienteId, eval_), { onConflict: 'id' })
-      if (e) throw e
-    } else {
-      setPacientes(prev => prev.map(p => {
-        if (p.id !== pacienteId) return p
-        const exists = p.evaluaciones.find(e => e.id === eval_.id)
-        return {
-          ...p,
-          evaluaciones: exists
-            ? p.evaluaciones.map(e => e.id === eval_.id ? eval_ : e)
-            : [...p.evaluaciones, eval_]
-        }
-      }))
-    }
-  }, [dbMode])
-
-  return { pacientes, loading, error, dbMode, savePaciente, deletePaciente, saveEvaluacion, refetch: fetchPacientes }
-}
-
-// ─── MAPPERS: DB → App ────────────────────────────────────────────────────
-function mapClientFromDB(r) {
-  return {
-    id: r.id, nombre: r.nombre||'', apellido: r.apellido||'',
-    documento: r.documento||'', celular: r.celular||'',
-    nivel: r.nivel||'activa', semaforo: r.semaforo||'pendiente',
-    restricciones: r.restricciones||'',
-    restricciones_flags: r.restricciones_flags||{impacto:false,overhead:false,cargaAxial:false},
-    objetivo: r.objetivo||'', criterios_personalizados: r.criterios_personalizados||[],
-    fechaIngreso: r.fecha_ingreso||'', fechaEval: r.fecha_eval||'',
-    notasInternas: r.notas_internas||'', screeningCompleto: r.screening_completo||false,
-    screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
-    periodizacion: r.periodizacion||'',
+  if(fase==='restaura'){
+    if(objetivo)extras.push(`Dolor vinculado al objetivo "${objetivo.slice(0,40)}" controlado: EVA ≤ 3/10 en la actividad específica`);
+    if(esDeportivo)extras.push('Tolerancia a actividad aeróbica suave (caminar/trote 10-15 min) sin exacerbación');
+    if(esLaboral)extras.push('Tolerancia a postura de trabajo básica sin exacerbación del cuadro');
+    if(esAVD)extras.push('Realización de AVDs básicas (vestirse, ducharse, desplazarse) con EVA ≤ 3/10');
+    if(eva_inicial&&parseFloat(eva_inicial)>5)extras.push(`Reducción de al menos 50% del dolor inicial (EVA inicial: ${eva_inicial}/10 → meta: ≤ ${Math.ceil(parseFloat(eva_inicial)/2)}/10)`);
   }
-}
-function mapClientToDB(c) {
-  return {
-    id: c.id, nombre: c.nombre, apellido: c.apellido,
-    documento: c.documento||null, celular: c.celular||null,
-    nivel: c.nivel||'activa', semaforo: c.semaforo||'pendiente',
-    restricciones: c.restricciones||'',
-    restricciones_flags: c.restricciones_flags||{impacto:false,overhead:false,cargaAxial:false},
-    objetivo: c.objetivo||'', criterios_personalizados: c.criterios_personalizados||[],
-    fecha_ingreso: c.fechaIngreso||null, fecha_eval: c.fechaEval||null,
-    notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
-    screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
-    periodizacion: c.periodizacion||'',
-  }
-}
-function mapClientUpdatesToDB(u) {
-  const m={}
-  if(u.nivel!==undefined)              m.nivel=u.nivel
-  if(u.semaforo!==undefined)           m.semaforo=u.semaforo
-  if(u.restricciones!==undefined)      m.restricciones=u.restricciones
-  if(u.restricciones_flags!==undefined)m.restricciones_flags=u.restricciones_flags
-  if(u.fechaEval!==undefined)          m.fecha_eval=u.fechaEval
-  if(u.screeningCompleto!==undefined)  m.screening_completo=u.screeningCompleto
-  if(u.notasInternas!==undefined)      m.notas_internas=u.notasInternas
-  if(u.objetivo!==undefined)           m.objetivo=u.objetivo
-  return m
-}
-function mapPacienteFromDB(r) {
-  return {
-    id:r.id, nombre:r.nombre||'', apellido:r.apellido||'',
-    documento:r.documento||'', celular:r.celular||'', email:r.email||'',
-    fechaNac:r.fecha_nac||'', genero:r.genero||'',
-    region:r.region||'lumbar', derivadoPor:r.derivado_por||'',
-    gym_clienteId:r.gym_cliente_id||null, notas:r.notas||'',
-    activo:r.activo!==false, evaluaciones:[],
-  }
-}
-function mapPacienteToDB(p) {
-  return {
-    id:p.id, nombre:p.nombre, apellido:p.apellido,
-    documento:p.documento||null, celular:p.celular||null, email:p.email||null,
-    fecha_nac:p.fechaNac||null, genero:p.genero||null,
-    region:p.region||'lumbar', derivado_por:p.derivadoPor||null,
-    gym_cliente_id:p.gym_clienteId||null, notas:p.notas||'', activo:p.activo!==false,
-  }
-}
-function mapEvalFromDB(r) {
-  return { id:r.id, fecha:r.fecha||'', tipo:r.tipo||'inicial',
-    region:r.region||'lumbar', evaluador:r.evaluador||'', fase:r.fase||'restaura',
-    objetivo:r.objetivo||'', eva_reposo:r.eva_reposo||'',
-    diagnosticoPT:r.diagnostico_pt||'', plan:r.plan||'',
-    criterios_personalizados:r.criterios_personalizados||[],
-    ...(r.data||{}),
-  }
-}
-function mapEvalToDB(pacienteId, ev) {
-  const { id,fecha,tipo,region,evaluador,fase,objetivo,eva_reposo,
-          diagnosticoPT,plan,criterios_personalizados,...rest } = ev
-  return {
-    id: id||genId('eval'), paciente_id:pacienteId,
-    fecha:fecha||new Date().toISOString().split('T')[0],
-    tipo:tipo||'inicial', region:region||'lumbar',
-    evaluador:evaluador||null, fase:fase||'restaura',
-    objetivo:objetivo||null, eva_reposo:eva_reposo||null,
-    diagnostico_pt:diagnosticoPT||null, plan:plan||null,
-    criterios_personalizados:criterios_personalizados||[],
-    data:{...rest,eva_reposo,objetivo,diagnosticoPT,plan},
-  }
-}
 
-// ─── HOOK: Ejercicios (base de datos de ejercicios) ──────────────────────
-export function useEjercicios(initialExercises=[]) {
-  const [exs, setExs]     = useState(initialExercises)
-  const [loading, setLoading] = useState(true)
-  const [dbMode, setDbMode]   = useState(isSupabaseReady)
-  const initialized           = useState(false)
+  if(fase==='activa'){
+    if(objetivo)extras.push(`Retomar actividades intermedias relacionadas con: "${objetivo.slice(0,40)}"`);
+    if(esDeportivo)extras.push('Tolerancia a trote suave continuo 15-20 min sin dolor residual');
+    if(esLaboral)extras.push('Retorno parcial al trabajo con adaptaciones del puesto (50-75% de la jornada)');
+    if(esAVD)extras.push('AVDs completas sin limitación funcional ni compensaciones visibles');
+    if(esFuerza)extras.push('Tolerancia a carga bilateral progresiva: sentadilla y peso muerto sin dolor');
+    if(esEstetico)extras.push('Tolerancia a entrenamiento de composición corporal (3 sesiones/sem) sin síntomas');
+    if(eva_inicial)extras.push(`EVA reducida ≥ 60% vs. evaluación inicial (inicial: ${eva_inicial}/10)`);
+  }
 
-  const fetchEjercicios = useCallback(async () => {
-    if (!isSupabaseReady) {
-      setExs(initialExercises)
-      setLoading(false)
-      return
+  if(fase==='potencia'){
+    if(objetivo)extras.push(`Capacidad funcional completa para: "${objetivo.slice(0,40)}"`);
+    if(esDeportivo)extras.push('Retorno progresivo al deporte específico: entrenamiento grupal sin restricciones');
+    if(esLaboral)extras.push('Retorno completo al trabajo con plena capacidad funcional');
+    if(esAVD)extras.push('AVDs ilimitadas incluyendo actividades de alta demanda sin restricciones');
+    if(esFuerza)extras.push('Fuerza bilateral simétrica: diferencia < 10% entre lados en ejercicios de base');
+    if(esPreventivo)extras.push('FMS ≥ 14/21 con patrón de movimiento sin asimetrías ≥ 1 punto');
+    extras.push('Criterio de alta clínica iniciado: todos los indicadores ≥ 90%');
+  }
+
+  if(fase==='rinde'){
+    if(objetivo)extras.push(`Objetivo alcanzado: "${objetivo.slice(0,60)}" — mantenimiento y prevención de recidiva`);
+    extras.push('Monitoreo mensual de carga: ACWR entre 0.8 y 1.3');
+    extras.push('Sin episodios de dolor > 3/10 durante 4 semanas consecutivas');
+  }
+
+  // Eliminar duplicados y devolver
+  const todos=[...base,...extras];
+  return todos;
+};
+
+// ════════════════════════════════════════════════════════════════════════
+// CRITERIOS DE AVANCE PERSONALIZADOS POR CLIENTE
+// ────────────────────────────────────────────────────────────────────────
+// Combina tres fuentes para armar el checklist real de un cliente puntual,
+// en vez de aplicar la misma plantilla genérica a todos los que están en
+// la misma fase:
+//   1. Plantilla base editable (criteriosAvanceTemplate) — el piso mínimo
+//      objetivo/medible de la fase. Siempre CRÍTICOS (bloquean el avance).
+//   2. Objetivo declarado del cliente — vía generarCriteriosPersonalizados.
+//      Son señales de contexto (tolerancia a tal actividad, etc.), más
+//      cualitativas y difíciles de verificar con un check binario duro →
+//      quedan como SECUNDARIOS (informan, no bloquean).
+//   3. Determinaciones de la evaluación/IA (déficits funcionales y de
+//      fuerza detectados) — son hallazgos puntuales de ESTE cliente, así
+//      que si se detectaron, son justamente lo que hay que resolver antes
+//      de avanzar → CRÍTICOS.
+// El resultado es {criticos, secundarios} — solo criticos determinan si el
+// botón de avance se habilita.
+// ════════════════════════════════════════════════════════════════════════
+export const generarCriteriosAvancePersonalizados=({
+  objetivo='', fase='activa', eva_inicial='', rom_inicial_pct=null,
+  criteriosBase=[], deficienciasFuncionales=[], deficienciasFuerza=[],
+  banderaActiva=false,
+}={})=>{
+  const criticos=[];
+  const secundarios=[];
+
+  // 1) Plantilla base editable — piso mínimo objetivo de la fase
+  criteriosBase.forEach(c=>criticos.push({id:'base_'+c.id,texto:c.texto,origen:'base'}));
+
+  // 2) Bandera clínica activa: siempre crítico, siempre primero
+  if(banderaActiva)criticos.unshift({id:'bandera',texto:'Bandera clínica activa descartada / resuelta',origen:'bandera'});
+
+  // 3) Déficits detectados en la evaluación/IA — específicos de este cliente
+  deficienciasFuncionales.forEach((d,i)=>criticos.push({id:'deffunc_'+i,texto:`Resolver déficit funcional detectado: ${d}`,origen:'evaluacion'}));
+  deficienciasFuerza.forEach((d,i)=>criticos.push({id:'deffza_'+i,texto:`Resolver déficit de fuerza detectado: ${d}`,origen:'evaluacion'}));
+
+  // 4) Señales derivadas del objetivo declarado — contextuales, no bloquean
+  const extrasObjetivo=generarCriteriosPersonalizados(objetivo,fase,eva_inicial,rom_inicial_pct)
+    .filter(txt=>!criteriosBase.some(c=>c.texto===txt)); // no duplicar lo que ya está en la base
+  extrasObjetivo.forEach((txt,i)=>secundarios.push({id:'obj_'+i,texto:txt,origen:'objetivo'}));
+
+  return{criticos,secundarios};
+};
+// Dado un set de métricas, determina cuántos criterios se cumplen
+export const checkCriteriosAvance=(fase, metricas={})=>{
+  const { eva, romPct, ybDiff, fmsTotal, fuerzaAsimetria } = metricas;
+  const resultados=[];
+
+  if(fase==='restaura'){
+    resultados.push({label:'EVA ≤ 3/10 en movimiento',pass:eva!=null&&parseFloat(eva)<=3,val:eva?`${eva}/10`:'—'});
+    resultados.push({label:'ROM > 70%',pass:romPct!=null&&romPct>70,val:romPct?`${romPct}%`:'—'});
+    resultados.push({label:'Sin signos inflamatorios activos',pass:null,val:'Evaluación clínica'});
+  }
+  if(fase==='activa'){
+    resultados.push({label:'EVA ≤ 2/10',pass:eva!=null&&parseFloat(eva)<=2,val:eva?`${eva}/10`:'—'});
+    resultados.push({label:'ROM > 85%',pass:romPct!=null&&romPct>85,val:romPct?`${romPct}%`:'—'});
+    resultados.push({label:'Y-Balance < 6 cm',pass:ybDiff!=null&&parseFloat(ybDiff)<6,val:ybDiff?`${ybDiff} cm`:'—'});
+  }
+  if(fase==='potencia'){
+    resultados.push({label:'EVA ≤ 2/10',pass:eva!=null&&parseFloat(eva)<=2,val:eva?`${eva}/10`:'—'});
+    resultados.push({label:'ROM > 90%',pass:romPct!=null&&romPct>90,val:romPct?`${romPct}%`:'—'});
+    resultados.push({label:'Y-Balance < 4 cm',pass:ybDiff!=null&&parseFloat(ybDiff)<4,val:ybDiff?`${ybDiff} cm`:'—'});
+    resultados.push({label:'FMS ≥ 14/21',pass:fmsTotal!=null&&fmsTotal>=14,val:fmsTotal?`${fmsTotal}/21`:'—'});
+    resultados.push({label:'Fuerza > 90% contralateral',pass:fuerzaAsimetria!=null&&fuerzaAsimetria<=10,val:fuerzaAsimetria!=null?`Δ${fuerzaAsimetria}%`:'—'});
+  }
+  return resultados;
+};
+
+// ─── MAPA DE SEMÁFORO POR FASE ────────────────────────────────────────────
+export const getSemaforoPorFase=(fase)=>{
+  return FASES_METODO[fase]?.semaforo||'pendiente';
+};
+
+// ════════════════════════════════════════════════════════════════════════
+// FASES CLÍNICAS DE REHAB (desacopladas del Método Activa Integra)
+// ────────────────────────────────────────────────────────────────────────
+// FASES_METODO (RESTAURA/ACTIVA/POTENCIA/RINDE) sigue existiendo igual
+// porque de ahí depende el semáforo de negocio y syncConGym. No se tocó.
+// Este es un modelo PARALELO que describe el avance clínico de UNA lesión
+// puntual: 3 fases genéricas (protección / carga progresiva / retorno
+// funcional) cuyos criterios se generan según región + tejido sospechado +
+// objetivo del paciente — no según el nivel de negocio del cliente.
+// Al final hay una función de mapeo explícita fase clínica → fase de
+// negocio, para dejar la traducción documentada en un solo lugar.
+// ════════════════════════════════════════════════════════════════════════
+
+export const FASES_REHAB=[
+  {
+    k:'proteccion', label:'Protección / Fase Aguda', badge:'R0', color:'#DC2626', emoji:'🩹',
+    objetivo_clinico:'Controlar dolor e inflamación, proteger el tejido lesionado, evitar el gesto agresor.',
+    criterios_avance_generico:[
+      'EVA ≤ 3/10 en reposo',
+      'Sin signos inflamatorios activos (calor, tumefacción, dolor nocturno)',
+      'Tolerancia a AVDs básicas relacionadas a la zona',
+    ],
+  },
+  {
+    k:'carga_progresiva', label:'Carga Progresiva', badge:'R1', color:'#D97706', emoji:'📈',
+    objetivo_clinico:'Recuperar ROM funcional, reintroducir carga controlada sobre el tejido, restaurar control motor local.',
+    criterios_avance_generico:[
+      'EVA ≤ 2/10 con carga funcional',
+      'ROM funcional recuperado en los movimientos clave de la evaluación',
+      'Test/es específico/s de la región con resultado negativo o claramente mejorado',
+      'Fuerza ≥ 4/5 MRC en grupos musculares involucrados',
+    ],
+  },
+  {
+    k:'retorno_funcion', label:'Retorno Funcional', badge:'R2', color:'#16A34A', emoji:'🎯',
+    objetivo_clinico:'Recuperar la capacidad funcional específica del objetivo del paciente (deporte, trabajo, AVD) sin restricciones ni compensaciones.',
+    criterios_avance_generico:[
+      'EVA 0/10 en la actividad objetivo',
+      'Fuerza simétrica: diferencia < 10-15% vs. contralateral',
+      'Sin dolor ni compensación visible en el gesto específico del objetivo',
+      'Alta clínica habilitada — puede continuar en POTENCIA/RINDE del método sin restricción',
+    ],
+  },
+];
+
+// Genera el protocolo clínico (3 fases) para un caso puntual.
+export const generarProtocoloRehab=(region='', tejido='', objetivo='', evaInicial=null, romPct=null)=>{
+  const obj=(objetivo||'').toLowerCase();
+  const esDeportivo=obj.includes('deport')||obj.includes('jugar')||obj.includes('correr')||obj.includes('entrenar')||obj.includes('competir');
+  const esLaboral=obj.includes('trabajo')||obj.includes('laboral')||obj.includes('carga');
+  const esAVD=obj.includes('caminar')||obj.includes('subir')||obj.includes('vida diaria')||obj.includes('hijo')||obj.includes('nieto');
+
+  return FASES_REHAB.map(fase=>{
+    const extras=[];
+    if(fase.k==='proteccion'){
+      if(evaInicial&&parseFloat(evaInicial)>5)extras.push(`Reducción ≥ 50% del dolor inicial (EVA inicial ${evaInicial}/10 → meta ≤ ${Math.ceil(parseFloat(evaInicial)/2)}/10)`);
+      if(tejido)extras.push(`Sin reproducción de síntomas en gesto compatible con: ${tejido}`);
     }
-    try {
-      const { data, error } = await supabase
-        .from('ejercicios')
-        .select('*')
-        .order('bloque', { ascending: true })
-      if (error) throw error
-
-      if (data && data.length > 0) {
-        // DB has exercises — use them
-        setExs(data.map(mapEjFromDB))
-        setDbMode(true)
-      } else {
-        // DB empty — seed with initial exercises
-        const rows = initialExercises.map(mapEjToDB)
-        const { error: insertError } = await supabase
-          .from('ejercicios')
-          .upsert(rows, { onConflict: 'id' })
-        if (insertError) throw insertError
-        setExs(initialExercises)
-        setDbMode(true)
-        console.log('✅ Ejercicios iniciales cargados en Supabase:', rows.length)
-      }
-    } catch (e) {
-      console.error('DB ejercicios error:', e.message)
-      setExs(initialExercises)
-      setDbMode(false)
-    } finally {
-      setLoading(false)
+    if(fase.k==='carga_progresiva'){
+      if(romPct!=null)extras.push(`ROM actual ${romPct}% del normal para ${region||'la región'} → meta > 80-85%`);
+      if(esDeportivo)extras.push('Tolerancia a carga específica del deporte sin dolor residual post-actividad');
+      if(esLaboral)extras.push('Tolerancia a postura/carga del puesto de trabajo sin exacerbación');
     }
-  }, [])
-
-  useEffect(() => {
-    fetchEjercicios()
-    if (!isSupabaseReady) return
-    const ch = supabase.channel('ejercicios_rt_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ejercicios' },
-        payload => {
-          if (payload.eventType === 'INSERT')
-            setExs(p => [...p, mapEjFromDB(payload.new)])
-          if (payload.eventType === 'UPDATE')
-            setExs(p => p.map(e => e.id === payload.new.id ? mapEjFromDB(payload.new) : e))
-          if (payload.eventType === 'DELETE')
-            setExs(p => p.filter(e => e.id !== payload.old.id))
-        })
-      .subscribe()
-    return () => supabase.removeChannel(ch)
-  }, [fetchEjercicios])
-
-  const saveEjercicio = useCallback(async (ex) => {
-    if (dbMode && isSupabaseReady) {
-      const { error } = await supabase
-        .from('ejercicios')
-        .upsert(mapEjToDB(ex), { onConflict: 'id' })
-      if (error) throw error
-    } else {
-      setExs(p => p.find(e => e.id === ex.id)
-        ? p.map(e => e.id === ex.id ? ex : e)
-        : [...p, ex])
+    if(fase.k==='retorno_funcion'){
+      if(objetivo)extras.push(`Capacidad funcional completa para el objetivo declarado: "${objetivo.slice(0,60)}"`);
+      if(esDeportivo)extras.push('Retorno progresivo a entrenamiento grupal / competencia sin restricciones');
+      if(esAVD)extras.push('AVDs de alta demanda sin limitación ni compensación');
     }
-  }, [dbMode])
+    return{...fase, criterios:[...fase.criterios_avance_generico,...extras]};
+  });
+};
 
-  const deleteEjercicio = useCallback(async (id) => {
-    if (dbMode && isSupabaseReady) {
-      const { error } = await supabase.from('ejercicios').delete().eq('id', id)
-      if (error) throw error
-    } else {
-      setExs(p => p.filter(e => e.id !== id))
-    }
-  }, [dbMode])
+// Traducción explícita: fase clínica de rehab → fase de negocio del Método.
+export const mapearFaseRehabANegocio=(faseRehabKey)=>{
+  const MAP={proteccion:'restaura', carga_progresiva:'activa', retorno_funcion:'potencia'};
+  return MAP[faseRehabKey]||'restaura';
+};
 
-  return { exs, loading, dbMode, saveEjercicio, deleteEjercicio, setExs }
-}
-
-function mapEjFromDB(r) {
-  return {
-    id: r.id, nombre: r.nombre||'', bloque: r.bloque||'movilidad',
-    musculos: r.musculos||'', contraccion: r.contraccion||'',
-    patron: r.patron||'', nivel: r.nivel||'Principiante',
-    equipo: r.equipo||'', regresion: r.regresion||'', progresion: r.progresion||'',
-    mediaUrl: r.media_url||'', mediaTipo: r.media_tipo||'imagen',
-    mediaDesc: r.media_desc||'', custom: r.custom||false,
-  }
-}
-function mapEjToDB(e) {
-  return {
-    id: e.id, nombre: e.nombre, bloque: e.bloque,
-    musculos: e.musculos||'', contraccion: e.contraccion||'',
-    patron: e.patron||'', nivel: e.nivel||'Principiante',
-    equipo: e.equipo||'', regresion: e.regresion||'', progresion: e.progresion||'',
-    media_url: e.mediaUrl||'', media_tipo: e.mediaTipo||'imagen',
-    media_desc: e.mediaDesc||'', custom: e.custom||false,
-  }
-}
-
-// ─── HOOK: Tests de Fuerza Máxima ─────────────────────────────────────────
-export function useFuerzaTests(clientId) {
-  const [tests,setTests]=useState([])
-  const [loading,setLoading]=useState(true)
-  const fetch=useCallback(async()=>{
-    if(!isSupabaseReady||!clientId){setLoading(false);return}
-    try{
-      const{data,error}=await supabase.from('fuerza_tests').select('*').eq('gym_client_id',clientId).order('fecha',{ascending:false})
-      if(error)throw error
-      setTests(data||[])
-    }catch(e){console.error('fuerza_tests:',e.message)}
-    finally{setLoading(false)}
-  },[clientId])
-  useEffect(()=>{
-    fetch()
-    if(!isSupabaseReady||!clientId)return
-    const ch=supabase.channel('ft_'+clientId+'_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes',{event:'*',schema:'public',table:'fuerza_tests',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
-      .subscribe()
-    return()=>supabase.removeChannel(ch)
-  },[fetch,clientId])
-  const saveTest=useCallback(async(t)=>{
-    if(!clientId) throw new Error('No hay cliente seleccionado')
-    const toSave={...t, gym_client_id:clientId}
-    if(isSupabaseReady){
-      const{error}=await supabase.from('fuerza_tests').upsert(toSave,{onConflict:'id'})
-      if(error) throw error
-      await fetch() // refetch to update UI immediately
-    } else {
-      setTests(p=>p.find(x=>x.id===t.id)?p.map(x=>x.id===t.id?toSave:x):[toSave,...p])
-    }
-  },[clientId, fetch])
-  const deleteTest=useCallback(async(id)=>{
-    if(isSupabaseReady)await supabase.from('fuerza_tests').delete().eq('id',id)
-    else setTests(p=>p.filter(x=>x.id!==id))
-  },[])
-  return{tests,loading,saveTest,deleteTest,refetch:fetch}
-}
-
-// ─── HOOK: Planes de Periodización ────────────────────────────────────────
-export function usePlanesCliente(clientId) {
-  const [planes,setPlanes]=useState([])
-  const [loading,setLoading]=useState(true)
-  const fetch=useCallback(async()=>{
-    if(!isSupabaseReady||!clientId){setLoading(false);return}
-    try{
-      const{data,error}=await supabase.from('planes_periodizacion').select('*').eq('gym_client_id',clientId).order('created_at',{ascending:false})
-      if(error)throw error
-      setPlanes(data||[])
-    }catch(e){console.error('planes:',e.message)}
-    finally{setLoading(false)}
-  },[clientId])
-  useEffect(()=>{
-    fetch()
-    if(!isSupabaseReady||!clientId)return
-    const ch=supabase.channel('planes_'+clientId+'_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes',{event:'*',schema:'public',table:'planes_periodizacion',filter:`gym_client_id=eq.${clientId}`},()=>fetch())
-      .subscribe()
-    return()=>supabase.removeChannel(ch)
-  },[fetch,clientId])
-  const savePlan=useCallback(async(p)=>{
-    if(isSupabaseReady){const{error}=await supabase.from('planes_periodizacion').upsert({...p,gym_client_id:clientId},{onConflict:'id'});if(error)throw error}
-    else setPlanes(p2=>p2.find(x=>x.id===p.id)?p2.map(x=>x.id===p.id?p:x):[p,...p2])
-  },[clientId])
-  const deletePlan=useCallback(async(id)=>{
-    if(isSupabaseReady)await supabase.from('planes_periodizacion').delete().eq('id',id)
-    else setPlanes(p=>p.filter(x=>x.id!==id))
-  },[])
-  return{planes,loading,savePlan,deletePlan,refetch:fetch}
-}
-
-// ─── HOOK: Sesiones Clínicas ──────────────────────────────────────────────
-export function useSesionesClinicas(pacienteId) {
-  const [sesiones,setSesiones]=useState([])
-  const [loading,setLoading]=useState(true)
-  const fetch=useCallback(async()=>{
-    if(!isSupabaseReady||!pacienteId){setLoading(false);return}
-    try{
-      const{data,error}=await supabase.from('sesiones_clinicas').select('*').eq('paciente_id',pacienteId).order('fecha',{ascending:false})
-      if(error)throw error
-      setSesiones(data||[])
-    }catch(e){console.error('sesiones_clinicas:',e.message);setSesiones([])}
-    finally{setLoading(false)}
-  },[pacienteId])
-  useEffect(()=>{
-    fetch()
-    if(!isSupabaseReady||!pacienteId)return
-    const ch=supabase.channel('sc_'+pacienteId+'_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes',{event:'*',schema:'public',table:'sesiones_clinicas',filter:`paciente_id=eq.${pacienteId}`},()=>fetch())
-      .subscribe()
-    return()=>supabase.removeChannel(ch)
-  },[fetch,pacienteId])
-  const saveSesion=useCallback(async(s)=>{
-    if(!pacienteId)throw new Error('Sin paciente')
-    const toSave={...s,paciente_id:pacienteId}
-    if(isSupabaseReady){const{error}=await supabase.from('sesiones_clinicas').upsert(toSave,{onConflict:'id'});if(error)throw error;await fetch()}
-    else setSesiones(p=>p.find(x=>x.id===s.id)?p.map(x=>x.id===s.id?toSave:x):[toSave,...p])
-  },[pacienteId,fetch])
-  const deleteSesion=useCallback(async(id)=>{
-    if(isSupabaseReady)await supabase.from('sesiones_clinicas').delete().eq('id',id)
-    else setSesiones(p=>p.filter(x=>x.id!==id))
-  },[])
-  return{sesiones,loading,saveSesion,deleteSesion}
-}
-
-// ─── HOOK: Protocolos Rehab Custom ────────────────────────────────────────
-export function useRehabProtocolos() {
-  const [protocolos,setProtocolos]=useState([])
-  const [loading,setLoading]=useState(true)
-  const fetch=useCallback(async()=>{
-    if(!isSupabaseReady){setLoading(false);return}
-    try{
-      const{data,error}=await supabase.from('rehab_ejercicios_custom').select('*').order('created_at',{ascending:false})
-      if(error)throw error
-      setProtocolos(data||[])
-    }catch(e){console.error('rehab_custom:',e.message);setProtocolos([])}
-    finally{setLoading(false)}
-  },[])
-  useEffect(()=>{
-    fetch()
-    if(!isSupabaseReady)return
-    const ch=supabase.channel('rehab_c_'+Math.random().toString(36).slice(2,6))
-      .on('postgres_changes',{event:'*',schema:'public',table:'rehab_ejercicios_custom'},()=>fetch())
-      .subscribe()
-    return()=>supabase.removeChannel(ch)
-  },[fetch])
-  const saveEjercicio=useCallback(async(ej)=>{
-    if(isSupabaseReady){const{error}=await supabase.from('rehab_ejercicios_custom').upsert(ej,{onConflict:'id'});if(error)throw error;await fetch()}
-    else setProtocolos(p=>p.find(x=>x.id===ej.id)?p.map(x=>x.id===ej.id?ej:x):[ej,...p])
-  },[fetch])
-  const deleteEjercicio=useCallback(async(id)=>{
-    if(isSupabaseReady)await supabase.from('rehab_ejercicios_custom').delete().eq('id',id)
-    else setProtocolos(p=>p.filter(x=>x.id!==id))
-  },[])
-  return{protocolos,loading,saveEjercicio,deleteEjercicio}
-}
+// ─── ETIQUETA LEGIBLE DE FASE ─────────────────────────────────────────────
+export const getFaseLabel=(fase)=>{
+  const f=FASES_METODO[fase];
+  if(!f)return fase;
+  return `${f.badge} · ${f.label}`;
+};
