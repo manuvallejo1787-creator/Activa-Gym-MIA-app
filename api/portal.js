@@ -48,13 +48,33 @@ export default async function handler(req, res) {
       const cli = await clienteDeToken(token);
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
 
-      const planes = await sb(`gym_planes?gym_client_id=eq.${cli.id}&estado=eq.activo&select=id,nombre,fecha_inicio,fecha_fin_estimada,num_dias,dias,plazos&order=created_at.desc&limit=1`);
-      const plan = Array.isArray(planes) && planes.length ? planes[0] : null;
+      // Antes esto tomaba solo el plan 'activo' más reciente (limit=1). Si el
+      // profesional arma varias sesiones por separado y las junta en bloque
+      // para el PDF (función "Compilar bloque" del historial), esos planes
+      // SIGUEN estando todos como 'activo' — nada los archiva automáticamente.
+      // El portal terminaba mostrando solo el último, aunque el PDF sí las
+      // mostraba todas juntas. Ahora el portal combina TODOS los planes
+      // activos en un solo plan virtual, igual que hace el PDF.
+      const planes = await sb(`gym_planes?gym_client_id=eq.${cli.id}&estado=eq.activo&select=id,nombre,fecha_inicio,fecha_fin_estimada,num_dias,dias,plazos,created_at&order=fecha_inicio.asc.nullslast,created_at.asc`);
+      const planesActivos = Array.isArray(planes) ? planes : [];
+      let plan = null;
       let logs = [];
       let nombres = {};
       let media = {};
-      if (plan) {
-        logs = await sb(`ejecucion_registros?plan_id=eq.${plan.id}&select=dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at`);
+      if (planesActivos.length) {
+        const diasCombinados = [];
+        planesActivos.forEach(p => {
+          (p.dias || []).forEach(d => diasCombinados.push({ ...d, _planId: p.id }));
+        });
+        plan = {
+          id: planesActivos.length === 1 ? planesActivos[0].id : "combinado",
+          nombre: planesActivos.length === 1 ? planesActivos[0].nombre : planesActivos.map(p => p.nombre).join(" + "),
+          fecha_inicio: planesActivos[0].fecha_inicio,
+          fecha_fin_estimada: planesActivos[planesActivos.length - 1].fecha_fin_estimada,
+          dias: diasCombinados,
+        };
+        const idsList = planesActivos.map(p => `"${p.id}"`).join(",");
+        logs = await sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at`);
         const ejs = await sb(`ejercicios?select=id,nombre,media_url,media_tipo,media_desc`);
         (ejs || []).forEach(e => {
           nombres[e.id] = e.nombre;

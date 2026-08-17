@@ -298,8 +298,8 @@ function render(){
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
         body += `<div class="wk"><span class="lbl">Sem ${s}</span>`+
-          `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'peso')"><span class="u">kg</span>`+
-          `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,'${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'reps')"><span class="u">reps</span>`+
+          `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,'${esc(d._planId||plan.id)}','${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'peso')"><span class="u">kg</span>`+
+          `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,'${esc(d._planId||plan.id)}','${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'reps')"><span class="u">reps</span>`+
           `</div>`;
       }
       body += `</div>`;
@@ -326,11 +326,11 @@ window.toggleEx = (uid) => {
   if(a) a.textContent = willOpen ? '▾' : '▸';
 };
 
-window.guardar = async (inp, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
+window.guardar = async (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
   const k = key(dia_id, ejercicio_id, semana);
   const prev = LOGMAP[k] || {};
   const payload = {
-    token: TOKEN, plan_id: DATA.plan.id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
+    token: TOKEN, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
     peso_real: campo==='peso' ? inp.value.trim() : (prev.peso_real ?? ''),
     reps_real: campo==='reps' ? inp.value.trim() : (prev.reps_real ?? ''),
   };
@@ -338,7 +338,7 @@ window.guardar = async (inp, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre,
   try{
     const r = await fetch('/api/portal', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     if(!r.ok) throw new Error();
-    const nuevo = { ...prev, peso_real: payload.peso_real==='' ? null : payload.peso_real, reps_real: payload.reps_real, updated_at: new Date().toISOString() };
+    const nuevo = { ...prev, plan_id, peso_real: payload.peso_real==='' ? null : payload.peso_real, reps_real: payload.reps_real, updated_at: new Date().toISOString() };
     LOGMAP[k] = nuevo;
     (DATA.logs = DATA.logs||[]).push({ dia_id, ejercicio_id, semana, ...nuevo });
     inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
