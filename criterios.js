@@ -101,8 +101,15 @@ export const FASES_METODO={
 
 // ─── GENERADOR DE CRITERIOS PERSONALIZADOS ────────────────────────────────
 // Toma el objetivo declarado por el paciente/cliente al inicio
-// y genera criterios de evolución adaptados que condicionan el avance entre fases
-export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_inicial='', rom_inicial_pct=null)=>{
+// y genera criterios de evolución adaptados que condicionan el avance entre fases.
+//
+// contexto:
+//  'clinico' → lo usa FisioActiva. La base NO incluye Y-Balance/FMS (esos son
+//              tests de rendimiento deportivo, no clínicos) y los extras de
+//              objetivo deportivo no prescriben trote/carrera — eso queda del
+//              lado del gym, que es quien evalúa tolerancia a ese gesto.
+//  'gym'     → lo usa la app de gimnasio (default, comportamiento sin cambios).
+export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_inicial='', rom_inicial_pct=null, contexto='gym')=>{
   const obj=(objetivo||'').toLowerCase();
 
   // Clasificación del objetivo
@@ -125,15 +132,21 @@ export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_i
 
   const esPreventivo=obj.includes('preveni')||obj.includes('evitar')||obj.includes('no lesion');
 
-  // Criterios base de la fase
-  const base=[...(FASES_METODO[fase]?.criterios_avance||[])];
+  // Criterios base de la fase — en contexto clínico, sin tests de rendimiento
+  // deportivo (Y-Balance, FMS) que arrastraba FASES_METODO para las fases
+  // activa/potencia (esos quedan del lado del gym, que ya los tiene en su
+  // propia plantilla editable de avance de fase).
+  const baseCompleta=FASES_METODO[fase]?.criterios_avance||[];
+  const base=contexto==='clinico'
+    ?baseCompleta.filter(c=>!/y-balance|fms\b/i.test(c))
+    :[...baseCompleta];
 
   // Criterios específicos al objetivo
   const extras=[];
 
   if(fase==='restaura'){
     if(objetivo)extras.push(`Dolor vinculado al objetivo "${objetivo.slice(0,40)}" controlado: EVA ≤ 3/10 en la actividad específica`);
-    if(esDeportivo)extras.push('Tolerancia a actividad aeróbica suave (caminar/trote 10-15 min) sin exacerbación');
+    if(esDeportivo)extras.push(contexto==='clinico'?'Tolerancia a actividad aeróbica de baja intensidad sin exacerbación del cuadro':'Tolerancia a actividad aeróbica suave (caminar/trote 10-15 min) sin exacerbación');
     if(esLaboral)extras.push('Tolerancia a postura de trabajo básica sin exacerbación del cuadro');
     if(esAVD)extras.push('Realización de AVDs básicas (vestirse, ducharse, desplazarse) con EVA ≤ 3/10');
     if(eva_inicial&&parseFloat(eva_inicial)>5)extras.push(`Reducción de al menos 50% del dolor inicial (EVA inicial: ${eva_inicial}/10 → meta: ≤ ${Math.ceil(parseFloat(eva_inicial)/2)}/10)`);
@@ -141,7 +154,7 @@ export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_i
 
   if(fase==='activa'){
     if(objetivo)extras.push(`Retomar actividades intermedias relacionadas con: "${objetivo.slice(0,40)}"`);
-    if(esDeportivo)extras.push('Tolerancia a trote suave continuo 15-20 min sin dolor residual');
+    if(esDeportivo)extras.push(contexto==='clinico'?'Sin dolor residual tras actividad aeróbica moderada — la prueba de tolerancia específica al deporte la define el gym':'Tolerancia a trote suave continuo 15-20 min sin dolor residual');
     if(esLaboral)extras.push('Retorno parcial al trabajo con adaptaciones del puesto (50-75% de la jornada)');
     if(esAVD)extras.push('AVDs completas sin limitación funcional ni compensaciones visibles');
     if(esFuerza)extras.push('Tolerancia a carga bilateral progresiva: sentadilla y peso muerto sin dolor');
@@ -155,7 +168,7 @@ export const generarCriteriosPersonalizados=(objetivo='', fase='restaura', eva_i
     if(esLaboral)extras.push('Retorno completo al trabajo con plena capacidad funcional');
     if(esAVD)extras.push('AVDs ilimitadas incluyendo actividades de alta demanda sin restricciones');
     if(esFuerza)extras.push('Fuerza bilateral simétrica: diferencia < 10% entre lados en ejercicios de base');
-    if(esPreventivo)extras.push('FMS ≥ 14/21 con patrón de movimiento sin asimetrías ≥ 1 punto');
+    if(esPreventivo)extras.push(contexto==='clinico'?'Patrón de movimiento sin asimetrías clínicamente relevantes':'FMS ≥ 14/21 con patrón de movimiento sin asimetrías ≥ 1 punto');
     extras.push('Criterio de alta clínica iniciado: todos los indicadores ≥ 90%');
   }
 

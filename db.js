@@ -204,6 +204,7 @@ function mapClientFromDB(r) {
     fechaIngreso: r.fecha_ingreso||'', fechaEval: r.fecha_eval||'',
     notasInternas: r.notas_internas||'', screeningCompleto: r.screening_completo||false,
     screening: r.screening||{}, fisio_pacienteId: r.fisio_paciente_id||null,
+    screeningHistorial: r.screening_historial||[],
     periodizacion: r.periodizacion||'',
     periodizacionInicio: r.periodizacion_inicio||'',
     periodizacionFin: r.periodizacion_fin||'',
@@ -224,6 +225,7 @@ function mapClientToDB(c) {
     fecha_ingreso: c.fechaIngreso||null, fecha_eval: c.fechaEval||null,
     notas_internas: c.notasInternas||'', screening_completo: c.screeningCompleto||false,
     screening: c.screening||{}, fisio_paciente_id: c.fisio_pacienteId||null,
+    screening_historial: c.screeningHistorial||[],
     periodizacion: c.periodizacion||'',
     periodizacion_inicio: c.periodizacionInicio||null,
     periodizacion_fin: c.periodizacionFin||null,
@@ -254,6 +256,7 @@ function mapPacienteFromDB(r) {
     region:r.region||'lumbar', derivadoPor:r.derivado_por||'',
     gym_clienteId:r.gym_cliente_id||null, notas:r.notas||'',
     activo:r.activo!==false, evaluaciones:[],
+    sesionesContratadas:r.sesiones_contratadas??'',
   }
 }
 function mapPacienteToDB(p) {
@@ -263,6 +266,7 @@ function mapPacienteToDB(p) {
     fecha_nac:p.fechaNac||null, genero:p.genero||null,
     region:p.region||'lumbar', derivado_por:p.derivadoPor||null,
     gym_cliente_id:p.gym_clienteId||null, notas:p.notas||'', activo:p.activo!==false,
+    sesiones_contratadas:p.sesionesContratadas===''?null:(p.sesionesContratadas??null),
   }
 }
 function mapEvalFromDB(r) {
@@ -726,6 +730,33 @@ export function useSesionesClinicas(pacienteId) {
   return{sesiones,loading,saveSesion,deleteSesion}
 }
 
+// ─── HOOK: Todas las sesiones clínicas (todos los pacientes) ──────────────
+// Para el dashboard de KPIs, que necesita agregados (sesiones restantes,
+// conteos) sin poder llamar useSesionesClinicas por-paciente en un loop
+// (eso sí rompería las Reglas de Hooks — cantidad de hooks variable).
+export function useTodasSesionesClinicas() {
+  const [sesiones,setSesiones]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('sesiones_clinicas').select('*')
+      if(error)throw error
+      setSesiones(data||[])
+    }catch(e){console.error('sesiones_clinicas (todas):',e.message);setSesiones([])}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('sc_todas_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'sesiones_clinicas'},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch])
+  return{sesiones,loading}
+}
+
 // ─── HOOK: Protocolos Rehab Custom ────────────────────────────────────────
 export function useRehabProtocolos() {
   const [protocolos,setProtocolos]=useState([])
@@ -764,12 +795,12 @@ export function useRehabProtocolos() {
 // en Supabase con realtime, igual patrón que gym_clients. Si Supabase no
 // está disponible, cae a localStorage como antes (mismo fallback general
 // del resto de la app) para no romper el modo local.
-const DEFAULT_CONFIG={gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a'}
+const DEFAULT_CONFIG={gymName:'ACTIVA',gymSub:'FITNESS CLUB',logoImg:null,colorPrimary:'#CC0000',colorBg:'#1a1a1a',telAviso:''}
 function mapConfigFromDB(r){
-  return{gymName:r.gym_name||DEFAULT_CONFIG.gymName,gymSub:r.gym_sub||DEFAULT_CONFIG.gymSub,logoImg:r.logo_img||null,colorPrimary:r.color_primary||DEFAULT_CONFIG.colorPrimary,colorBg:r.color_bg||DEFAULT_CONFIG.colorBg}
+  return{gymName:r.gym_name||DEFAULT_CONFIG.gymName,gymSub:r.gym_sub||DEFAULT_CONFIG.gymSub,logoImg:r.logo_img||null,colorPrimary:r.color_primary||DEFAULT_CONFIG.colorPrimary,colorBg:r.color_bg||DEFAULT_CONFIG.colorBg,telAviso:r.tel_aviso||''}
 }
 function mapConfigToDB(c){
-  return{id:'default',gym_name:c.gymName,gym_sub:c.gymSub,logo_img:c.logoImg||null,color_primary:c.colorPrimary,color_bg:c.colorBg,updated_at:new Date().toISOString()}
+  return{id:'default',gym_name:c.gymName,gym_sub:c.gymSub,logo_img:c.logoImg||null,color_primary:c.colorPrimary,color_bg:c.colorBg,tel_aviso:c.telAviso||'',updated_at:new Date().toISOString()}
 }
 function readLocalConfig(){
   try{const saved=localStorage.getItem('activa_brand');return saved?JSON.parse(saved):DEFAULT_CONFIG}
@@ -865,4 +896,49 @@ export function useCriteriosAvanceTemplate(){
   },[])
 
   return{template,loading,saveFase}
+}
+
+// ─── HOOK: Incidencias de sala (riel de decisión) ─────────────────────────
+// Disparo por EVENTO, no por sesión: solo se escribe una fila cuando alguien
+// refiere dolor. Es también la fuente de candidatos a evaluación clínica —
+// hoy esas molestias se resuelven de palabra y no quedan registradas en
+// ningún lado, así que la señal de demanda de fisio más barata que tiene el
+// centro se pierde entera.
+export function useIncidencias(){
+  const [incidencias,setIncidencias]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('gym_incidencias').select('*').order('fecha',{ascending:false}).limit(300)
+      if(error)throw error
+      setIncidencias(data||[])
+    }catch(e){console.error('gym_incidencias:',e.message);setIncidencias([])}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{
+    fetch()
+    if(!isSupabaseReady)return
+    const ch=supabase.channel('incid_'+Math.random().toString(36).slice(2,6))
+      .on('postgres_changes',{event:'*',schema:'public',table:'gym_incidencias'},()=>fetch())
+      .subscribe()
+    return()=>supabase.removeChannel(ch)
+  },[fetch])
+  const saveIncidencia=useCallback(async(inc)=>{
+    if(isSupabaseReady){
+      const{error}=await supabase.from('gym_incidencias').upsert(inc,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    } else setIncidencias(p=>[inc,...p])
+    return inc
+  },[fetch])
+  const marcarResuelta=useCallback(async(inc)=>{
+    const upd={...inc,resuelto:true}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('gym_incidencias').update({resuelto:true}).eq('id',inc.id)
+      if(error)throw error
+      await fetch()
+    } else setIncidencias(p=>p.map(x=>x.id===inc.id?upd:x))
+  },[fetch])
+  return{incidencias,loading,saveIncidencia,marcarResuelta,refetch:fetch}
 }

@@ -5,7 +5,7 @@ import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, get
 import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
-import { useFisioPacientes, useSesionesClinicas, genId } from "./db.js";
+import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCriteriosAvanceTemplate, genId } from "./db.js";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
@@ -292,6 +292,7 @@ const emptyPaciente=()=>({
   id:genId('pac'),nombre:'',apellido:'',documento:'',celular:'',email:'',
   fechaNac:'',genero:'',region:'lumbar',derivadoPor:'',
   evaluaciones:[],activo:true,notas:'',
+  sesionesContratadas:'', // para poder mostrar "sesiones restantes" en KPIs
   // campos de integración con la app de gym
   gym_clienteId:null,
 });
@@ -345,11 +346,19 @@ function SesionClienteComp({ paciente, reglas=[] }) {
   }, [regionActual, faseActual]);
 
   // ── Auto-cargar criterios de avance según fase ───────────────────────────
+  // Antes tomaba directo FASES_METODO[faseActual].criterios_avance — eso es
+  // el criterio de fase de NEGOCIO (incluye Y-Balance/FMS en activa/potencia,
+  // pensado para el gym). Acá lo que corresponde es el protocolo CLÍNICO de
+  // rehab de esta lesión puntual (protección → carga progresiva → retorno
+  // funcional), específico a la región y al tejido sospechado del paciente.
   const criteriosProtocolo = useMemo(() => {
-    const fase = FASES_METODO[faseActual];
-    if (!fase) return [];
-    return fase.criterios_avance || [];
-  }, [faseActual]);
+    const faseRehabKey=MAP_NEGOCIO_A_REHAB[faseActual]||'proteccion';
+    const tejido=ultimaEval?.tejidoSospechado||'';
+    const romPct=ultimaEval?calcROMpct(ultimaEval.rom,regionActual):null;
+    const protocolo=generarProtocoloRehab(regionActual,tejido,ultimaEval?.objetivo||'',ultimaEval?.eva_reposo,romPct);
+    const faseObj=protocolo.find(f=>f.k===faseRehabKey);
+    return faseObj?faseObj.criterios:[];
+  }, [faseActual, regionActual, ultimaEval]);
 
   const evaColor = (v) => v<=3?GN2:v<=6?AM2:RJ2;
   const evaLabel = (v) => v===0?'Sin dolor':v<=3?'Leve':v<=6?'Moderado':'Severo';
@@ -630,6 +639,13 @@ function SesionClienteComp({ paciente, reglas=[] }) {
                 {ses.proxima_sesion&&<div style={{fontSize:10,color:TL2,marginTop:2}}>→ {ses.proxima_sesion}</div>}
                 {ses.notas&&<div style={{fontSize:9,color:G3c,fontStyle:'italic',marginTop:2}}>{ses.notas}</div>}
               </div>
+              <button onClick={()=>{
+                let ejercsData2,critsData2;
+                try{ejercsData2=JSON.parse(ses.ejercicios_lista||'[]');}catch{ejercsData2=[];}
+                try{critsData2=JSON.parse(ses.criterios_lista||'[]');}catch{critsData2=[];}
+                setF({...ses,ejercicios_lista:ejercsData2,criterios_lista:critsData2});
+                setShowForm(true);
+              }} style={{...s2.btnG,fontSize:9,padding:'2px 7px',color:TL2,borderColor:TL2,flexShrink:0,marginRight:4}}>✎ Editar</button>
               <button onClick={()=>deleteSesion(ses.id).catch(console.error)} style={{...s2.btnG,fontSize:9,padding:'2px 6px',color:RJ2,borderColor:RJ2,flexShrink:0}}>✕</button>
             </div>
           </div>
@@ -639,15 +655,55 @@ function SesionClienteComp({ paciente, reglas=[] }) {
   );
 }
 
+// Traduce fase de negocio (restaura/activa/potencia/rinde) a fase clínica
+// de rehab (protección/carga progresiva/retorno funcional) — una sola
+// fuente, usada por sesiones, VerPaciente y Alta Clínica por igual.
+const MAP_NEGOCIO_A_REHAB={restaura:'proteccion',activa:'carga_progresiva',potencia:'retorno_funcion',rinde:'retorno_funcion'};
+
+// Editor de la plantilla clínica de criterios de avance por fase — misma
+// tabla que edita la app de gym (criterios_avance_template), para que no
+// haya dos fuentes de verdad distintas. Componente propio porque usa
+// useState (tiene que invocarse como <Comp/>, no como función).
+function CriteriosClinicosEditor({fase,template,saveFase,fs,label}){
+  const [items,setItems]=useState(()=>[...(template[fase]||[])]);
+  const dirty=JSON.stringify(items)!==JSON.stringify(template[fase]||[]);
+  const setTexto=(i,v)=>setItems(p=>p.map((it,idx)=>idx===i?{...it,texto:v}:it));
+  const eliminar=(i)=>setItems(p=>p.filter((_,idx)=>idx!==i));
+  const agregar=()=>setItems(p=>[...p,{id:genId('crit'),texto:''}]);
+  const guardar=()=>{
+    const limpio=items.filter(it=>it.texto.trim());
+    saveFase(fase,limpio);
+    setItems(limpio);
+  };
+  return(
+    <div style={{background:'#F5F3FF',border:'1px solid #DDD6FE',borderRadius:6,padding:'8px 10px',marginBottom:6}}>
+      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>Se sincroniza con la app de gym — este es el criterio único de "{label}" para todo el centro.</div>
+      {items.map((it,i)=>(
+        <div key={it.id} style={{display:'flex',gap:5,marginBottom:4,alignItems:'center'}}>
+          <input value={it.texto} onChange={e=>setTexto(i,e.target.value)} placeholder="Criterio..." style={{...fs.inp,fontSize:11,padding:'5px 8px'}}/>
+          <button onClick={()=>eliminar(i)} style={{background:'none',border:'none',color:'#DC2626',cursor:'pointer',fontSize:13,padding:'0 4px'}}>✕</button>
+        </div>
+      ))}
+      <div style={{display:'flex',gap:6,marginTop:6}}>
+        <button onClick={agregar} style={{...fs.btnG,fontSize:10,padding:'5px 10px',borderStyle:'dashed'}}>+ Criterio</button>
+        <button onClick={guardar} disabled={!dirty} style={{...fs.btnTL,fontSize:10,padding:'5px 12px',opacity:dirty?1:.4,cursor:dirty?'pointer':'not-allowed'}}>Guardar</button>
+      </div>
+    </div>
+  );
+}
+
 export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, reglas=[] }){
   const [view,setView]=useState('dashboard');
   // Estado levantado de sub-componentes (evita pérdida de foco en inputs)
   const [protFase,setProtFase]=useState('restaura');
   const [protReg,setProtReg]=useState('lumbar');
+  const [editandoCrit,setEditandoCrit]=useState(null);
   const [altaPacId,setAltaPacId]=useState('');
   const [pacForm,setPacForm]=useState(null); // estado del formulario de paciente
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
   const { pacientes: dbPacientes, loading: dbLoading, error: dbError, savePaciente: dbSavePaciente, deletePaciente: dbDeletePaciente, saveEvaluacion: dbSaveEvaluacion } = useFisioPacientes();
+  const { template: criteriosTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
+  const { sesiones: todasSesiones } = useTodasSesionesClinicas();
   const [pacientes, setPacientes] = useState([]);
 
   useEffect(()=>{ setPacientes(dbPacientes); }, [dbPacientes]);
@@ -693,7 +749,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
 
   const saveEval=()=>{
     if(!currentPac||!currentEval)return;
-    const criterios=generarCriteriosPersonalizados(currentEval.objetivo,currentEval.fase,currentEval.eva_reposo,calcROMpct(currentEval.rom,currentEval.region));
+    const criterios=generarCriteriosPersonalizados(currentEval.objetivo,currentEval.fase,currentEval.eva_reposo,calcROMpct(currentEval.rom,currentEval.region),'clinico');
     const evalFinal={...currentEval,id:genId('eval'),criterios_personalizados:criterios};
     // Persistir en Supabase
     dbSaveEvaluacion(currentPac.id, evalFinal)
@@ -840,6 +896,12 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
 
   // ── VER PACIENTE ──────────────────────────────────────────────────────
   const VerPaciente=()=>{
+    // El hook va ANTES del early-return de abajo — si currentPac es null en
+    // algunos renders y no en otros, un hook condicional rompe el orden de
+    // hooks de React (mismo tipo de bug que ya corregimos en App.jsx).
+    const{sesiones:sesionesPac}=useSesionesClinicas(currentPac?.id||null);
+    const [ckA,setCkA]=useState('');
+    const [ckB,setCkB]=useState('');
     if(!currentPac)return null;
     const evals=currentPac.evaluaciones||[];
     const last=evals[evals.length-1];
@@ -849,16 +911,95 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
     const fmsT=last?calcFMSTotal(last.fms):null;
     const fase=last?.fase||'restaura';
     const faseInfo=FASES_BASE[fase];
-    // Criterios personalizados del última evaluación
-    const criterios=last?.criterios_personalizados||faseInfo?.criterios_base_avance||[];
-    // Chequeo de criterios para avanzar de fase
-    const checkAvance={
-      eva:last?.eva_reposo&&parseFloat(last.eva_reposo)<=(fase==='restaura'?3:2),
-      rom:rp&&rp>(fase==='restaura'?70:fase==='activa'?85:90),
-      ybal:yb&&parseFloat(yb)<(fase==='restaura'?99:fase==='activa'?6:4),
-      fms:fmsT&&fmsT>=(fase==='potencia'?14:0),
+    // Única fuente de criterios clínicos de avance — la misma que usa el
+    // registro de sesiones y el alta. Antes acá había una cuarta versión
+    // hardcodeada con Y-Balance/FMS (pruebas de rendimiento, no clínicas).
+    const faseRehabKey=MAP_NEGOCIO_A_REHAB[fase]||'proteccion';
+    const romPct=rp;
+    const protocoloClin=last?generarProtocoloRehab(currentPac.region,last.tejidoSospechado||'',last.objetivo||'',last.eva_reposo,romPct):[];
+    const faseClinObj=protocoloClin.find(f=>f.k===faseRehabKey);
+    const criterios=faseClinObj?faseClinObj.criterios:[];
+    const checkCriterioTexto=(c)=>{
+      if(/EVA/i.test(c)&&last?.eva_reposo)return parseFloat(last.eva_reposo)<=(fase==='restaura'?3:2);
+      if(/ROM/i.test(c)&&rp)return rp>(fase==='restaura'?70:fase==='activa'?85:90);
+      return null; // criterio cualitativo — sin dato objetivo para autoevaluar, lo marca el clínico a mano en la sesión
     };
-    const criteriosCumplidos=Object.values(checkAvance).filter(Boolean).length;
+    const criteriosCumplidos=criterios.filter(c=>checkCriterioTexto(c)===true).length;
+
+    // ── Checkpoint comparativo: primera evaluación vs. más reciente ──────
+    // "Antes y después" para mostrarle al cliente — ROM, fuerza/asimetrías,
+    // tests específicos, objetivo y fase, todo en un mismo PDF.
+    const exportCheckpoint=(idA,idB)=>{
+      let inicial=evals.find(e=>e.id===idA);
+      let final=evals.find(e=>e.id===idB);
+      if(inicial&&final&&inicial.fecha>final.fecha){[inicial,final]=[final,inicial];} // siempre de más vieja a más nueva
+      if(!inicial||!final||inicial.id===final.id){alert('Se necesitan al menos 2 evaluaciones (inicial y una posterior) para generar el checkpoint comparativo.');return;}
+      const eiI=inicial.eva_reposo?calcEVA(inicial.eva_reposo):null;
+      const eiF=final.eva_reposo?calcEVA(final.eva_reposo):null;
+      const rpI=calcROMpct(inicial.rom,currentPac.region);
+      const rpF=calcROMpct(final.rom,currentPac.region);
+      const normsRom=ROM_NORMS[currentPac.region]||ROM_NORMS.lumbar;
+      const movsComparables=normsRom.filter(n=>romGrados(inicial.rom,n.mov)!=null||romGrados(final.rom,n.mov)!=null);
+
+      // Tests específicos presentes en cualquiera de las dos evaluaciones
+      const testsRegion=TESTS_ESP[currentPac.region]||[];
+      const testsComparables=testsRegion.filter(t=>{
+        const kI=t.n+'_Derecho',kI2=t.n+'_Izquierdo';
+        return inicial.testsEsp?.[kI]||inicial.testsEsp?.[kI2]||final.testsEsp?.[kI]||final.testsEsp?.[kI2];
+      });
+
+      const dinI=inicial.dinamometria||{},dinF=final.dinamometria||{};
+      const deficitDin=(d,i)=>{const dd=parseFloat(d),ii=parseFloat(i);if(isNaN(dd)||isNaN(ii)||Math.max(dd,ii)===0)return null;return Math.round(Math.abs(dd-ii)/Math.max(dd,ii)*100);};
+      const defI=deficitDin(dinI.d,dinI.i), defF=deficitDin(dinF.d,dinF.i);
+
+      const filaComp=(label,vi,vf,mejor)=>{
+        const mejora=mejor==='menor'?(parseFloat(vf)<parseFloat(vi)):(parseFloat(vf)>parseFloat(vi));
+        const color=(vi==null||vf==null||isNaN(parseFloat(vi))||isNaN(parseFloat(vf)))?'#999':(mejora?'#16A34A':'#DC2626');
+        return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi??'—'} → <strong style="color:${color}">${vf??'—'}</strong></span></div>`;
+      };
+
+      const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Checkpoint — ${currentPac.nombre}</title><style>${getPrintCSS(NV,TL)}</style></head>
+      <body>
+      <div class="hdr"><div><div style="font-size:18px;font-weight:900;color:${NV}">FisioActiva Colonia</div><div style="font-size:10px;color:#666;letter-spacing:3px">CHECKPOINT DE EVOLUCIÓN</div></div><div style="text-align:right"><div style="font-size:14px;font-weight:700">${currentPac.nombre} ${currentPac.apellido}</div><div style="font-size:11px;color:#666">${REGIONES_LIST.find(r=>r.k===currentPac.region)?.label} · ${inicial.fecha} → ${final.fecha}</div></div></div>
+
+      <div class="title-alta" style="background:#EFF6FF;border-color:#93C5FD">
+        <div style="font-size:12px;color:#666">${FASES_BASE[inicial.fase]?.badge||'—'} ${FASES_BASE[inicial.fase]?.label||''} → <strong style="color:${NV}">${FASES_BASE[final.fase]?.badge||'—'} ${FASES_BASE[final.fase]?.label||''}</strong></div>
+        ${final.objetivo?`<div style="font-size:12px;color:#1D4ED8;margin-top:6px;font-style:italic">🎯 Objetivo: "${final.objetivo}"</div>`:''}
+        ${final._iaSugerencia?`<div style="font-size:10px;color:#555;margin-top:6px">${final._iaSugerencia}</div>`:''}
+      </div>
+
+      <div class="sec"><div class="sec-title">Dolor y funcionalidad general</div><div class="sec-body filas">
+        ${filaComp('EVA en reposo',inicial.eva_reposo,final.eva_reposo,'menor')}
+        ${filaComp('ROM promedio de la región',rpI!=null?rpI+'%':null,rpF!=null?rpF+'%':null,'mayor')}
+      </div></div>
+
+      ${movsComparables.length>0?`<div class="sec"><div class="sec-title">ROM Goniometría — comparativo por movimiento</div><div class="sec-body filas">${movsComparables.map(n=>{
+        const vi=romGrados(inicial.rom,n.mov),vf=romGrados(final.rom,n.mov);
+        return filaComp(n.mov,vi!=null?vi+'°':null,vf!=null?vf+'°':null,'mayor');
+      }).join('')}</div></div>`:''}
+
+      ${(dinI.d||dinF.d)?`<div class="sec"><div class="sec-title">Fuerza — Dinamometría y asimetría</div><div class="sec-body filas">
+        ${filaComp('Mano dominante (kg)',dinI.d,dinF.d,'mayor')}
+        ${filaComp('Mano no dominante (kg)',dinI.i,dinF.i,'mayor')}
+        ${filaComp('Déficit de asimetría',defI!=null?defI+'%':null,defF!=null?defF+'%':null,'menor')}
+      </div></div>`:''}
+
+      ${testsComparables.length>0?`<div class="sec"><div class="sec-title">Tests específicos — desbalances y asimetrías</div><div class="sec-body filas">${testsComparables.map(t=>{
+        const label=(lado)=>{
+          const vi=inicial.testsEsp?.[t.n+'_'+lado]||'—', vf=final.testsEsp?.[t.n+'_'+lado]||'—';
+          const mejora=vi==='positivo'&&(vf==='negativo'||vf==='dudoso');
+          const empeora=vi!=='positivo'&&vf==='positivo';
+          const color=mejora?'#16A34A':empeora?'#DC2626':'#666';
+          return `<div class="fila"><span class="fila-label">${t.n} (${lado})</span><span class="fila-val" style="color:${color}">${vi} → ${vf}</span></div>`;
+        };
+        return[label('Derecho'),label('Izquierdo')].join('');
+      }).join('')}</div></div>`:''}
+
+      <div class="sig"><div class="sig-line">Firma del Fisioterapeuta<br/>${final.evaluador||'_______________'}</div><div class="sig-line">Firma del Paciente<br/>${currentPac.nombre} ${currentPac.apellido}</div></div>
+      <div class="footer">FisioActiva Colonia · Método Activa Integra · Checkpoint generado ${new Date().toLocaleDateString('es-ES')}</div>
+      <script>window.onload=()=>{window.print()}<\/script></body></html>`;
+      const w=window.open('','_blank');w.document.write(html);w.document.close();
+    };
     return(
       <div style={{padding:'14px'}}>
         <button onClick={()=>setView('pacientes')} style={{...fs.btnG,marginBottom:12,fontSize:11}}>← Volver</button>
@@ -874,9 +1015,26 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
               </div>
               {last?.objetivo&&<div style={{fontSize:11,color:'#BAE6FD',marginTop:4}}>🎯 Objetivo: "{last.objetivo}"</div>}
             </div>
-            <button onClick={()=>{setCurrentEval(emptyEval());setEvalStep(0);setView('nueva-eval');}} style={fs.btnTL}>+ Nueva evaluación</button>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+              <button onClick={()=>{setCurrentEval(emptyEval());setEvalStep(0);setView('nueva-eval');}} style={fs.btnTL}>+ Nueva evaluación</button>
+            </div>
           </div>
         </div>
+        {evals.length>=2&&(()=>{
+          const idA=ckA||evals[0]?.id;
+          const idB=ckB||evals[evals.length-1]?.id;
+          const etiqueta=(ev)=>`${ev.fecha} · ${ev.tipo==='inicial'?'Inicial':ev.tipo==='alta'?'Alta':'Reeval.'}`;
+          return(
+            <div style={{...fs.card,background:'#EFF6FF',border:'1px solid #93C5FD',marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#1D4ED8',marginBottom:6}}>📊 Checkpoint comparativo — elegí dos evaluaciones</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+                <div><span style={{...fs.lbl,fontSize:9}}>Evaluación A</span><select value={idA} onChange={e=>setCkA(e.target.value)} style={{...fs.sel,width:'100%'}}>{evals.map(ev=><option key={ev.id} value={ev.id}>{etiqueta(ev)}</option>)}</select></div>
+                <div><span style={{...fs.lbl,fontSize:9}}>Evaluación B</span><select value={idB} onChange={e=>setCkB(e.target.value)} style={{...fs.sel,width:'100%'}}>{evals.map(ev=><option key={ev.id} value={ev.id}>{etiqueta(ev)}</option>)}</select></div>
+              </div>
+              <button onClick={()=>exportCheckpoint(idA,idB)} disabled={idA===idB} style={{...fs.btnNV,width:'100%',padding:'8px',opacity:idA===idB?.4:1,cursor:idA===idB?'not-allowed':'pointer'}}>{idA===idB?'Elegí dos evaluaciones distintas':'📄 Generar PDF comparativo'}</button>
+            </div>
+          );
+        })()}
         {/* Análisis IA de la evaluación */}
         {last&&(()=>{
           const datosIA={
@@ -935,15 +1093,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                 Criterios personalizados — Objetivo: "{last.objetivo||'No especificado'}"
               </div>
               {criterios.map((c,i)=>{
-                // Evaluar automáticamente los criterios medibles
-                let cumplido=null;
-                if(c.includes('EVA')&&last.eva_reposo){
-                  const target=fase==='restaura'?3:2;
-                  cumplido=parseFloat(last.eva_reposo)<=target;
-                }
-                if(c.includes('ROM')&&rp){cumplido=rp>(fase==='restaura'?70:85);}
-                if(c.includes('Y-Balance')&&yb){cumplido=parseFloat(yb)<(fase==='activa'?6:4);}
-                if(c.includes('FMS')&&fmsT){cumplido=fmsT>=14;}
+                const cumplido=checkCriterioTexto(c);
                 return(
                   <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'5px 0',borderBottom:i<criterios.length-1?`1px solid ${GL}`:'none'}}>
                     <span style={{color:cumplido===true?GN:cumplido===false?RJ:AM,flexShrink:0,fontWeight:700,fontSize:12}}>
@@ -956,35 +1106,62 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             </div>
             <div style={{display:'flex',gap:10,alignItems:'center'}}>
               <div style={{background:GL,borderRadius:99,height:6,flex:1,overflow:'hidden'}}>
-                <div style={{width:(criteriosCumplidos/4*100)+'%',background:criteriosCumplidos>=3?GN:AM,height:'100%',borderRadius:99}}/>
+                <div style={{width:(criterios.length?criteriosCumplidos/criterios.length*100:0)+'%',background:criteriosCumplidos>=criterios.length*0.75?GN:AM,height:'100%',borderRadius:99}}/>
               </div>
-              {criteriosCumplidos>=3&&<span style={{fontSize:11,fontWeight:700,color:GN}}>Listo para avanzar →</span>}
+              {criterios.length>0&&criteriosCumplidos>=criterios.length*0.75&&<span style={{fontSize:11,fontWeight:700,color:GN}}>Listo para avanzar →</span>}
             </div>
           </div>
         )}
-        {/* Historial */}
+        {/* Línea de tiempo del tratamiento — evaluación inicial, sesiones y
+            reevaluaciones juntas en orden cronológico, con el estado de alta
+            al final. Antes esto vivía repartido en 3 pestañas sin conexión:
+            "Pacientes" (evaluaciones), "Sesiones" y "Altas" por separado. */}
         <div style={fs.card}>
-          <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Historial ({evals.length} evaluaciones)</div>
-          {evals.length===0&&<div style={{textAlign:'center',padding:20,color:GM,fontSize:12}}>Sin evaluaciones registradas.</div>}
-          {evals.map((ev,i)=>(
-            <div key={ev.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:7,background:BG,marginBottom:6,border:`1px solid ${GL}`}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:700}}>
-                  {ev.tipo==='inicial'?'Evaluación Inicial':ev.tipo==='reeval'?'Re-evaluación':'Alta Clínica'} · {ev.fecha}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:700}}>Historial del tratamiento</div>
+            <button onClick={()=>{setAltaPacId(currentPac.id);setView('altas');}} style={{...fs.btnG,fontSize:10,padding:'4px 9px',color:GN,borderColor:GN}}>🏁 Ver estado de alta</button>
+          </div>
+          {(()=>{
+            const eventos=[
+              ...evals.map(ev=>({tipo:'eval',fecha:ev.fecha,data:ev,orden:1})),
+              ...(sesionesPac||[]).map(s=>({tipo:'sesion',fecha:s.fecha,data:s,orden:0})),
+            ].sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||'')||a.orden-b.orden);
+            if(eventos.length===0)return <div style={{textAlign:'center',padding:20,color:GM,fontSize:12}}>Sin evaluaciones ni sesiones registradas todavía.</div>;
+            return eventos.map((evt,i)=>{
+              if(evt.tipo==='eval'){
+                const ev=evt.data;
+                const etiqueta=ev.tipo==='inicial'?'📋 Evaluación Inicial':ev.tipo==='reeval'?'🔄 Reevaluación':'🏁 Alta Clínica';
+                return(
+                  <div key={'e'+ev.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:7,background:'#EFF6FF',marginBottom:6,border:`1px solid #93C5FD`,borderLeft:`3px solid ${NV}`}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{etiqueta} · {ev.fecha}</div>
+                      <div style={{fontSize:10,color:GM}}>
+                        {REGIONES_LIST.find(r=>r.k===ev.region)?.label}
+                        {ev.eva_reposo&&` · EVA ${ev.eva_reposo}`}
+                        {ev.fase&&` · ${FASES_BASE[ev.fase]?.badge}`}
+                        {ev.objetivo&&` · "${ev.objetivo.slice(0,30)}"`}
+                      </div>
+                    </div>
+                    <div style={{display:'flex',gap:6}}>
+                      <button onClick={()=>{setViewingEval(ev);setView('ver-eval');}} style={{...fs.btnNV,fontSize:10,padding:'3px 9px'}}>Ver</button>
+                      {i===eventos.length-1&&<button onClick={()=>{setCurrentEval({...emptyEval(),tipo:'reeval',region:ev.region,objetivo:ev.objetivo});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'3px 9px'}}>Reeval.</button>}
+                    </div>
+                  </div>
+                );
+              }
+              const s=evt.data;
+              const evaMejoro=s.eva_fin<s.eva_inicio;
+              return(
+                <div key={'s'+s.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 10px',borderRadius:7,background:BG,marginBottom:6,marginLeft:14,border:`1px solid ${GL}`,borderLeft:`3px solid ${evaMejoro?GN:AM}`}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:700}}>📝 Sesión #{s.numero_sesion} · {s.fecha}</div>
+                    <div style={{fontSize:10,color:GM}}>EVA {s.eva_inicio}→{s.eva_fin}{s.avance_fase?' · ✅ Avance de fase':''}</div>
+                  </div>
+                  <button onClick={()=>{setSesionPacId(currentPac.id);setView('sesiones');}} style={{...fs.btnG,fontSize:9,padding:'3px 8px'}}>Ver</button>
                 </div>
-                <div style={{fontSize:10,color:GM}}>
-                  {REGIONES_LIST.find(r=>r.k===ev.region)?.label}
-                  {ev.eva_reposo&&` · EVA ${ev.eva_reposo}`}
-                  {ev.fase&&` · ${FASES_BASE[ev.fase]?.badge}`}
-                  {ev.objetivo&&` · "${ev.objetivo.slice(0,30)}..."`}
-                </div>
-              </div>
-              <div style={{display:'flex',gap:6}}>
-                <button onClick={()=>{setViewingEval(ev);setView('ver-eval');}} style={{...fs.btnNV,fontSize:10,padding:'3px 9px'}}>Ver</button>
-                {i===evals.length-1&&<button onClick={()=>{setCurrentEval({...emptyEval(),tipo:'reeval',region:ev.region,objetivo:ev.objetivo});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'3px 9px'}}>Reeval.</button>}
-              </div>
-            </div>
-          ))}
+              );
+            });
+          })()}
         </div>
       </div>
     );
@@ -1338,7 +1515,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         );
         case 9: return(
           <div>
-            {[{titulo:'Single Leg Stance (SLS)',inst:'Apoyo monopodal, ojos abiertos. Normal: > 30 seg. Progresión: ojos cerrados.',campos:[{k:'sls.d',l:'Pierna D (seg)'},{k:'sls.i',l:'Pierna I (seg)'}],obs:'sls.obs',refVal:30},{titulo:'Y-Balance Test',inst:'Apoyo monopodal. Alcance máximo en 3 direcciones. Asimetría ANT > 4 cm = riesgo lesión.'}].map((t,ti)=>(
+            {[{titulo:'Single Leg Stance (SLS)',inst:'Apoyo monopodal, ojos abiertos. Normal: > 30 seg. Progresión: ojos cerrados.',campos:[{k:'sls.d',l:'Pierna D (seg)'},{k:'sls.i',l:'Pierna I (seg)'}],obs:'sls.obs',refVal:30},...(mostrarAvanzado?[{titulo:'Y-Balance Test',inst:'Apoyo monopodal. Alcance máximo en 3 direcciones. Asimetría ANT > 4 cm = riesgo lesión.'}]:[])].map((t,ti)=>(
               ti===0?(
                 <div key={ti} style={{...fs.card,borderLeft:`4px solid ${TL}`}}>
                   <div style={{fontSize:12,fontWeight:700,marginBottom:4}}>{t.titulo}</div>
@@ -1698,7 +1875,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
               <div style={{...fs.card,borderLeft:`4px solid ${FASES_BASE[ev.fase]?.color||NV}`,background:'#EFF6FF'}}>
                 <div style={{fontSize:11,fontWeight:700,color:'#1D4ED8',marginBottom:8}}>🎯 Criterios de evolución personalizados para: "{ev.objetivo}"</div>
                 <div style={{fontSize:11,color:GD,marginBottom:8}}>Estos criterios quedarán guardados en la ficha y condicionarán el avance a la siguiente fase.</div>
-                {generarCriteriosPersonalizados(ev.objetivo,ev.fase,ev.eva_reposo,calcROMpct(ev.rom,ev.region)).map((c,i)=>(
+                {generarCriteriosPersonalizados(ev.objetivo,ev.fase,ev.eva_reposo,calcROMpct(ev.rom,ev.region),'clinico').map((c,i)=>(
                   <div key={i} style={{display:'flex',gap:6,alignItems:'flex-start',fontSize:11,color:GD,padding:'4px 0',borderBottom:i>0?`1px solid ${GL}`:'none'}}>
                     <span style={{color:FASES_BASE[ev.fase]?.color,fontWeight:700,flexShrink:0}}>→</span>{c}
                   </div>
@@ -1760,66 +1937,157 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   };
 
   // ── KPIs CLÍNICOS ──────────────────────────────────────────────────────
-  const KPIs=()=>(
-    <div style={{padding:'14px'}}>
-      <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>KPIs Clínicos</div>
-      {pacientes.filter(p=>p.evaluaciones.length>0).length===0&&<div style={{...fs.card,textAlign:'center',padding:24,color:GM}}>Sin evaluaciones registradas.</div>}
-      {pacientes.filter(p=>p.evaluaciones.length>0).map(p=>{
-        const last=p.evaluaciones[p.evaluaciones.length-1];
-        const ei=last?.eva_reposo?calcEVA(last.eva_reposo):null;
-        const rp=calcROMpct(last?.rom,p.region);
-        const yb=last?calcYBalanceDiff(last.ybalance):null;
-        const fmsT=last?calcFMSTotal(last.fms):null;
-        const fase=last?.fase||'restaura';
-        const checks=[
-          {id:'eva',label:'EVA ≤ 2',pass:last?.eva_reposo&&parseFloat(last.eva_reposo)<=2,val:last?.eva_reposo||'—',peso:25},
-          {id:'rom',label:'ROM > 90%',pass:rp&&rp>90,val:rp?rp+'%':'—',peso:25},
-          {id:'ybal',label:'Y-Bal < 4cm',pass:yb&&parseFloat(yb)<4,val:yb?yb+' cm':'—',peso:15},
-          {id:'fms',label:'FMS ≥ 14',pass:fmsT&&fmsT>=14,val:fmsT?fmsT+'/21':'—',peso:10},
-        ];
-        const altaPct=Math.round(checks.filter(c=>c.pass).reduce((s,c)=>s+c.peso,0));
-        const criteriosPers=last?.criterios_personalizados||[];
-        return(
-          <div key={p.id} style={{...fs.card,marginBottom:12}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:700}}>{p.nombre} {p.apellido}</div>
-                <div style={{fontSize:10,color:GM}}>{REGIONES_LIST.find(r=>r.k===p.region)?.label} · {p.evaluaciones.length} eval. · {FASES_BASE[fase]?.badge} {FASES_BASE[fase]?.label}</div>
-                {last?.objetivo&&<div style={{fontSize:10,color:TL,marginTop:2}}>🎯 "{last.objetivo}"</div>}
-              </div>
-              <button onClick={()=>{setCurrentPac(p);setView('ver-paciente');}} style={{...fs.btnNV,fontSize:10,padding:'4px 10px'}}>Ver</button>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:10}}>
-              {[{l:'EVA',v:last?.eva_reposo||'—',c:ei?.color||GM,t:'≤ 2'},{l:'ROM',v:rp?rp+'%':'—',c:rp?(rp>90?GN:rp>70?AM:RJ):GM,t:'>90%'},{l:'Y-Balance',v:yb?yb+' cm':'—',c:yb?(parseFloat(yb)<4?GN:RJ):GM,t:'<4cm'},{l:'FMS',v:fmsT?fmsT+'/21':'—',c:fmsT?(fmsT>=14?GN:fmsT>=11?AM:RJ):GM,t:'≥14'}].map((k,i)=>(
-                <div key={i} style={{background:BG,borderRadius:6,padding:'8px',textAlign:'center'}}>
-                  <div style={{fontSize:9,color:GM,textTransform:'uppercase'}}>{k.l}</div>
-                  <div style={{fontSize:16,fontWeight:800,color:k.c}}>{k.v}</div>
-                  <div style={{fontSize:9,color:GM}}>Meta: {k.t}</div>
-                </div>
-              ))}
-            </div>
-            {/* Barra de alta */}
-            <div style={{background:BG,borderRadius:7,padding:'10px 12px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
-                <span style={{fontSize:11,fontWeight:700}}>Progreso hacia el alta clínica</span>
-                <span style={{fontSize:14,fontWeight:800,color:altaPct>=75?GN:altaPct>=50?AM:RJ}}>{altaPct}%</span>
-              </div>
-              <div style={{background:GL,borderRadius:99,height:8,overflow:'hidden',marginBottom:8}}>
-                <div style={{width:altaPct+'%',background:altaPct>=75?GN:altaPct>=50?AM:RJ,height:'100%',borderRadius:99,transition:'width .4s'}}/>
-              </div>
-              {criteriosPers.length>0&&(
-                <div>
-                  <div style={{fontSize:9,color:GM,fontWeight:700,textTransform:'uppercase',marginBottom:4}}>Criterios personalizados ({criteriosPers.length})</div>
-                  {criteriosPers.slice(0,3).map((c,i)=><div key={i} style={{fontSize:10,color:GD,display:'flex',gap:4,marginBottom:2}}><span style={{color:AM}}>→</span>{c}</div>)}
-                  {criteriosPers.length>3&&<div style={{fontSize:10,color:GM}}>+{criteriosPers.length-3} más</div>}
-                </div>
-              )}
-            </div>
+  const KPIs=()=>{
+    const conEval=pacientes.filter(p=>p.evaluaciones.length>0);
+    const activos=conEval.filter(p=>!p.evaluaciones.some(e=>e.tipo==='alta'));
+    const dadosDeAlta=conEval.filter(p=>p.evaluaciones.some(e=>e.tipo==='alta'));
+
+    // Tipo de lesión = tejido sospechado de la evaluación inicial (fallback: región)
+    const etiquetaLesion=(p)=>{
+      const inicial=p.evaluaciones.find(e=>e.tipo==='inicial')||p.evaluaciones[0];
+      return inicial?.tejidoSospechado||REGIONES_LIST.find(r=>r.k===p.region)?.label||p.region;
+    };
+    const contarPor=(lista,fn)=>{
+      const m={};
+      lista.forEach(p=>{const k=fn(p);if(!k)return;m[k]=(m[k]||0)+1;});
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+    };
+    const lesionesTodas=contarPor(conEval,etiquetaLesion);
+    const lesionesActivas=contarPor(activos,etiquetaLesion);
+    const porFase=contarPor(activos,p=>{
+      const last=p.evaluaciones[p.evaluaciones.length-1];
+      return FASES_BASE[last?.fase]?.label||'—';
+    });
+
+    // Sesiones restantes por cliente (requiere sesionesContratadas cargado)
+    const sesionesPorPac={};
+    todasSesiones.forEach(s=>{sesionesPorPac[s.paciente_id]=(sesionesPorPac[s.paciente_id]||0)+1;});
+    const conPlanContratado=activos.filter(p=>p.sesionesContratadas!=='' && p.sesionesContratadas!=null)
+      .map(p=>({p,realizadas:sesionesPorPac[p.id]||0,restantes:(p.sesionesContratadas||0)-(sesionesPorPac[p.id]||0)}))
+      .sort((a,b)=>a.restantes-b.restantes);
+
+    // Posible abandono: sin sesión ni evaluación en los últimos 30 días, no dado de alta
+    const hace30=new Date();hace30.setDate(hace30.getDate()-30);
+    const posiblesAbandonos=activos.filter(p=>{
+      const fechas=[...p.evaluaciones.map(e=>e.fecha),...todasSesiones.filter(s=>s.paciente_id===p.id).map(s=>s.fecha)].filter(Boolean).sort();
+      const ultima=fechas[fechas.length-1];
+      return ultima&&new Date(ultima)<hace30;
+    });
+
+    // Tiempo promedio de tratamiento (altas con al menos 2 evaluaciones)
+    const duraciones=dadosDeAlta.map(p=>{
+      const ini=p.evaluaciones.find(e=>e.tipo==='inicial')?.fecha;
+      const alta=p.evaluaciones.find(e=>e.tipo==='alta')?.fecha;
+      if(!ini||!alta)return null;
+      return Math.round((new Date(alta)-new Date(ini))/86400000);
+    }).filter(d=>d!=null&&d>=0);
+    const promDuracion=duraciones.length?Math.round(duraciones.reduce((a,b)=>a+b,0)/duraciones.length):null;
+
+    const maxLesiones=Math.max(1,...lesionesTodas.map(([,n])=>n));
+    const BarChart=({data,max,color})=>(
+      <div>
+        {data.length===0&&<div style={{fontSize:11,color:GM,padding:'8px 0'}}>Sin datos suficientes todavía.</div>}
+        {data.slice(0,6).map(([label,n])=>(
+          <div key={label} style={{marginBottom:7}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:2}}><span style={{color:GD}}>{label}</span><span style={{fontWeight:700,color}}>{n}</span></div>
+            <div style={{background:GL,borderRadius:99,height:7,overflow:'hidden'}}><div style={{width:(n/max*100)+'%',background:color,height:'100%',borderRadius:99}}/></div>
           </div>
-        );
-      })}
-    </div>
-  );
+        ))}
+      </div>
+    );
+
+    return(
+      <div style={{padding:'14px'}}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>KPIs Clínicos</div>
+
+        {/* Tarjetas resumen */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginBottom:12}}>
+          {[
+            {l:'Tratamientos activos',v:activos.length,c:TL},
+            {l:'Pacientes totales',v:pacientes.length,c:NV},
+            {l:'Dados de alta',v:dadosDeAlta.length,c:GN},
+            {l:'Posible abandono',v:posiblesAbandonos.length,c:posiblesAbandonos.length>0?RJ:GM,s:'Sin actividad 30+ días'},
+          ].map((k,i)=>(
+            <div key={i} style={{...fs.card,textAlign:'center',padding:'12px 8px',marginBottom:0,borderTop:`3px solid ${k.c}`}}>
+              <div style={{fontSize:24,fontWeight:800,color:k.c}}>{k.v}</div>
+              <div style={{fontSize:9,color:GM,textTransform:'uppercase',marginTop:2}}>{k.l}</div>
+              {k.s&&<div style={{fontSize:8,color:GM}}>{k.s}</div>}
+            </div>
+          ))}
+        </div>
+
+        {promDuracion!=null&&(
+          <div style={{...fs.card,marginBottom:12,background:'#EFF6FF',border:'1px solid #93C5FD'}}>
+            <div style={{fontSize:11,color:'#1D4ED8'}}>⏱ Duración promedio de tratamiento hasta el alta: <strong>{promDuracion} días</strong> (sobre {duraciones.length} caso/s con fecha de inicio y alta registradas)</div>
+          </div>
+        )}
+
+        <div style={{...fs.card,marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>🩺 Tipo de lesión más frecuente (histórico)</div>
+          <BarChart data={lesionesTodas} max={maxLesiones} color={NV}/>
+        </div>
+
+        <div style={{...fs.card,marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>🔴 Lesiones en tratamiento activo ahora</div>
+          <BarChart data={lesionesActivas} max={Math.max(1,...lesionesActivas.map(([,n])=>n))} color={RJ}/>
+        </div>
+
+        <div style={{...fs.card,marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>📊 Distribución por fase del método (activos)</div>
+          <BarChart data={porFase} max={Math.max(1,...porFase.map(([,n])=>n))} color={TL}/>
+        </div>
+
+        {conPlanContratado.length>0&&(
+          <div style={{...fs.card,marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>📦 Sesiones restantes del plan contratado</div>
+            {conPlanContratado.map(({p,realizadas,restantes})=>(
+              <div key={p.id} onClick={()=>{setCurrentPac(p);setView('ver-paciente');}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 8px',borderRadius:6,background:restantes<=1?'#FEF2F2':BG,marginBottom:4,cursor:'pointer'}}>
+                <span style={{fontSize:11,fontWeight:600}}>{p.nombre} {p.apellido}</span>
+                <span style={{fontSize:11,fontWeight:700,color:restantes<=1?RJ:restantes<=3?AM:GN}}>{realizadas}/{p.sesionesContratadas} · {restantes<=0?'Sin sesiones restantes':`${restantes} restante${restantes===1?'':'s'}`}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {conPlanContratado.length===0&&(
+          <div style={{...fs.card,marginBottom:12,color:GM,fontSize:11}}>Ningún paciente activo tiene "Sesiones contratadas" cargado — agregalo en la ficha del paciente para ver acá cuántas sesiones le quedan.</div>
+        )}
+
+        {posiblesAbandonos.length>0&&(
+          <div style={{...fs.card,marginBottom:12,borderLeft:`4px solid ${RJ}`}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:6,color:RJ}}>⚠ Posible abandono de tratamiento</div>
+            {posiblesAbandonos.map(p=>(
+              <div key={p.id} onClick={()=>{setCurrentPac(p);setView('ver-paciente');}} style={{fontSize:11,padding:'4px 8px',cursor:'pointer'}}>{p.nombre} {p.apellido} — sin actividad hace 30+ días</div>
+            ))}
+          </div>
+        )}
+
+        <details>
+          <summary style={{fontSize:11,color:TL,cursor:'pointer',fontWeight:700,marginBottom:8}}>Ver detalle por paciente ({conEval.length})</summary>
+          {conEval.map(p=>{
+            const last=p.evaluaciones[p.evaluaciones.length-1];
+            const ei=last?.eva_reposo?calcEVA(last.eva_reposo):null;
+            const rp=calcROMpct(last?.rom,p.region);
+            const fase=last?.fase||'restaura';
+            return(
+              <div key={p.id} style={{...fs.card,marginTop:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700}}>{p.nombre} {p.apellido}</div>
+                    <div style={{fontSize:10,color:GM}}>{etiquetaLesion(p)} · {p.evaluaciones.length} eval. · {FASES_BASE[fase]?.badge} {FASES_BASE[fase]?.label}</div>
+                  </div>
+                  <button onClick={()=>{setCurrentPac(p);setView('ver-paciente');}} style={{...fs.btnNV,fontSize:10,padding:'4px 10px'}}>Ver</button>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                  <div style={{background:BG,borderRadius:6,padding:'8px',textAlign:'center'}}><div style={{fontSize:9,color:GM,textTransform:'uppercase'}}>EVA</div><div style={{fontSize:16,fontWeight:800,color:ei?.color||GM}}>{last?.eva_reposo||'—'}</div></div>
+                  <div style={{background:BG,borderRadius:6,padding:'8px',textAlign:'center'}}><div style={{fontSize:9,color:GM,textTransform:'uppercase'}}>ROM</div><div style={{fontSize:16,fontWeight:800,color:rp?(rp>90?GN:rp>70?AM:RJ):GM}}>{rp?rp+'%':'—'}</div></div>
+                </div>
+              </div>
+            );
+          })}
+        </details>
+      </div>
+    );
+  };
 
   // ── PROTOCOLOS ────────────────────────────────────────────────────────
   const Protocolos=()=>{
@@ -1849,8 +2117,15 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
               {fase.criterios_ingreso.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:TL,flexShrink:0}}>✓</span>{c}</div>)}
             </div>
             <div>
-              <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:5,textTransform:'uppercase'}}>Para avanzar a la siguiente</div>
-              {fase.criterios_avance.map((c,i)=><div key={i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:AM,flexShrink:0}}>→</span>{c}</div>)}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <div style={{fontSize:10,fontWeight:700,color:GD,textTransform:'uppercase'}}>Para avanzar a la siguiente {selFase==='restaura'?'(alta clínica → ACTIVA)':''}</div>
+                <button onClick={()=>setEditandoCrit(editandoCrit===selFase?null:selFase)} style={{fontSize:9,color:TL,background:'none',border:'none',cursor:'pointer',fontWeight:700}}>{editandoCrit===selFase?'Cerrar':'✎ Editar'}</button>
+              </div>
+              {editandoCrit===selFase
+                ? <CriteriosClinicosEditor fase={selFase} template={criteriosTemplate} saveFase={saveCriteriosFase} fs={fs} label={fase.label}/>
+                : (criteriosTemplate[selFase]||fase.criterios_avance.map((t,i)=>({id:'f'+i,texto:t}))).map((c,i)=><div key={c.id||i} style={{fontSize:11,color:GD,display:'flex',gap:5,marginBottom:4}}><span style={{color:AM,flexShrink:0}}>→</span>{c.texto||c}</div>)
+              }
+              <div style={{fontSize:9,color:GM,marginTop:4}}>{criteriosTemplate[selFase]?'Estos son los criterios editables — se sincronizan con la app de gym.':'Todavía usando el texto por defecto — editalo para que quede como criterio propio del centro.'}</div>
             </div>
           </div>
           <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:6,padding:'10px 12px'}}>
@@ -1858,7 +2133,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             {[['Volver a correr (deportivo)',fase.label],['Retorno al trabajo (laboral)',fase.label],['Caminar sin dolor (AVDs)',fase.label]].map(([obj],i)=>(
               <div key={i} style={{marginBottom:8}}>
                 <div style={{fontSize:10,fontWeight:700,color:GD,marginBottom:3}}>🎯 "{obj}"</div>
-                {generarCriteriosPersonalizados(obj,selFase,'5',60).slice(-2).map((c,j)=><div key={j} style={{fontSize:10,color:GD,display:'flex',gap:4,marginBottom:1}}><span style={{color:fase.color}}>→</span>{c}</div>)}
+                {generarCriteriosPersonalizados(obj,selFase,'5',60,'clinico').slice(-2).map((c,j)=><div key={j} style={{fontSize:10,color:GD,display:'flex',gap:4,marginBottom:1}}><span style={{color:fase.color}}>→</span>{c}</div>)}
               </div>
             ))}
           </div>
@@ -1893,16 +2168,22 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
     const pac=pacientes.find(p=>p.id===selPac);
     const last=pac?.evaluaciones[pac.evaluaciones.length-1];
     const rp=last?calcROMpct(last.rom,pac.region):null;
-    const yb=last?calcYBalanceDiff(last.ybalance):null;
-    const fmsT=last?calcFMSTotal(last.fms):null;
-    const checks=last?[
-      {id:'eva',label:'EVA ≤ 2/10',pass:last.eva_reposo&&parseFloat(last.eva_reposo)<=2,val:last.eva_reposo?last.eva_reposo+'/10':'Sin dato',peso:25},
-      {id:'rom',label:'ROM > 90%',pass:rp&&rp>90,val:rp?rp+'%':'Sin dato',peso:25},
-      {id:'ybal',label:'Y-Balance < 4 cm',pass:yb&&parseFloat(yb)<4,val:yb?yb+' cm':'Sin dato',peso:15},
-      {id:'fms',label:'FMS ≥ 14/21',pass:fmsT&&fmsT>=14,val:fmsT?fmsT+'/21':'Sin dato',peso:10},
-      {id:'dn4',label:'DN4 < 4',pass:calcDN4(last.dn4)<4,val:calcDN4(last.dn4)+'/7',peso:10},
-    ]:[];
-    // Verificar también criterios personalizados
+    // Única fuente clínica — misma que sesiones y VerPaciente. Antes acá
+    // había una tercera versión hardcodeada (EVA/ROM/Y-Balance/FMS/DN4 con
+    // pesos fijos) desconectada de todo lo demás.
+    const protocoloAlta=last?generarProtocoloRehab(pac.region,last.tejidoSospechado||'',last.objetivo||'',last.eva_reposo,rp):[];
+    const faseRetorno=protocoloAlta.find(f=>f.k==='retorno_funcion');
+    const criteriosTexto=faseRetorno?faseRetorno.criterios:[];
+    const checkTexto=(c)=>{
+      if(/EVA/i.test(c)&&last?.eva_reposo)return parseFloat(last.eva_reposo)<=2;
+      if(/ROM/i.test(c)&&rp)return rp>90;
+      return null;
+    };
+    const checks=criteriosTexto.map((texto,i)=>{
+      const pass=checkTexto(texto);
+      return{id:'c'+i,label:texto,pass:pass===true,val:pass===null?'A confirmar por el clínico':(pass?'Cumplido':'No cumplido'),peso:Math.round(100/Math.max(criteriosTexto.length,1))};
+    });
+    // Criterios personalizados según objetivo — solo se listan, no se autoevalúan
     const criteriosPers=last?.criterios_personalizados||[];
     const allPass=checks.length>0&&checks.every(c=>c.pass);
     const pct=checks.length>0?Math.round(checks.filter(c=>c.pass).reduce((s,c)=>s+c.peso,0)):0;
@@ -1944,15 +2225,18 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
               <div style={{background:GL,borderRadius:99,height:10,overflow:'hidden',marginBottom:12}}>
                 <div style={{width:pct+'%',background:allPass?GN:pct>60?AM:RJ,height:'100%',borderRadius:99,transition:'width .5s'}}/>
               </div>
-              {checks.map(c=>(
-                <div key={c.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:6,background:c.pass?'#F0FDF4':'#FEF2F2',border:`1px solid ${c.pass?'#86EFAC':'#FCA5A5'}`,marginBottom:5}}>
+              {checks.map(c=>{
+                const pend=c.val==='A confirmar por el clínico';
+                const color=c.pass?GN:pend?AM:RJ;
+                return(
+                <div key={c.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:6,background:c.pass?'#F0FDF4':pend?'#FFFBEB':'#FEF2F2',border:`1px solid ${c.pass?'#86EFAC':pend?'#FDE68A':'#FCA5A5'}`,marginBottom:5}}>
                   <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                    <span style={{fontSize:15,color:c.pass?GN:RJ}}>{c.pass?'✓':'✗'}</span>
+                    <span style={{fontSize:15,color}}>{c.pass?'✓':pend?'○':'✗'}</span>
                     <span style={{fontSize:12,fontWeight:600}}>{c.label}</span>
                   </div>
-                  <span style={{fontSize:13,fontWeight:800,color:c.pass?GN:RJ}}>{c.val}</span>
+                  <span style={{fontSize:11,fontWeight:800,color}}>{c.val}</span>
                 </div>
-              ))}
+              );})}
             </div>
             {allPass
               ?<div style={{...fs.card,background:'#F0FDF4',border:`2px solid ${GN}`,textAlign:'center',padding:'20px'}}>
@@ -1994,6 +2278,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             <div><span style={fs.lbl}>Género</span><select value={form.genero||''} onChange={e=>set('genero',e.target.value)} style={{...fs.sel,width:'100%'}}><option value=''>Seleccionar</option><option value='masculino'>Masculino</option><option value='femenino'>Femenino</option></select></div>
             <div><span style={fs.lbl}>Región principal</span><select value={form.region} onChange={e=>set('region',e.target.value)} style={{...fs.sel,width:'100%'}}>{REGIONES_LIST.map(r=><option key={r.k} value={r.k}>{r.label}</option>)}</select></div>
             <div><span style={fs.lbl}>Derivado por</span><input value={form.derivadoPor||''} onChange={e=>set('derivadoPor',e.target.value)} style={fs.inp} placeholder="Médico, especialidad..."/></div>
+            <div><span style={fs.lbl}>Sesiones contratadas</span><input type="number" min="0" value={form.sesionesContratadas??''} onChange={e=>set('sesionesContratadas',e.target.value===''?'':parseInt(e.target.value)||0)} style={fs.inp} placeholder="Ej: 7 (para ver restantes en KPIs)"/></div>
             {gymClients.length>0&&<div style={{gridColumn:'1/-1'}}><span style={fs.lbl}>Vincular con cliente del gym</span><select value={form.gym_clienteId||''} onChange={e=>set('gym_clienteId',e.target.value)} style={{...fs.sel,width:'100%'}}><option value=''>Sin vinculación</option>{gymClients.map(c=><option key={c.id} value={c.id}>{c.nombre} {c.apellido}</option>)}</select></div>}
             <div style={{gridColumn:'1/-1'}}><span style={fs.lbl}>Notas internas</span><textarea value={form.notas||''} onChange={e=>set('notas',e.target.value)} rows={2} style={{...fs.inp,resize:'vertical'}}/></div>
           </div>

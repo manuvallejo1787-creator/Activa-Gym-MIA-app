@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
-import PasswordGate from './PasswordGate.jsx'
+import AuthGate from './AuthGate.jsx'
 
 // Error boundary — si algo falla, muestra mensaje en lugar de pantalla en blanco
 class ErrorBoundary extends React.Component {
@@ -33,9 +33,9 @@ class ErrorBoundary extends React.Component {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <PasswordGate>
+  <AuthGate>
     <ErrorBoundary>
       <App />
     </ErrorBoundary>
-  </PasswordGate>
+  </AuthGate>
 )

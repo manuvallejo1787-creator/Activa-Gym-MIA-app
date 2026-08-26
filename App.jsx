@@ -4,9 +4,11 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
+import RielIncidencia from "./RielIncidencia.jsx";
+import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
@@ -817,6 +819,7 @@ const emptyCliente=()=>({
   notasInternas:'',
   screeningCompleto:false,
   screening:emptyScreening(),
+  screeningHistorial:[], // snapshots fechados para el checkpoint comparativo
   objetivo:'',
   criterios_personalizados:[],
   fisio_pacienteId:null,
@@ -2038,15 +2041,21 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
         sc.restriccionCargaAxial==='si'?'Sin carga axial':'',
         sc.otraRestriccion||'',
       ].filter(Boolean).join(' · ');
+      const fechaEval=sc.fechaEvaluacion||new Date().toISOString().split('T')[0];
+      // Antes cada re-evaluación PISABA la anterior (un solo objeto screening,
+      // sin historial) — no había con qué comparar un "antes y después" real.
+      // Ahora cada finalización queda como snapshot fechado en el historial.
+      const snapshot={id:genId('scr'),fecha:fechaEval,screening:sc,nivel:sc.nivelAsignado,semaforo:sc.semaforoAsignado};
       const saved={
         ...form,
         nivel:sc.nivelAsignado,
         semaforo:sc.semaforoAsignado,
         restricciones:resText,
         restricciones_flags:flags,
-        fechaEval:sc.fechaEvaluacion||new Date().toISOString().split('T')[0],
+        fechaEval,
         screeningCompleto:true,
         screening:sc,
+        screeningHistorial:[...(form.screeningHistorial||[]),snapshot],
       };
       saveClient(saved);
     };
@@ -2823,10 +2832,16 @@ export default function App(){
   // vivía solo en localStorage — ver useCentroConfig en db.js).
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
+  const { incidencias, saveIncidencia, marcarResuelta } = useIncidencias();
+  const usuario = useUsuarioActual();
+  const incPendientes = useMemo(()=>incidencias.filter(i=>!i.resuelto).length,[incidencias]);
   const [clientWizard,setClientWizard]=useState(null);
   const [clienteSearch,setClienteSearch]=useState('');
   const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
   const [miniEvalCliente,setMiniEvalCliente]=useState(null); // cliente con el modal de mini evaluación de cierre abierto
+  const [checkpointCliente,setCheckpointCliente]=useState(null); // id del cliente con el panel de checkpoint comparativo abierto
+  const [ckGymA,setCkGymA]=useState('');
+  const [ckGymB,setCkGymB]=useState('');
   const [editandoCriterios,setEditandoCriterios]=useState(null); // fase cuya plantilla se está editando
   const [informeCliente,setInformeCliente]=useState(null);
 
@@ -3484,6 +3499,7 @@ export default function App(){
                   {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
                   {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
                   {c.periodizacion&&c.periodizacionSnapshotInicio&&<button onClick={()=>setMiniEvalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FFFBEB',color:'#92400E',borderColor:'#FDE68A'}}>🎯 Cerrar ciclo</button>}
+                  {(c.screeningHistorial||[]).length>=2&&<button onClick={()=>setCheckpointCliente(checkpointCliente===c.id?null:c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:checkpointCliente===c.id?brand.colorPrimary:'#EFF6FF',color:checkpointCliente===c.id?WH:'#1D4ED8',borderColor:'#93C5FD'}}>📊 Checkpoint</button>}
                   {c.screeningCompleto&&<button onClick={()=>setAvanceAbierto(avanceAbierto===c.id?null:c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:avanceAbierto===c.id?NIVEL[c.nivel]?.color:'#ECFDF5',color:avanceAbierto===c.id?WH:'#059669',borderColor:'#6EE7B7'}}>📈 Avance de fase</button>}
                   <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
                   {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
@@ -3491,6 +3507,49 @@ export default function App(){
                   <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
                 </div>
               </div>
+              {checkpointCliente===c.id&&(()=>{
+                const hist=c.screeningHistorial||[];
+                const idA=ckGymA||hist[0]?.id;
+                const idB=ckGymB||hist[hist.length-1]?.id;
+                const etiqueta=(sn)=>`${sn.fecha} · ${NIVEL[sn.nivel]?.label||sn.nivel||'—'}`;
+                const generar=()=>{
+                  let snA=hist.find(h=>h.id===idA),snB=hist.find(h=>h.id===idB);
+                  if(!snA||!snB||snA.id===snB.id)return;
+                  if(snA.fecha>snB.fecha)[snA,snB]=[snB,snA];
+                  const scA=snA.screening||{},scB=snB.screening||{};
+                  const filaComp=(label,vi,vf,unidad='')=>{
+                    const numA=parseFloat(vi),numB=parseFloat(vf);
+                    const comparable=!isNaN(numA)&&!isNaN(numB);
+                    const color=comparable?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
+                    return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi||'—'}${vi&&unidad?' '+unidad:''} → <strong style="color:${color}">${vf||'—'}${vf&&unidad?' '+unidad:''}</strong></span></div>`;
+                  };
+                  const MOVX=[['mov_tobillo','Dorsiflexión tobillo'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
+                  const PVFIX=[['pvfi_chair_stand','30s Chair Stand','reps'],['pvfi_dino_d','Dinamometría der','kg'],['pvfi_dino_i','Dinamometría izq','kg'],['pvfi_tug','TUG','seg'],['pvfi_plancha_elev','Plancha elevada','seg'],['pvfi_wallsit','Wall sit 90°','seg'],['pvfi_pushup_rod','Push-up rodillas','reps'],['pvfi_plancha_suelo','Plancha suelo','seg'],['pvfi_row_iso','Row isométrico','seg'],['pvfi_dino2','Dinamometría TS','kg']];
+                  const movsComp=MOVX.filter(([k])=>scA[k+'_grados']||scB[k+'_grados']);
+                  const pvfiComp=PVFIX.filter(([k])=>scA[k]||scB[k]);
+                  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Checkpoint — ${c.nombre}</title><style>${getPrintCSS(brand.colorPrimary)}</style></head><body>
+                    <div class="doc-header"><div><div class="brand">${brand.gymName}</div><div class="brand-tag">Checkpoint de evolución</div></div><div class="doc-meta"><strong>${c.nombre} ${c.apellido}</strong><br/>${snA.fecha} → ${snB.fecha}</div></div>
+                    <div class="sec"><div class="sec-title">Estado general</div><div class="sec-body filas">
+                      ${filaComp('Fase del método',NIVEL[snA.nivel]?.label,NIVEL[snB.nivel]?.label)}
+                      ${c.objetivo?`<div class="fila"><span class="fila-label">Objetivo</span><span class="fila-val">${c.objetivo}</span></div>`:''}
+                    </div></div>
+                    ${movsComp.length>0?`<div class="sec"><div class="sec-title">Movilidad — grados registrados</div><div class="sec-body filas">${movsComp.map(([k,l])=>filaComp(l,scA[k+'_grados'],scB[k+'_grados'])).join('')}</div></div>`:''}
+                    ${pvfiComp.length>0?`<div class="sec"><div class="sec-title">Capacidades físicas (PVFI)</div><div class="sec-body filas">${pvfiComp.map(([k,l,u])=>filaComp(l,scA[k],scB[k],u)).join('')}</div></div>`:''}
+                    ${footerHTML({centro:brand.gymName,pieTexto:'Método Activa Integra'})}
+                    <script>window.onload=()=>window.print()<\/script></body></html>`;
+                  const w=window.open('','_blank');w.document.write(html);w.document.close();
+                };
+                return(
+                  <div style={{marginTop:8,paddingTop:10,borderTop:`1px dashed ${G2}`,background:'#EFF6FF',borderRadius:6,padding:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:'#1D4ED8',marginBottom:6}}>📊 Checkpoint comparativo — elegí dos evaluaciones</div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+                      <select value={idA} onChange={e=>setCkGymA(e.target.value)} style={{...s.sel,width:'100%',fontSize:10}}>{hist.map(sn=><option key={sn.id} value={sn.id}>{etiqueta(sn)}</option>)}</select>
+                      <select value={idB} onChange={e=>setCkGymB(e.target.value)} style={{...s.sel,width:'100%',fontSize:10}}>{hist.map(sn=><option key={sn.id} value={sn.id}>{etiqueta(sn)}</option>)}</select>
+                    </div>
+                    <button onClick={generar} disabled={idA===idB} style={{...s.btnR,width:'100%',padding:'8px',opacity:idA===idB?.4:1,background:brand.colorPrimary}}>{idA===idB?'Elegí dos evaluaciones distintas':'📄 Generar PDF comparativo'}</button>
+                  </div>
+                );
+              })()}
               {avanceAbierto===c.id&&(()=>{
                 const sig=siguienteFase(c.nivel);
                 const sc=c.screening||{};
@@ -4304,30 +4363,9 @@ export default function App(){
         <div style={{display:'flex',gap:14,alignItems:'center'}}>
           <div style={{textAlign:'right'}}>
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
-            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · v
-          {dia.blocks.length>0&&(()=>{
-            const dur=calcularDuracionSesion(dia.blocks);
-            const col=colorDuracion(dur.totalMin);
-            return(
-              <div style={{background:G1,borderRadius:7,padding:'8px 12px',marginTop:6,border:`1px solid ${G2}`}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:700,color:G4}}>⏱ Duración estimada del entrenamiento</div>
-                    <div style={{fontSize:9,color:G3}}>Cal. {dur.calentamiento}min · Trabajo {dur.ejercicios}min · Trans. {dur.transiciones}min · Vuelta calma {dur.vueltaCalma}min</div>
-                  </div>
-                  <div style={{textAlign:'right'}}>
-                    <span style={{fontSize:26,fontWeight:800,color:col.color}}>{dur.totalMin}</span>
-                    <span style={{fontSize:11,color:col.color}}> min</span>
-                    <div style={{fontSize:10,color:col.color,fontWeight:700}}>{col.label}</div>
-                  </div>
-                </div>
-                <div style={{background:G2,borderRadius:99,height:5,overflow:'hidden',marginTop:5}}>
-                  <div style={{width:Math.min(dur.totalMin/90*100,100)+'%',background:col.color,height:'100%',borderRadius:99,transition:'width .4s'}}/>
-                </div>
-              </div>
-            );
-          })()}9.0</div>
+            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · v9.0</div>
           </div>
+          <BotonSalir/>
           <div style={{width:2,height:36,background:brand.colorPrimary,borderRadius:99,flexShrink:0}}/>
           <div style={{display:'flex',flexDirection:'column',gap:2}}>
             {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k).length;return(<div key={k} style={{display:'flex',gap:5,alignItems:'center',fontSize:10}}><span style={{color:v.color,fontWeight:700,minWidth:20}}>{v.badge}</span><span style={{color:G3}}>{n||'—'}</span></div>);})}
@@ -4335,12 +4373,15 @@ export default function App(){
         </div>
       </div>
       <div style={{...s.tabBar,background:'#141414',borderBottomColor:brand.colorPrimary}}>
-        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
+        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['riel',`⚠️ Sala${incPendientes>0?` (${incPendientes})`:''}`],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
           <button key={k} onClick={()=>setTab(k)} style={s.tb(tab===k,brand.colorPrimary)}>{lbl}</button>
         ))}
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='clientes'&&ClientesTab()}
+        {tab==='riel'&&<RielIncidencia clients={clients} exs={exs} config={brand} saveConfig={setBrand}
+          saveIncidencia={saveIncidencia} incidencias={incidencias} marcarResuelta={marcarResuelta}
+          usuarioEmail={usuario?.email||''}/>}
         {tab==='session'&&SessionTab()}
         {tab==='fuerza'&&<FuerzaTab brand={brand} clients={clients} s={s} saveClientFn={saveClientFn}/>}
         {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}

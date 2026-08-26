@@ -262,6 +262,23 @@ function renderDashboard(){
     html += `</div>`;
   }
 
+  if(DATA.clinico){
+    const c=DATA.clinico;
+    html += `<div class="card"><h3>🩺 Tu evolución clínica</h3>`;
+    if(c.objetivo) html += `<div class="pr" style="margin-bottom:8px">🎯 <strong>Objetivo:</strong> ${esc(c.objetivo)}</div>`;
+    if(c.tieneComparativa){
+      const evaMejora=c.evaInicial!=null&&c.evaActual!=null&&parseFloat(c.evaActual)<parseFloat(c.evaInicial);
+      const romMejora=c.romInicial!=null&&c.romActual!=null&&c.romActual>c.romInicial;
+      html += `<div class="dashrow">
+        <div class="stat"><div class="l" style="margin-bottom:4px">EVA (dolor)</div><div class="n" style="font-size:15px">${c.evaInicial??'—'} → <span style="color:${evaMejora?'#16A34A':'#DC2626'}">${c.evaActual??'—'}</span></div></div>
+        <div class="stat"><div class="l" style="margin-bottom:4px">ROM %</div><div class="n" style="font-size:15px">${c.romInicial??'—'} → <span style="color:${romMejora?'#16A34A':'#DC2626'}">${c.romActual??'—'}</span></div></div>
+      </div>`;
+    } else {
+      html += `<div style="font-size:10px;color:#777">Todavía con una sola evaluación registrada — la comparativa aparece después de la próxima.</div>`;
+    }
+    html += `</div>`;
+  }
+
   if(DATA.criterios && DATA.criterios.length){
     const estado = DATA.cliente.criteriosEstado||{};
     html += `<div class="card"><h3>🎯 Requisitos para tu próxima fase</h3>`;
