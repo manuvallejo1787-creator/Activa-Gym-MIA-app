@@ -725,21 +725,43 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
 
   // ── SINCRONIZAR CON APP DE GYM ─────────────────────────────────────────
   // Cuando se guarda una evaluación con síntesis, actualiza el cliente en la app de gym
+  // evaRector — el EVA que gobierna la tolerancia a la carga.
+  //
+  // ANTES: todas las restricciones se derivaban de eva_reposo. Auditando las
+  // 8 evaluaciones reales, 3 de 6 tenían eva_reposo 0 con eva_movimiento
+  // entre 5 y 8 — es decir, la mitad de los casos entraban al gimnasio con
+  // cero banderas de restricción teniendo dolor real al moverse.
+  // El dolor en reposo es mal predictor de tolerancia a la carga; el dolor
+  // en movimiento es el que importa para decidir qué puede entrenar.
+  //
+  // AHORA: manda el peor de los dos. eva_reposo sigue contando (un dolor
+  // nocturno/en reposo alto es bandera por sí mismo), pero ya no puede
+  // tapar un movimiento doloroso.
+  const evaRector=(ev)=>{
+    const r=parseFloat(ev?.eva_reposo||'0')||0;
+    const m=parseFloat(ev?.eva_movimiento||ev?.eva_mov||'0')||0;
+    return Math.max(r,m);
+  };
+
   const syncConGym=(pac,eval_)=>{
     if(!pac.gym_clienteId||!onUpdateGymClient)return;
     const fase=eval_.fase||'restaura';
     const semaforoNuevo=FASES_BASE[fase]?.semaforo||'pendiente';
+    const eva=evaRector(eval_);
+    const evaRep=parseFloat(eval_.eva_reposo||'0')||0;
+    const evaMov=parseFloat(eval_.eva_movimiento||eval_.eva_mov||'0')||0;
     const restricciones=[];
     if(eval_.redFlags&&Object.values(eval_.redFlags).some(Boolean))restricciones.push('Red flag activa — solo fisioterapia');
-    if(eval_.eva_reposo&&parseFloat(eval_.eva_reposo)>6)restricciones.push('Dolor intenso activo');
+    if(eva>6)restricciones.push(`Dolor intenso activo (EVA reposo ${evaRep} / movimiento ${evaMov})`);
+    else if(evaMov>=4&&evaRep<=3)restricciones.push(`Dolor al movimiento EVA ${evaMov} — regresar ejercicios de la region`);
     onUpdateGymClient(pac.gym_clienteId,{
       nivel:fase,
       semaforo:semaforoNuevo,
       restricciones:restricciones.join(' · '),
       restricciones_flags:{
-        impacto:fase==='restaura'||parseFloat(eval_.eva_reposo||'0')>5,
-        overhead:(['hombro','esc','cervical'].includes(eval_.region)&&parseFloat(eval_.eva_reposo||'0')>3),
-        cargaAxial:(['lumbar','columna'].includes(eval_.region)&&parseFloat(eval_.eva_reposo||'0')>4),
+        impacto:fase==='restaura'||eva>5,
+        overhead:(['hombro','esc','cervical'].includes(eval_.region)&&eva>3),
+        cargaAxial:(['lumbar','columna'].includes(eval_.region)&&eva>4),
       },
       fechaEval:eval_.fecha,
       screeningCompleto:true,
