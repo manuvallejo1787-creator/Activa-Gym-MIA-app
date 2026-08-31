@@ -8,6 +8,7 @@ import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useReha
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
+import PanelVeredicto from "./PanelVeredicto.jsx";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
 import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
@@ -3550,6 +3551,14 @@ export default function App(){
                   </div>
                 );
               })()}
+              {avanceAbierto===c.id&&(
+                <PanelVeredicto
+                  cliente={c}
+                  incidencias={incidencias}
+                  siguienteFase={siguienteFase}
+                  onAvanzar={(sig)=>{saveClient({...c,nivel:sig,criterios_avance_estado:{}});setAvanceAbierto(null);}}
+                />
+              )}
               {avanceAbierto===c.id&&(()=>{
                 const sig=siguienteFase(c.nivel);
                 const sc=c.screening||{};
