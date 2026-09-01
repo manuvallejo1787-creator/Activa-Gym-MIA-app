@@ -22,7 +22,8 @@
   .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:10px}
   .cal .dow{font-size:8px;color:#777;text-align:center;font-weight:700;padding-bottom:2px}
   .cal .day{aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:#1A1A1A;color:#555;border:1px solid #2e2e2e}
-  .cal .day.trained{background:var(--pri);color:#fff;border-color:var(--pri)}
+  .cal .day.done{background:#16A34A;color:#fff;border-color:#16A34A}
+  .cal .day.partial{background:#DC2626;color:#fff;border-color:#DC2626}
   .cal .day.today{box-shadow:0 0 0 2px #fff inset}
   .cal .day.empty{visibility:hidden}
   .dashrow{display:flex;gap:8px;margin-bottom:2px}
@@ -62,6 +63,8 @@
   .exmedia iframe{width:100%;aspect-ratio:16/9;border:none;display:block}
   .exmediadesc{font-size:10px;color:#999;padding:6px 2px 0}
   .exbody .pr{font-size:11px;color:#999;margin-bottom:8px}
+  .exbody .pr.obs{background:#2a2005;color:#FBBF24;border-radius:6px;padding:7px 9px;font-size:10.5px;line-height:1.4}
+  .exbody .pr.ovr{background:#2a0505;color:#FCA5A5;border-radius:6px;padding:7px 9px;font-size:10.5px;line-height:1.4;margin-top:6px}
   .pr .sug{color:#B794F6;font-weight:800}
   .grid{display:flex;flex-direction:column;gap:5px}
   .wk{display:flex;align-items:center;gap:8px}
@@ -144,15 +147,40 @@ function aplicarMarca(){
   }
 }
 
-function diasEntrenadosMes(){
+// Por cada día del mes en que hubo actividad, determina si la(s) sesión(es)
+// registradas ESE día quedaron completas (se cargó cada ejercicio de la
+// sesión) o incompletas (se cargó solo una parte). Se agrupa por fecha real
+// (updated_at), no por "semana" del plan — la semana no es una fecha.
+function diasEntrenadosMesConEstado(){
   const hoy = new Date();
-  const set = new Set();
+  const totalPorDia = {};
+  (DATA.plan?.dias||[]).forEach(d=>{
+    totalPorDia[d.id] = (d.blocks||[]).reduce((n,b)=>n+(b.exercises||[]).length,0);
+  });
+  const sesionesPorFecha = {}; // dayNum -> Set "dia_id|semana"
   (DATA.logs||[]).forEach(l=>{
     if(!l.updated_at) return;
-    const d = new Date(l.updated_at);
-    if(d.getFullYear()===hoy.getFullYear() && d.getMonth()===hoy.getMonth()) set.add(d.getDate());
+    const dt = new Date(l.updated_at);
+    if(dt.getFullYear()!==hoy.getFullYear() || dt.getMonth()!==hoy.getMonth()) return;
+    const hecho = (l.peso_real!=null && l.peso_real!=='') || l.reps_real;
+    if(!hecho) return;
+    const dn = dt.getDate();
+    (sesionesPorFecha[dn] = sesionesPorFecha[dn] || new Set()).add(l.dia_id+'|'+l.semana);
   });
-  return set;
+  const estado = {}; // dayNum -> 'completo'|'incompleto'
+  Object.entries(sesionesPorFecha).forEach(([dn, sesiones])=>{
+    let completo = true;
+    sesiones.forEach(sk=>{
+      const [diaId, semana] = sk.split('|');
+      let hechos = 0;
+      (DATA.logs||[]).forEach(l=>{
+        if(l.dia_id===diaId && String(l.semana)===semana && ((l.peso_real!=null&&l.peso_real!=='')||l.reps_real)) hechos++;
+      });
+      if(hechos < (totalPorDia[diaId]||1)) completo = false;
+    });
+    estado[dn] = completo ? 'completo' : 'incompleto';
+  });
+  return estado;
 }
 
 function sesionesCompletasVsIncompletas(){
@@ -199,7 +227,7 @@ function renderDashboard(){
   const hoy = new Date();
   const primerDiaSemana = new Date(hoy.getFullYear(), hoy.getMonth(), 1).getDay();
   const diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
-  const entrenados = diasEntrenadosMes();
+  const estadoDias = diasEntrenadosMesConEstado();
   const {completas, incompletas} = sesionesCompletasVsIncompletas();
   const mejoras = topMejoras();
 
@@ -208,17 +236,22 @@ function renderDashboard(){
   for(let i=0;i<primerDiaSemana;i++) cal += `<div class="day empty"></div>`;
   for(let d=1;d<=diasEnMes;d++){
     const cls = ['day'];
-    if(entrenados.has(d)) cls.push('trained');
+    if(estadoDias[d]==='completo') cls.push('done');
+    else if(estadoDias[d]==='incompleto') cls.push('partial');
     if(d===hoy.getDate()) cls.push('today');
     cal += `<div class="${cls.join(' ')}">${d}</div>`;
   }
   cal += `</div>`;
+  cal += `<div style="display:flex;gap:12px;font-size:9px;color:#999;margin-top:2px;margin-bottom:10px">
+    <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#16A34A;margin-right:4px;vertical-align:middle"></span>Completo</span>
+    <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#DC2626;margin-right:4px;vertical-align:middle"></span>Incompleto</span>
+  </div>`;
 
   let html = `<div class="card"><h3>📅 Este mes</h3>${cal}`;
   html += `<div class="dashrow">
-    <div class="stat"><div class="n">${entrenados.size}</div><div class="l">Días entrenados</div></div>
+    <div class="stat"><div class="n">${Object.keys(estadoDias).length}</div><div class="l">Días entrenados</div></div>
     <div class="stat"><div class="n" style="color:#16A34A">${completas}</div><div class="l">Completos</div></div>
-    <div class="stat"><div class="n" style="color:#D97706">${incompletas}</div><div class="l">Incompletos</div></div>
+    <div class="stat"><div class="n" style="color:#DC2626">${incompletas}</div><div class="l">Incompletos</div></div>
   </div></div>`;
 
   if(mejoras.length){
@@ -226,6 +259,23 @@ function renderDashboard(){
     mejoras.forEach(m=>{
       html += `<div class="mejora"><span>${esc(m.nombre)}</span><span class="val">${m.ini}kg → ${m.fin}kg (+${(m.delta).toFixed(1)})</span></div>`;
     });
+    html += `</div>`;
+  }
+
+  if(DATA.clinico){
+    const c=DATA.clinico;
+    html += `<div class="card"><h3>🩺 Tu evolución clínica</h3>`;
+    if(c.objetivo) html += `<div class="pr" style="margin-bottom:8px">🎯 <strong>Objetivo:</strong> ${esc(c.objetivo)}</div>`;
+    if(c.tieneComparativa){
+      const evaMejora=c.evaInicial!=null&&c.evaActual!=null&&parseFloat(c.evaActual)<parseFloat(c.evaInicial);
+      const romMejora=c.romInicial!=null&&c.romActual!=null&&c.romActual>c.romInicial;
+      html += `<div class="dashrow">
+        <div class="stat"><div class="l" style="margin-bottom:4px">EVA (dolor)</div><div class="n" style="font-size:15px">${c.evaInicial??'—'} → <span style="color:${evaMejora?'#16A34A':'#DC2626'}">${c.evaActual??'—'}</span></div></div>
+        <div class="stat"><div class="l" style="margin-bottom:4px">ROM %</div><div class="n" style="font-size:15px">${c.romInicial??'—'} → <span style="color:${romMejora?'#16A34A':'#DC2626'}">${c.romActual??'—'}</span></div></div>
+      </div>`;
+    } else {
+      html += `<div style="font-size:10px;color:#777">Todavía con una sola evaluación registrada — la comparativa aparece después de la próxima.</div>`;
+    }
     html += `</div>`;
   }
 
@@ -265,6 +315,7 @@ function render(){
   ).join('') + `</div>`;
 
   const d = dias[activeDia];
+  if(d.notas) html += `<div class="pr obs" style="margin-bottom:10px">📝 <strong>Notas del día:</strong> ${esc(d.notas)}</div>`;
   (d.blocks||[]).forEach(b=>{
     const exs = b.exercises||[];
     if(!exs.length) return;
@@ -282,6 +333,15 @@ function render(){
       const estado = filled>0 ? `<span class="exdone">✓ ${filled}/${SEMANAS}</span>` : `<span class="exnone">${SEMANAS} sem.</span>`;
       const thumb = med && med.tipo!=='video' ? `<img class="exthumb" src="${esc(med.url)}" onerror="this.style.display='none'"/>` : '';
       const pesoSugTxt = (be.pesoSug!=null && be.pesoSug!=='') ? ` · <span class="sug">💡 sugerido ${esc(be.pesoSug)} kg</span>` : '';
+      const detalles = [
+        `${p.series||'?'} × ${p.reps||'?'}`,
+        p.tempo ? `tempo ${p.tempo}` : '',
+        p.descanso ? `desc ${p.descanso}` : '',
+        p.rpe ? `RPE ${p.rpe}` : '',
+      ].filter(Boolean).join(' · ');
+      let extras = '';
+      if(be.anotacion) extras += `<div class="pr obs"><strong>📝 Observación del entrenador:</strong> ${esc(be.anotacion)}</div>`;
+      if(be.override) extras += `<div class="pr ovr"><strong>⚠ Ejercicio adaptado:</strong> ${esc(be.note||'sin motivo especificado')}</div>`;
       let mediaHtml = '';
       if(med){
         if(med.tipo==='video' || esYoutube(med.url)){
@@ -292,7 +352,7 @@ function render(){
         }
         if(med.desc) mediaHtml += `<div class="exmediadesc">${esc(med.desc)}</div>`;
       }
-      let body = mediaHtml + `<div class="pr">Prescripción: ${esc((p.series||'?')+' × '+(p.reps||'?'))}${p.descanso?(' · desc '+esc(p.descanso)):''}${pesoSugTxt}</div><div class="grid">`;
+      let body = mediaHtml + `<div class="pr">Prescripción: ${esc(detalles)}${pesoSugTxt}</div>` + extras + `<div class="grid">`;
       for(let s=1;s<=SEMANAS;s++){
         const lg = LOGMAP[key(d.id, be.exId, s)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');

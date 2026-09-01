@@ -1061,6 +1061,100 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
     const exportInformePDF=()=>{
       const bc=brand.colorPrimary;
       const row=(lbl,val)=>val?`<tr><td style="padding:7px 10px;font-size:11px;color:#666;width:170px;border-bottom:1px solid #eee">${lbl}</td><td style="padding:7px 10px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">${val}</td></tr>`:'';
+
+      // ─── HELPERS DE COMPOSICIÓN CORPORAL Y ROM ────────────────────────────
+      const nn=(v)=>{const x=parseFloat(String(v??'').replace(',','.'));return Number.isFinite(x)?x:null;};
+
+      // Clasificación de IMC (OMS)
+      const clasIMC=(v)=>v==null?'':v<18.5?'Bajo peso':v<25?'Normal':v<30?'Sobrepeso':'Obesidad';
+      // Índice cintura-cadera (OMS: riesgo elevado H>0.90 · M>0.85)
+      const icc=(()=>{const c=nn(sc.per_cintura),h=nn(sc.per_cadera);if(!c||!h)return null;
+        const v=c/h, m=(sc.genero||'').toLowerCase().startsWith('f')?0.85:0.90;
+        return{v:v.toFixed(2),alerta:v>m,ref:`ref ≤${m.toFixed(2)}`};})();
+      // Índice cintura-talla (umbral 0.50, mejor predictor de riesgo que el IMC)
+      const ict=(()=>{const c=nn(sc.per_cintura),t=nn(sc.talla);if(!c||!t)return null;
+        const v=c/t;return{v:v.toFixed(2),alerta:v>0.5,ref:'ref ≤0.50'};})();
+
+      // Circunferencias bilaterales — se compara lado contra lado
+      const PARES=[['per_brazo_d','per_brazo_i','Brazo'],['per_muslo_d','per_muslo_i','Muslo'],['per_pantorrilla_d','per_pantorrilla_i','Pantorrilla']];
+      const UNICAS=[['per_cintura_escapular','Cintura escapular'],['per_cintura','Cintura (ombligo)'],['per_cadera','Cadera (trocánter)']];
+      const filasPares=PARES.map(([kd,ki,lbl])=>{
+        const d=nn(sc[kd]),i=nn(sc[ki]);
+        if(d==null&&i==null)return'';
+        let dif='—',col='#666';
+        if(d!=null&&i!=null){
+          const may=Math.max(d,i), pct=may>0?Math.abs(d-i)/may*100:0;
+          // Umbral descriptivo, no diagnóstico: ≥5% se señala para revisar
+          col=pct>=5?'#DC2626':pct>=2?'#D97706':'#16A34A';
+          dif=`${(d-i>0?'+':'')}${(d-i).toFixed(1)} cm (${pct.toFixed(1)}%)`;
+        }
+        return`<tr><td style="padding:5px 9px;font-size:10px">${lbl}</td>
+          <td style="padding:5px 9px;font-size:10px;text-align:center;font-weight:700">${d!=null?d+' cm':'—'}</td>
+          <td style="padding:5px 9px;font-size:10px;text-align:center;font-weight:700">${i!=null?i+' cm':'—'}</td>
+          <td style="padding:5px 9px;font-size:10px;text-align:center;color:${col};font-weight:700">${dif}</td></tr>`;
+      }).join('');
+      const filasUnicas=UNICAS.map(([k,lbl])=>{const v=nn(sc[k]);if(v==null)return'';
+        return`<tr><td style="padding:5px 9px;font-size:10px">${lbl}</td><td colspan="2" style="padding:5px 9px;font-size:10px;text-align:center;font-weight:700">${v} cm</td><td style="padding:5px 9px;font-size:10px;text-align:center;color:#999">—</td></tr>`;}).join('');
+      const hayCirc=!!(filasPares||filasUnicas);
+      const circHtml=hayCirc?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Circunferencias corporales</h3>
+        <table style="margin-bottom:6px"><thead><tr style="background:#1a1a1a;color:#fff">
+          <th style="padding:5px 9px;font-size:9px;text-align:left">Segmento</th>
+          <th style="padding:5px 9px;font-size:9px">Derecho</th>
+          <th style="padding:5px 9px;font-size:9px">Izquierdo</th>
+          <th style="padding:5px 9px;font-size:9px">Diferencia D–I</th>
+        </tr></thead><tbody>${filasPares}${filasUnicas}</tbody></table>
+        <div style="font-size:9px;color:#999;margin-bottom:14px;font-style:italic">Diferencia entre lados: verde &lt;2% · ámbar 2–5% · rojo ≥5%. Es un dato descriptivo para seguimiento, no un diagnóstico — la asimetría de perímetro no implica por sí sola asimetría de fuerza.</div>`:'';
+
+      // ─── RANGOS DE MOVIMIENTO ARTICULAR ───────────────────────────────────
+      const MOVPDF=[
+        ['mov_hombro_flex','Flexión de hombro',180],
+        ['mov_hombro_re','Rotación externa de hombro',90],
+        ['mov_hombro_ri','Rotación interna de hombro',70],
+        ['mov_tor_rot','Rotación torácica',45],
+        ['mov_cad_flex','Flexión de cadera',120],
+        ['mov_cad_rot','Rotación interna de cadera',45],
+        ['mov_tobillo','Dorsiflexión de tobillo',20],
+      ];
+      const GM={N:'Óptimo',L:'Limitado',ML:'Muy limitado',D:'Dolor'};
+      const GCOL={N:'#16A34A',L:'#D97706',ML:'#DC2626',D:'#DC2626'};
+      // Los grados se cargan como texto libre: "Der 180 / Izq 180", "der 90/izq 90", "Der 13 / Izq18"
+      const parseGrados=(t)=>{
+        if(!t)return{der:null,izq:null};
+        const d=/de?r\.?\s*:?\s*(\d+(?:[.,]\d+)?)/i.exec(t);
+        const i=/izq\.?\s*:?\s*(\d+(?:[.,]\d+)?)/i.exec(t);
+        if(d||i)return{der:d?nn(d[1]):null,izq:i?nn(i[1]):null};
+        const solo=/(\d+(?:[.,]\d+)?)/.exec(t);
+        return{der:solo?nn(solo[1]):null,izq:null};
+      };
+      const celdaGrado=(v,ref)=>{
+        if(v==null)return`<td style="padding:5px 9px;font-size:10px;text-align:center;color:#bbb">—</td>`;
+        const pct=Math.round(v/ref*100);
+        const col=pct>=95?'#16A34A':pct>=80?'#D97706':'#DC2626';
+        return`<td style="padding:5px 9px;font-size:10px;text-align:center;font-weight:700;color:${col}">${v}°<span style="font-weight:400;font-size:8px;color:#999"> · ${pct}%</span></td>`;
+      };
+      const filasROM=MOVPDF.map(([k,lbl,ref])=>{
+        const qd=sc[k+'_DBil'],qi=sc[k+'_Izq'],g=sc[k+'_grados'];
+        if(!qd&&!qi&&!g)return'';
+        const{der,izq}=parseGrados(g);
+        const q=(v)=>v?`<span style="color:${GCOL[v]||'#666'};font-weight:700">${GM[v]||v}</span>`:'<span style="color:#bbb">—</span>';
+        return`<tr>
+          <td style="padding:5px 9px;font-size:10px;font-weight:700">${lbl}</td>
+          <td style="padding:5px 9px;font-size:9px;text-align:center;color:#888">${ref}°</td>
+          ${celdaGrado(der,ref)}${celdaGrado(izq,ref)}
+          <td style="padding:5px 9px;font-size:9px;text-align:center">${q(qd)}</td>
+          <td style="padding:5px 9px;font-size:9px;text-align:center">${q(qi)}</td>
+        </tr>`;
+      }).join('');
+      const romHtml=filasROM?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Rangos de movimiento articular</h3>
+        <table style="margin-bottom:6px"><thead><tr style="background:#1a1a1a;color:#fff">
+          <th style="padding:5px 9px;font-size:9px;text-align:left">Movimiento</th>
+          <th style="padding:5px 9px;font-size:9px">Referencia</th>
+          <th style="padding:5px 9px;font-size:9px">Der.</th>
+          <th style="padding:5px 9px;font-size:9px">Izq.</th>
+          <th style="padding:5px 9px;font-size:9px">Valoración D/Bil</th>
+          <th style="padding:5px 9px;font-size:9px">Valoración Izq</th>
+        </tr></thead><tbody>${filasROM}</tbody></table>
+        <div style="font-size:9px;color:#999;margin-bottom:14px;font-style:italic">Porcentaje sobre el rango de referencia: verde ≥95% · ámbar 80–94% · rojo &lt;80%. Valoración cualitativa: Óptimo / Limitado / Muy limitado / Dolor.${sc.movilidad_hallazgos?` <br><strong style="color:#555">Observaciones:</strong> ${String(sc.movilidad_hallazgos).replace(/\n/g,' · ')}`:''}</div>`:'';
       const testsRows=clientTests.map(t=>`<tr style="border-bottom:1px solid #eee"><td style="padding:4px 8px;font-size:10px">${t.test_nombre||t.test_id}</td><td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700">${t.rm1_real||t.rm1_calculado||'—'} kg</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.nivel_resultado||'—'}</td><td style="padding:4px 8px;font-size:10px;text-align:center">${t.fecha||''}</td></tr>`).join('');
       const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Informe — ${cliente.nombre} ${cliente.apellido}</title><style>${getPrintCSS(bc)}table{width:100%;border-collapse:collapse}table tr:nth-child(even){background:#FAFAFA}h3{page-break-after:avoid}</style></head><body>
         <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${bc};padding-bottom:12px;margin-bottom:16px">
@@ -1073,8 +1167,10 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
         </div>
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Datos generales</h3>
         <table style="margin-bottom:14px">${row('Celular',cliente.celular)}${row('Fecha de ingreso',cliente.fechaIngreso)}${row('Fecha de evaluación',sc.fechaEvaluacion||cliente.fechaEval)}${row('Evaluador',sc.evaluador)}${row('Ocupación',sc.ocupacion)}${row('Nivel de actividad',sc.nivelActividad)}${row('Experiencia de entrenamiento',sc.expEntrenamiento)}${cliente.referidoPor?row('Referido por',cliente.referidoPor+(cliente.referidoTipo?' ('+cliente.referidoTipo+')':'')):''}</table>
-        <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Antropometría</h3>
-        <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc)}${row('% Grasa',sc.pctGrasa?sc.pctGrasa+'%':'')}${row('Perímetro cintura',sc.per_cintura?sc.per_cintura+' cm':'')}${row('Perímetro cadera',sc.per_cadera?sc.per_cadera+' cm':'')}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
+        <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Composición corporal</h3>
+        <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc?`${sc.imc} kg/m² <span style="font-weight:400;color:#888">· ${clasIMC(nn(sc.imc))}</span>`:'')}${row('% Grasa corporal',sc.pctGrasa?sc.pctGrasa+'%':'')}${icc?row('Índice cintura-cadera',`<span style="color:${icc.alerta?'#DC2626':'#16A34A'}">${icc.v}</span> <span style="font-weight:400;color:#888">· ${icc.ref}</span>`):''}${ict?row('Índice cintura-talla',`<span style="color:${ict.alerta?'#DC2626':'#16A34A'}">${ict.v}</span> <span style="font-weight:400;color:#888">· ${ict.ref}</span>`):''}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
+        ${circHtml}
+        ${romHtml}
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Salud y antecedentes</h3>
         <table style="margin-bottom:14px">${row('Condición médica',sc.condicionMedica==='si'?sc.condicionDetalle||'Sí':'No refiere')}${row('Medicación',sc.medicacion==='si'?sc.medicacionDetalle||'Sí':'No')}${row('Lesiones activas',sc.lesionesActivas==='si'?sc.lesionesDetalle||'Sí':'No')}${row('Cirugías',sc.cirugias==='si'?sc.cirugiasDetalle||'Sí':'No')}${row('Dolor actual',sc.dolorActual==='si'?sc.dolorDetalle||'Sí':'No')}${cliente.restricciones?row('Restricciones',cliente.restricciones):''}</table>
         ${(sc.postura_hallazgos||sc.movilidad_hallazgos||sc.capacidades_hallazgos)?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Hallazgos funcionales</h3><table style="margin-bottom:14px">${row('Postura',sc.postura_hallazgos)}${row('Movilidad',sc.movilidad_hallazgos)}${row('Capacidades',sc.capacidades_hallazgos)}</table>`:''}

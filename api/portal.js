@@ -32,7 +32,7 @@ async function sb(path, opts = {}) {
 async function clienteDeToken(token) {
   if (!token || typeof token !== "string" || token.length < 8) return null;
   const enc = encodeURIComponent(token);
-  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido,nivel,objetivo,periodizacion,periodizacion_inicio,periodizacion_fin,criterios_avance_estado,screening`);
+  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido,nivel,objetivo,periodizacion,periodizacion_inicio,periodizacion_fin,criterios_avance_estado,screening,fisio_paciente_id`);
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
@@ -94,11 +94,33 @@ export default async function handler(req, res) {
         if (Array.isArray(brandRows) && brandRows.length) brand = brandRows[0];
       } catch {}
 
+      // Si el cliente está vinculado a un paciente de FisioActiva, resumen
+      // clínico (objetivo + evolución EVA/ROM inicial vs. más reciente) para
+      // mostrar en el portal — el mismo "antes y después" del checkpoint,
+      // en versión compacta.
+      let clinico = null;
+      if (cli.fisio_paciente_id) {
+        try {
+          const evsRows = await sb(`fisio_evaluaciones?paciente_id=eq.${cli.fisio_paciente_id}&select=tipo,fecha,fase,objetivo,eva_reposo,rom_pct&order=fecha.asc`);
+          if (Array.isArray(evsRows) && evsRows.length) {
+            const inicial = evsRows.find(e => e.tipo === "inicial") || evsRows[0];
+            const final = evsRows[evsRows.length - 1];
+            clinico = {
+              objetivo: final.objetivo || inicial.objetivo || "",
+              fase: final.fase || null,
+              evaInicial: inicial.eva_reposo, evaActual: final.eva_reposo,
+              romInicial: inicial.rom_pct, romActual: final.rom_pct,
+              tieneComparativa: evsRows.length >= 2,
+            };
+          }
+        } catch {}
+      }
+
       return res.status(200).json({
         cliente: { nombre: cli.nombre, apellido: cli.apellido, nivel: cli.nivel, objetivo: cli.objetivo,
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
-        criterios, brand, plan, logs: logs || [], nombres, media,
+        criterios, brand, plan, logs: logs || [], nombres, media, clinico,
       });
     }
 
