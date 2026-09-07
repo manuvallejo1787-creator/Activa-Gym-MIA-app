@@ -1003,6 +1003,35 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
       return partes.join('<br><br>');
     };
 
+    // Texto plano listo para pegar en el documento de interpretación.
+    // Respeta la estructura con la que se redacta el informe al cliente, para
+    // que sea un borrador a editar y no un texto a retipear.
+    const composeTextoDoc=(ai)=>{
+      if(!ai)return '';
+      const L=[];
+      const H=(t)=>{L.push('');L.push(t);L.push('')};
+      const B=(arr)=>arr.forEach(x=>L.push('• '+x));
+      L.push('Interpretación Evaluación');
+      L.push(`${cliente.nombre} ${cliente.apellido}`);
+      L.push(new Date().toLocaleDateString('es-UY',{month:'long',year:'numeric'}).replace(/^./,m=>m.toUpperCase()));
+
+      H('Resumen General');
+      if(ai.interpretacion)L.push('• '+ai.interpretacion);
+      if(ai.fase_sugerida)L.push(`• Fase sugerida: ${String(ai.fase_sugerida).toUpperCase()}${ai.fase_justificacion?' — '+ai.fase_justificacion:''}`);
+
+      if(ai.analisis_objetivos){H('Objetivos vs. evaluación');L.push('• '+ai.analisis_objetivos)}
+      if(ai.analisis_corporal){H('Mediciones corporales');L.push('• '+ai.analisis_corporal)}
+      if(ai.analisis_movilidad){H('Ángulos y movilidad');L.push('• '+ai.analisis_movilidad)}
+      if(ai.deficiencias_funcionales?.length){H('Déficits funcionales');B(ai.deficiencias_funcionales)}
+      if(ai.deficiencias_fuerza?.length){H('Déficits de fuerza');B(ai.deficiencias_fuerza)}
+      if(ai.prioridades?.length){H('Prioridades (en orden)');ai.prioridades.forEach((x,i)=>L.push(`${i+1}. ${x}`))}
+      if(ai.objetivos_sugeridos?.length){H('Objetivos sugeridos');ai.objetivos_sugeridos.forEach(x=>L.push('→ '+x))}
+      if(ai.metodologia_sugerida){H('Metodología');L.push('• '+ai.metodologia_sugerida+(ai.metodologia_justificacion?' — '+ai.metodologia_justificacion:''))}
+      if(ai.precauciones){H('Precauciones');L.push('• '+ai.precauciones)}
+      if(ai.falta_medir?.length){H('Falta medir');B(ai.falta_medir)}
+      return L.join('\n');
+    };
+
     const aplicarSugerencia=(ai)=>{
       const upd={...cliente};
       // Si la IA sugiere AVANZAR de fase (no bajar ni quedarse igual), no lo
@@ -1246,7 +1275,10 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
           return `<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Criterios de avance de fase</h3>
           <table style="margin-bottom:6px"><tbody>${filas}</tbody></table>
           <div style="font-size:10px;color:#555;margin-bottom:14px"><strong>Veredicto calculado:</strong> ${_av.resumen} <span style="color:#999;font-style:italic">· Dolor: ${_mt.eva.medido?`EVA ${_mt.eva.eva}/10 (${_mt.eva.origen})`:(_mt.eva.motivo||'sin medir')}</span></div>`;})()}
-        ${(cliente._informeIA||iaInforme)?`<h3 style="font-size:13px;color:#6D28D9;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Interpretación y plan sugerido (IA)</h3><div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:5px;padding:10px 14px;margin-bottom:10px;font-size:11px;line-height:1.6">${cliente._informeIA||composeInformeIA(iaInforme)}</div>`:''}
+        ${'' /* La interpretación de la IA NO se transcribe al PDF a propósito.
+             El informe impreso queda con los datos objetivos; la redacción se
+             hace aparte, en un documento propio y con voz propia. Para eso está
+             el botón "Copiar para el documento" en el panel de análisis. */}
         <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · ${brand.gymSub} · Método Activa Integra · Informe generado ${new Date().toLocaleDateString('es-ES')}</div>
         <script>window.onload=()=>window.print()<\/script></body></html>`;
       const w=window.open('','_blank');w.document.write(html);w.document.close();
@@ -1381,8 +1413,30 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
             {clientTests.length>0&&<div style={{fontSize:10,color:G4,marginTop:4}}>💪 {clientTests.length} test{clientTests.length>1?'s':''} de fuerza registrado{clientTests.length>1?'s':''}</div>}
             {cliente.referidoPor&&<div style={{fontSize:10,color:'#92400E',marginTop:3}}>🎁 Referido por: {cliente.referidoPor}</div>}
           </div>
-          {/* Análisis IA */}
+          {/* Análisis IA — su texto NO va al PDF. Se copia acá para redactar
+              el documento de interpretación con voz propia. */}
           <AIAnalisisEvaluacion tipo="gym" datos={datosIA} reglas={iaReglas} onApply={aplicarSugerencia} onResult={setIaInforme}/>
+          {iaInforme&&(
+            <div style={{marginTop:10,border:`1px solid ${G2}`,borderRadius:9,padding:'11px 13px',background:'#FAFAFA'}}>
+              <div style={{fontSize:11,color:G4,lineHeight:1.5,marginBottom:9}}>
+                Este análisis <strong>no se imprime en el PDF</strong>. Copialo, pegalo en tu documento
+                de interpretación y editalo con tus palabras. Viene con la estructura ya armada.
+              </div>
+              <button onClick={()=>{
+                  const txt=composeTextoDoc(iaInforme);
+                  navigator.clipboard?.writeText(txt).then(
+                    ()=>alert('Copiado. Pegalo en el documento y editalo.'),
+                    ()=>{
+                      const w=window.open('','_blank');
+                      w.document.write('<pre style="white-space:pre-wrap;font:13px/1.6 Arial;padding:24px">'+txt.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</pre>');
+                      w.document.close();
+                    });
+                }}
+                style={{...s.btnR,background:'#6D28D9',fontSize:12,width:'100%'}}>
+                📋 Copiar para el documento
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
