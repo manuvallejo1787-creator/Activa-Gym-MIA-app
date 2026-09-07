@@ -932,13 +932,23 @@ export function useIncidencias(){
     } else setIncidencias(p=>[inc,...p])
     return inc
   },[fetch])
-  const marcarResuelta=useCallback(async(inc)=>{
-    const upd={...inc,resuelto:true}
+  // Conducta del profesional sobre una incidencia.
+  // estado: 'abierta' | 'seguimiento' | 'derivada' | 'resuelta'
+  // El trigger de la base mantiene `resuelto` y `derivado_fisio` sincronizados
+  // y pone fecha de revisión por defecto a 7 días si es seguimiento.
+  const setEstadoIncidencia=useCallback(async(inc,estado,extra={})=>{
+    const evento={fecha:new Date().toISOString(),estado,nota:extra.notas_seguimiento||''}
+    const historial=[...(Array.isArray(inc.historial)?inc.historial:[]),evento]
+    const patch={estado,historial,...extra}
     if(isSupabaseReady){
-      const{error}=await supabase.from('gym_incidencias').update({resuelto:true}).eq('id',inc.id)
+      const{error}=await supabase.from('gym_incidencias').update(patch).eq('id',inc.id)
       if(error)throw error
       await fetch()
-    } else setIncidencias(p=>p.map(x=>x.id===inc.id?upd:x))
+    } else setIncidencias(p=>p.map(x=>x.id===inc.id?{...x,...patch,resuelto:estado==='resuelta'}:x))
   },[fetch])
-  return{incidencias,loading,saveIncidencia,marcarResuelta,refetch:fetch}
+
+  // Compatibilidad con el llamado anterior
+  const marcarResuelta=useCallback((inc)=>setEstadoIncidencia(inc,'resuelta'),[setEstadoIncidencia])
+
+  return{incidencias,loading,saveIncidencia,marcarResuelta,setEstadoIncidencia,refetch:fetch}
 }

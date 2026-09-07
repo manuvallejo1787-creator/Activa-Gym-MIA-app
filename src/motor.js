@@ -177,6 +177,70 @@ export function calcEva({ screening = {}, evaluacion = null, incidencias = [] } 
   return { medido: false, eva: null, origen: null };
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3-bis) ROM DEL GIMNASIO
+//
+// El screening del gym carga ángulos articulares en `mov_*_grados` como texto
+// libre ("Der 180 / Izq 180"). Hasta ahora el motor solo leía `rom_pct` de las
+// evaluaciones clínicas de FisioActiva — y como ningún cliente del gym tiene
+// paciente de fisio vinculado, ROM salía "sin medir" incluso para quien tenía
+// los siete movimientos cargados. El informe PDF sí los mostraba: la pantalla
+// y el motor decían cosas distintas sobre el mismo cliente.
+//
+// Referencias normativas alineadas con las del informe.
+// ═══════════════════════════════════════════════════════════════════════════
+export const ROM_GYM = [
+  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180 },
+  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90 },
+  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70 },
+  { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45 },
+  { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120 },
+  { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45 },
+  { k: 'mov_tobillo',     label: 'Dorsiflexión de tobillo',      ref: 20 },
+];
+
+// Los grados vienen como texto libre y sin formato uniforme.
+// Verificado contra los 13 formatos presentes en la base.
+export function parseGrados(t) {
+  if (!t) return { der: null, izq: null };
+  const d = /de?r\.?\s*:?\s*(\d+(?:[.,]\d+)?)/i.exec(t);
+  const i = /izq\.?\s*:?\s*(\d+(?:[.,]\d+)?)/i.exec(t);
+  if (d || i) return { der: d ? num(d[1]) : null, izq: i ? num(i[1]) : null };
+  const solo = /(\d+(?:[.,]\d+)?)/.exec(t);
+  return { der: solo ? num(solo[1]) : null, izq: null };
+}
+
+export function calcROMGym(screening = {}) {
+  const detalle = [], limitados = [], asimetrias = [];
+  let suma = 0, n = 0;
+  ROM_GYM.forEach(m => {
+    const { der, izq } = parseGrados(screening[m.k + '_grados']);
+    const lados = [der, izq].filter(v => v != null);
+    if (!lados.length) return;
+    lados.forEach(v => { suma += Math.min(v / m.ref * 100, 100); n++; });
+    const pct = Math.round(Math.min(Math.min(...lados) / m.ref * 100, 100));
+    detalle.push({ mov: m.label, der, izq, ref: m.ref, pct });
+    if (pct < 80) limitados.push(`${m.label}: ${pct}% del rango normal`);
+    if (der != null && izq != null) {
+      const may = Math.max(der, izq);
+      const difPct = may > 0 ? Math.abs(der - izq) / may * 100 : 0;
+      if (difPct >= 15) asimetrias.push({
+        mov: m.label, der, izq,
+        difPct: Math.round(difPct * 10) / 10,
+        ladoCorto: der < izq ? 'derecho' : 'izquierdo',
+      });
+    }
+  });
+  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [] };
+  return {
+    medido: true,
+    pct: Math.round(suma / n),
+    detalle: detalle.sort((a, b) => a.pct - b.pct),
+    limitados, asimetrias, n,
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 4) BANDERAS CLÍNICAS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -225,11 +289,15 @@ export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], 
   const banderas = calcBanderas(sc, incCliente);
   const fuerza   = calcAsimetriaFuerza(tests);
 
-  // ROM %: de la evaluación clínica (ya lo deriva el trigger de la base)
-  const romPct = evaluacion?.rom_pct ?? null;
+  // ROM %: prioriza la evaluación clínica (goniometría formal) y cae al ROM
+  // del screening del gym si no hay paciente de fisio vinculado.
+  const romGym = calcROMGym(sc);
+  const romPct = evaluacion?.rom_pct ?? (romGym.medido ? romGym.pct : null);
+  const romOrigen = evaluacion?.rom_pct != null ? 'evaluación clínica'
+                  : romGym.medido ? 'screening del gimnasio' : null;
 
   return {
-    calidad, ybalance, eva: evaR, banderas, fuerza, romPct,
+    calidad, ybalance, eva: evaR, banderas, fuerza, romPct, romGym, romOrigen,
     // Forma que espera checkCriteriosAvance()
     paraCheck: {
       eva: evaR.medido ? evaR.eva : null,
@@ -276,7 +344,8 @@ export function evaluarAvance(fase, metricas, checkFn) {
     resumen = 'Bandera clínica activa — no evaluar avance hasta resolverla.';
   } else if (noCumplen.length > 0) {
     veredicto = 'no_avanza';
-    resumen = `Falta cumplir ${noCumplen.length} criterio${noCumplen.length > 1 ? 's' : ''}.`;
+    resumen = `Falta cumplir ${noCumplen.length} criterio${noCumplen.length > 1 ? 's' : ''}: ${noCumplen.map(c => c.label).join(', ')}.`
+            + (sinMedir.length ? ` Además falta medir: ${sinMedir.map(c => c.label).join(', ')}.` : '');
   } else if (sinMedir.length > 0) {
     veredicto = 'faltan_datos';
     resumen = `Cumple todo lo medido, pero falta medir ${sinMedir.length}: ${sinMedir.map(s => s.label).join(', ')}.`;
@@ -317,7 +386,14 @@ export function resumenDeterminista(cliente, metricas, avance) {
     ? `Y-BALANCE: compuesto D ${y.compD} / I ${y.compI} · alcance anterior dif. ${y.difAntCm} cm — ${y.simetrico ? 'simétrico' : `ASIMÉTRICO, lado corto ${y.ladoCorto}`}`
     : `Y-BALANCE: sin medir`);
 
-  L.push(metricas.romPct != null ? `ROM: ${metricas.romPct}% del rango normativo` : `ROM: sin medir`);
+  if (metricas.romPct != null) {
+    L.push(`ROM: ${metricas.romPct}% del rango normativo (fuente: ${metricas.romOrigen})`);
+    const rg = metricas.romGym;
+    if (rg?.medido) {
+      if (rg.limitados.length) L.push(`  · limitados: ${rg.limitados.join('; ')}`);
+      if (rg.asimetrias.length) L.push(`  · asimetrías ≥15%: ${rg.asimetrias.map(a => `${a.mov} D ${a.der}° / I ${a.izq}° (${a.difPct}%, corto ${a.ladoCorto})`).join('; ')}`);
+    }
+  } else L.push(`ROM: sin medir`);
   L.push(metricas.fuerza.medido ? `ASIMETRÍA DE FUERZA: ${metricas.fuerza.pct}%` : `ASIMETRÍA DE FUERZA: ${metricas.fuerza.motivo}`);
 
   if (metricas.banderas.hay) L.push(`BANDERAS: ${metricas.banderas.activas.map(a => `[${a.nivel}] ${a.texto}`).join(' · ')}`);
@@ -390,9 +466,22 @@ export function checkCriteriosGym(fase, m) {
   if (fase === 'potencia') { pushEva(2); pushCal(85); pushYb(4); pushSim(); }
   if (fase === 'rinde')    { pushEva(1); pushCal(90); pushYb(4); pushSim(); }
 
+  // ROM: opcional. Suma si existe, no bloquea si no. La etiqueta declara de
+  // dónde salió, porque goniometría clínica y screening de sala no tienen la
+  // misma precisión y el que lee el informe tiene que poder distinguirlas.
   if (m.romPct != null) {
     const min = fase === 'restaura' ? 70 : fase === 'activa' ? 85 : 90;
-    r.push({ label: `ROM > ${min}% (clínico)`, pass: m.romPct > min, val: `${m.romPct}%` });
+    const fuente = m.romOrigen === 'evaluación clínica' ? 'clínico' : 'screening';
+    r.push({ label: `ROM > ${min}% (${fuente})`, pass: m.romPct > min, val: `${m.romPct}%` });
+  }
+  // Asimetría articular marcada: no bloquea el avance por sí sola, pero se
+  // reporta para que quede a la vista en el informe.
+  if (m.romGym?.medido && m.romGym.asimetrias.length) {
+    r.push({
+      label: 'Sin asimetría articular ≥15%',
+      pass: false,
+      val: m.romGym.asimetrias.map(a => `${a.mov} (${a.difPct}%)`).join(', '),
+    });
   }
   return r;
 }

@@ -9,8 +9,9 @@ import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
+import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
-import { PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
+import { POTENCIA_NORMAS, PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
 // ─── PALETA ────────────────────────────────────────────────────────────────
 const R='#CC0000', BK='#1a1a1a', WH='#FFFFFF';
@@ -998,6 +999,7 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
       if(ai.fase_sugerida)partes.push('<strong>Fase sugerida:</strong> '+String(ai.fase_sugerida).toUpperCase()+(ai.fase_justificacion?' — '+ai.fase_justificacion:''));
       if(ai.metodologia_sugerida)partes.push('<strong>Metodología:</strong> '+ai.metodologia_sugerida+(ai.metodologia_justificacion?' — '+ai.metodologia_justificacion:''));
       if(ai.precauciones)partes.push('<strong>Precauciones:</strong> '+ai.precauciones);
+      if(ai.falta_medir?.length)partes.push('<strong>Falta medir:</strong> '+ai.falta_medir.join('; '));
       return partes.join('<br><br>');
     };
 
@@ -1145,6 +1147,66 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
           <td style="padding:5px 9px;font-size:9px;text-align:center">${q(qi)}</td>
         </tr>`;
       }).join('');
+      // ─── POTENCIA Y SALTO ─────────────────────────────────────────────────
+      // Se muestra SIEMPRE, tenga o no datos. Un test sin hacer es información:
+      // dice qué falta medir. Ocultar la sección hace que el vacío sea invisible
+      // y que nadie sepa que ese dato debería existir.
+      const sexoP=(sc.genero||'').toLowerCase().startsWith('f')?'femenino':'masculino';
+      const barra=(val,u,unidad)=>{
+        // Escala hasta 1.25× el umbral de élite, para que "Élite" no toque el borde
+        const max=u.bueno*1.25;
+        const pos=(x)=>Math.max(0,Math.min(100,x/max*100));
+        const cls=val==null?null:(val>=u.bueno?{l:'Élite',c:'#7C3AED'}:val>=u.promedio?{l:'Bueno',c:'#16A34A'}:val>=u.debil?{l:'Promedio',c:'#D97706'}:{l:'Bajo',c:'#CC0000'});
+        const marcas=[[u.debil,'#CC0000'],[u.promedio,'#D97706'],[u.bueno,'#7C3AED']]
+          .map(([v,c])=>`<div style="position:absolute;left:${pos(v)}%;top:0;bottom:0;width:1px;background:${c};opacity:.45"></div>`).join('');
+        const punto=val==null?'':`<div style="position:absolute;left:${pos(val)}%;top:-3px;width:9px;height:15px;margin-left:-4px;background:${cls.c};border-radius:2px;border:1.5px solid #fff"></div>`;
+        return{
+          html:`<div style="position:relative;height:9px;background:#EFEFEF;border-radius:5px;margin:5px 0 2px">${marcas}${punto}</div>
+                <div style="font-size:7px;color:#bbb;display:flex;justify-content:space-between"><span>0</span><span>${u.debil}</span><span>${u.promedio}</span><span>${u.bueno}${unidad}</span></div>`,
+          cls,
+        };
+      };
+      const filaPot=(label,val,u,unidad,detalle)=>{
+        const b=val!=null?barra(val,u,unidad):null;
+        return`<tr>
+          <td style="padding:7px 9px;font-size:10px;font-weight:700;width:150px;vertical-align:top">${label}
+            ${detalle?`<div style="font-weight:400;color:#999;font-size:8px;margin-top:1px">${detalle}</div>`:''}</td>
+          <td style="padding:7px 9px;font-size:11px;font-weight:800;text-align:center;width:66px;vertical-align:top;color:${b?b.cls.c:'#ccc'}">${val!=null?val+unidad:'—'}</td>
+          <td style="padding:7px 9px;font-size:9px;text-align:center;width:78px;vertical-align:top;color:${b?b.cls.c:'#bbb'};font-weight:700">${b?b.cls.l:'sin medir'}</td>
+          <td style="padding:7px 9px;vertical-align:top">${b?b.html:'<div style="height:9px;background:#F6F6F6;border-radius:5px;margin:5px 0 2px"></div><div style="font-size:7px;color:#ccc;text-align:center">test no realizado</div>'}</td>
+        </tr>`;
+      };
+      const vCMJ=nn(sc.pot_cmj), vSJ=nn(sc.pot_sj), vBroad=nn(sc.pot_broad);
+      const vRSI=calcularRSI(nn(sc.pot_drop_altura),nn(sc.pot_drop_contacto));
+      const vLSI=calcularLSI(nn(sc.pot_hop_dom),nn(sc.pot_hop_nodom));
+      const ratio=(vCMJ&&vSJ&&vSJ>0)?(vCMJ/vSJ):null;
+      const nLSI=vLSI!=null?nivelLSI(vLSI):null;
+      const NP=POTENCIA_NORMAS;
+      const potHtml=`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Potencia y capacidad de salto</h3>
+        <table style="margin-bottom:6px"><thead><tr style="background:#1a1a1a;color:#fff">
+          <th style="padding:5px 9px;font-size:9px;text-align:left">Test</th>
+          <th style="padding:5px 9px;font-size:9px">Valor</th>
+          <th style="padding:5px 9px;font-size:9px">Nivel</th>
+          <th style="padding:5px 9px;font-size:9px;text-align:left">Bajo · Promedio · Bueno · Élite</th>
+        </tr></thead><tbody>
+        ${filaPot('CMJ — salto con contramovimiento',vCMJ,NP.cmj[sexoP],' cm','Potencia reactiva del tren inferior')}
+        ${filaPot('SJ — salto desde sentadilla',vSJ,NP.sj[sexoP],' cm','Fuerza explosiva sin ciclo elástico')}
+        ${filaPot('Salto horizontal',vBroad,NP.broad[sexoP],' cm','Potencia horizontal')}
+        ${filaPot('RSI — índice de fuerza reactiva',vRSI,NP.rsi.general,'','Altura ÷ tiempo de contacto (drop jump)')}
+        </tbody></table>
+        <table style="margin-bottom:6px"><tbody>
+          <tr><td style="padding:6px 9px;font-size:10px;font-weight:700;width:150px">Ratio CMJ/SJ</td>
+              <td style="padding:6px 9px;font-size:11px;font-weight:800;text-align:center;width:66px;color:${ratio==null?'#ccc':(ratio<1.05?'#D97706':'#16A34A')}">${ratio!=null?ratio.toFixed(2):'—'}</td>
+              <td style="padding:6px 9px;font-size:9px;color:#777">${ratio==null?'Requiere CMJ y SJ':(ratio<1.05?'Bajo aprovechamiento del ciclo elástico — priorizar trabajo pliométrico':'Uso adecuado del ciclo estiramiento-acortamiento')} <span style="color:#bbb">· ref ≥1.05</span></td></tr>
+          <tr><td style="padding:6px 9px;font-size:10px;font-weight:700">Hop test — LSI</td>
+              <td style="padding:6px 9px;font-size:11px;font-weight:800;text-align:center;color:${nLSI?nLSI.color:'#ccc'}">${vLSI!=null?vLSI+'%':'—'}</td>
+              <td style="padding:6px 9px;font-size:9px;color:${nLSI?nLSI.color:'#bbb'};font-weight:700">${nLSI?nLSI.label:'sin medir'}${vLSI!=null?` <span style="color:#bbb;font-weight:400">· dominante ${sc.pot_hop_dom||'—'} cm / no dominante ${sc.pot_hop_nodom||'—'} cm · ref ≥90%</span>`:' <span style="color:#bbb;font-weight:400">· simetría entre piernas, ref ≥90%</span>'}</td></tr>
+          <tr><td style="padding:6px 9px;font-size:10px;font-weight:700">Lanzamiento de balón medicinal</td>
+              <td style="padding:6px 9px;font-size:11px;font-weight:800;text-align:center;color:${sc.pot_mb_dist?'#333':'#ccc'}">${sc.pot_mb_dist?sc.pot_mb_dist+' cm':'—'}</td>
+              <td style="padding:6px 9px;font-size:9px;color:#777">${sc.pot_mb_dist?`Balón de ${sc.pot_mb_peso||'?'} kg · sin tabla normativa, sirve para comparar contra la propia marca`:'Sin tabla normativa — es un test de seguimiento contra la propia marca'}</td></tr>
+        </tbody></table>
+        <div style="font-size:9px;color:#999;margin-bottom:14px;font-style:italic">Baremos ajustados por sexo (${sexoP}). Las marcas verticales de la barra son los umbrales Bajo / Promedio / Bueno / Élite; el cuadrado indica dónde cae el resultado. Los tests sin realizar se muestran igual: señalan qué falta medir para completar el perfil.</div>`;
+
       const romHtml=filasROM?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Rangos de movimiento articular</h3>
         <table style="margin-bottom:6px"><thead><tr style="background:#1a1a1a;color:#fff">
           <th style="padding:5px 9px;font-size:9px;text-align:left">Movimiento</th>
@@ -1171,10 +1233,19 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
         <table style="margin-bottom:14px">${row('Peso',sc.peso?sc.peso+' kg':'')}${row('Talla',sc.talla?sc.talla+' cm':'')}${row('IMC',sc.imc?`${sc.imc} kg/m² <span style="font-weight:400;color:#888">· ${clasIMC(nn(sc.imc))}</span>`:'')}${row('% Grasa corporal',sc.pctGrasa?sc.pctGrasa+'%':'')}${icc?row('Índice cintura-cadera',`<span style="color:${icc.alerta?'#DC2626':'#16A34A'}">${icc.v}</span> <span style="font-weight:400;color:#888">· ${icc.ref}</span>`):''}${ict?row('Índice cintura-talla',`<span style="color:${ict.alerta?'#DC2626':'#16A34A'}">${ict.v}</span> <span style="font-weight:400;color:#888">· ${ict.ref}</span>`):''}${row('FC reposo',sc.fcReposo?sc.fcReposo+' lpm':'')}${row('Tensión arterial',sc.ta)}</table>
         ${circHtml}
         ${romHtml}
+        ${potHtml}
         <h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Salud y antecedentes</h3>
         <table style="margin-bottom:14px">${row('Condición médica',sc.condicionMedica==='si'?sc.condicionDetalle||'Sí':'No refiere')}${row('Medicación',sc.medicacion==='si'?sc.medicacionDetalle||'Sí':'No')}${row('Lesiones activas',sc.lesionesActivas==='si'?sc.lesionesDetalle||'Sí':'No')}${row('Cirugías',sc.cirugias==='si'?sc.cirugiasDetalle||'Sí':'No')}${row('Dolor actual',sc.dolorActual==='si'?sc.dolorDetalle||'Sí':'No')}${cliente.restricciones?row('Restricciones',cliente.restricciones):''}</table>
         ${(sc.postura_hallazgos||sc.movilidad_hallazgos||sc.capacidades_hallazgos)?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Hallazgos funcionales</h3><table style="margin-bottom:14px">${row('Postura',sc.postura_hallazgos)}${row('Movilidad',sc.movilidad_hallazgos)}${row('Capacidades',sc.capacidades_hallazgos)}</table>`:''}
         ${testsRows?`<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Tests de fuerza</h3><table style="margin-bottom:14px"><thead><tr style="background:#1a1a1a;color:#fff"><th style="padding:5px 8px;font-size:9px;text-align:left">Ejercicio</th><th style="padding:5px 8px;font-size:9px">1RM</th><th style="padding:5px 8px;font-size:9px">Nivel</th><th style="padding:5px 8px;font-size:9px">Fecha</th></tr></thead><tbody>${testsRows}</tbody></table>`:''}
+        ${(()=>{const c=_av.criterios;if(!c.length)return'';
+          const COLE={cumple:'#16A34A',no_cumple:'#DC2626',sin_medir:'#6B7280',clinico:'#D97706'};
+          const ICO={cumple:'✓',no_cumple:'✗',sin_medir:'○',clinico:'◐'};
+          const TXT={cumple:'cumple',no_cumple:'no cumple',sin_medir:'sin medir',clinico:'criterio clínico'};
+          const filas=c.map(x=>`<tr><td style="padding:5px 9px;font-size:10px;color:${COLE[x.estado]};font-weight:800;width:18px;text-align:center">${ICO[x.estado]}</td><td style="padding:5px 9px;font-size:10px">${x.label}</td><td style="padding:5px 9px;font-size:10px;text-align:center;font-weight:700">${x.val}</td><td style="padding:5px 9px;font-size:9px;text-align:center;color:${COLE[x.estado]}">${TXT[x.estado]}</td></tr>`).join('');
+          return `<h3 style="font-size:13px;color:${bc};border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Criterios de avance de fase</h3>
+          <table style="margin-bottom:6px"><tbody>${filas}</tbody></table>
+          <div style="font-size:10px;color:#555;margin-bottom:14px"><strong>Veredicto calculado:</strong> ${_av.resumen} <span style="color:#999;font-style:italic">· Dolor: ${_mt.eva.medido?`EVA ${_mt.eva.eva}/10 (${_mt.eva.origen})`:(_mt.eva.motivo||'sin medir')}</span></div>`;})()}
         ${(cliente._informeIA||iaInforme)?`<h3 style="font-size:13px;color:#6D28D9;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:6px">Interpretación y plan sugerido (IA)</h3><div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:5px;padding:10px 14px;margin-bottom:10px;font-size:11px;line-height:1.6">${cliente._informeIA||composeInformeIA(iaInforme)}</div>`:''}
         <div style="margin-top:20px;font-size:9px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:8px">${brand.gymName} · ${brand.gymSub} · Método Activa Integra · Informe generado ${new Date().toLocaleDateString('es-ES')}</div>
         <script>window.onload=()=>window.print()<\/script></body></html>`;
@@ -1255,7 +1326,15 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
     }
     const potenciaTxt = potBloqueado ? 'Sección bloqueada por bandera roja o restricción de impacto (no evaluado)' : (potRows.length?potRows.join(' | '):'NO REGISTRADA');
 
+    // ── Capa determinista: se calcula ANTES de llamar a la IA ────────────
+    // La IA recibe estos números ya resueltos y tiene prohibido recalcularlos.
+    // Así se deja de auditar aritmética y se pasa a leer prosa.
+    const _mt=computarMetricas(cliente,{tests:clientTests||[]});
+    const _av=evaluarAvance(cliente.nivel||'activa',_mt,adaptadorGym);
+    const _det=resumenDeterminista(cliente,_mt,_av);
+
     const datosIA={
+      deterministico:_det,
       nombre:cliente.nombre,apellido:cliente.apellido,
       objetivo:cliente.objetivo||'no declarado',
       nivel:nv.label,semaforo:cliente.semaforo,
@@ -2196,6 +2275,44 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
                     <select value={form.periodizacion||''} onChange={e=>{
                       const val=e.target.value;
                       const hoy=new Date().toISOString().split('T')[0];
+
+                      // ── ARCHIVAR ANTES DE PISAR ────────────────────────────
+                      // Antes, cambiar de sistema sobreescribía inicio, fin y —
+                      // sobre todo — el snapshot de métricas basales, sin aviso
+                      // ni copia. Perdido el snapshot, el ciclo ya no se puede
+                      // cerrar ni comparar: el historial del cliente desaparece.
+                      // Ahora el ciclo en curso se archiva SIEMPRE antes de
+                      // cambiar, aunque no se haya hecho la mini evaluación.
+                      const cicloVivo=form.periodizacion&&form.periodizacion!==val;
+                      if(cicloVivo){
+                        const perAnt=PERIODIZACIONES[form.periodizacion];
+                        const nombreAnt=perAnt?.nombre||form.periodizacion;
+                        if(!confirm(`El ciclo actual (${nombreAnt}) se va a cerrar y archivar.\n\n`+
+                          `Iniciado: ${form.periodizacionInicio||'sin fecha'}\n`+
+                          `Se cierra: ${hoy}\n\n`+
+                          `Queda en el historial del cliente, pero SIN mini evaluación de cierre `+
+                          `(no vas a tener comparativa de peso ni de % de grasa).\n\n`+
+                          `Si querés el informe comparativo, cancelá y usá primero "🎯 Cerrar ciclo".\n\n¿Continuar?`)){
+                          return; // no se toca nada
+                        }
+                        set('periodizacionesHistorial',[...(form.periodizacionesHistorial||[]),{
+                          id:genId('pereval'),
+                          periodizacionId:form.periodizacion,
+                          periodizacionNombre:nombreAnt,
+                          faseMetodo:form.nivel,
+                          inicio:{
+                            fecha:form.periodizacionSnapshotInicio?.fecha||form.periodizacionInicio||'',
+                            peso:form.periodizacionSnapshotInicio?.peso||'',
+                            pctGrasa:form.periodizacionSnapshotInicio?.pctGrasa||'',
+                            imc:form.periodizacionSnapshotInicio?.imc||'',
+                          },
+                          fin:{fecha:hoy,peso:'',pctGrasa:''},
+                          cumplioObjetivo:null,
+                          notas:'Ciclo cerrado automáticamente al cambiar de sistema de periodización. Sin mini evaluación de cierre.',
+                          cerradoPor:'cambio_de_sistema',
+                        }]);
+                      }
+
                       set('periodizacion',val);
                       if(val){
                         const per=PERIODIZACIONES[val];
@@ -2929,9 +3046,21 @@ export default function App(){
   // vivía solo en localStorage — ver useCentroConfig en db.js).
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
-  const { incidencias, saveIncidencia, marcarResuelta } = useIncidencias();
+  const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia } = useIncidencias();
   const usuario = useUsuarioActual();
-  const incPendientes = useMemo(()=>incidencias.filter(i=>!i.resuelto).length,[incidencias]);
+  // El badge cuenta solo lo que requiere acción HOY: incidencias sin conducta
+  // definida y seguimientos cuya fecha de revisión ya venció. Un seguimiento
+  // en curso no es un pendiente — contarlo haría que el badge nunca baje y
+  // se vuelva ruido que se ignora.
+  const incPendientes = useMemo(()=>{
+    const hoy=new Date().toISOString().slice(0,10);
+    return incidencias.filter(i=>{
+      const e=i.estado||(i.resuelto?'resuelta':'abierta');
+      if(e==='abierta')return true;
+      if(e==='seguimiento')return !!(i.fecha_revision&&i.fecha_revision<=hoy);
+      return false;
+    }).length;
+  },[incidencias]);
   const [clientWizard,setClientWizard]=useState(null);
   const [clienteSearch,setClienteSearch]=useState('');
   const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
@@ -3647,6 +3776,46 @@ export default function App(){
                   </div>
                 );
               })()}
+              {/* ── HISTORIAL DE CICLOS ──────────────────────────────────
+                  periodizacionesHistorial se escribía desde la mini evaluación
+                  de cierre y NO LO LEÍA NINGUNA PANTALLA. Se guardaba y no se
+                  veía en ningún lado: para el usuario, el historial no existía. */}
+              {(c.periodizacionesHistorial||[]).length>0&&(
+                <div style={{marginTop:10,border:`1px solid ${G2}`,borderRadius:9,padding:'10px 12px',background:'#FAFAFA'}}>
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:'.06em',color:G4,marginBottom:7}}>
+                    📜 CICLOS ANTERIORES ({(c.periodizacionesHistorial||[]).length})
+                  </div>
+                  {(c.periodizacionesHistorial||[]).slice().reverse().map((h,ix)=>{
+                    const auto=h.cerradoPor==='cambio_de_sistema';
+                    const dp=(a,b)=>{const x=parseFloat(a),y=parseFloat(b);return(isNaN(x)||isNaN(y))?null:(y-x);};
+                    const dPeso=dp(h.inicio?.peso,h.fin?.peso), dGr=dp(h.inicio?.pctGrasa,h.fin?.pctGrasa);
+                    return(
+                      <div key={h.id||ix} style={{borderLeft:`3px solid ${h.cumplioObjetivo===true?'#16A34A':h.cumplioObjetivo===false?'#D97706':G2}`,paddingLeft:9,marginBottom:ix<c.periodizacionesHistorial.length-1?9:0}}>
+                        <div style={{fontSize:12,fontWeight:700}}>{h.periodizacionNombre||h.periodizacionId}</div>
+                        <div style={{fontSize:10,color:G4,marginTop:1}}>
+                          {h.inicio?.fecha||'—'} → {h.fin?.fecha||'—'}
+                          {h.faseMetodo?` · fase ${String(h.faseMetodo).toUpperCase()}`:''}
+                        </div>
+                        {(dPeso!==null||dGr!==null)&&(
+                          <div style={{fontSize:10,marginTop:2,color:G4}}>
+                            {dPeso!==null&&<span>Peso {h.inicio.peso}→{h.fin.peso} kg <strong style={{color:dPeso<0?'#16A34A':'#DC2626'}}>({dPeso>0?'+':''}{dPeso.toFixed(1)})</strong></span>}
+                            {dPeso!==null&&dGr!==null&&' · '}
+                            {dGr!==null&&<span>Grasa {h.inicio.pctGrasa}→{h.fin.pctGrasa}% <strong style={{color:dGr<0?'#16A34A':'#DC2626'}}>({dGr>0?'+':''}{dGr.toFixed(1)})</strong></span>}
+                          </div>
+                        )}
+                        {h.cumplioObjetivo!==null&&h.cumplioObjetivo!==undefined&&(
+                          <div style={{fontSize:10,marginTop:2,color:h.cumplioObjetivo?'#16A34A':'#D97706',fontWeight:700}}>
+                            {h.cumplioObjetivo?'✓ Cumplió los requisitos del ciclo':'⚠ No cumplió todos los requisitos'}
+                          </div>
+                        )}
+                        {auto&&<div style={{fontSize:9,color:'#D97706',marginTop:2}}>⚠ Cerrado al cambiar de sistema — sin mini evaluación, no hay comparativa</div>}
+                        {h.reconstruido&&<div style={{fontSize:9,color:'#D97706',marginTop:2}}>⚠ Registro reconstruido desde el plan — datos parciales</div>}
+                        {h.notas&&!auto&&<div style={{fontSize:10,color:G4,marginTop:2,fontStyle:'italic'}}>“{h.notas}”</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {avanceAbierto===c.id&&(
                 <PanelVeredicto
                   cliente={c}
@@ -4486,6 +4655,7 @@ export default function App(){
         {tab==='clientes'&&ClientesTab()}
         {tab==='riel'&&<RielIncidencia clients={clients} exs={exs} config={brand} saveConfig={setBrand}
           saveIncidencia={saveIncidencia} incidencias={incidencias} marcarResuelta={marcarResuelta}
+          setEstadoIncidencia={setEstadoIncidencia}
           usuarioEmail={usuario?.email||''}/>}
         {tab==='session'&&SessionTab()}
         {tab==='fuerza'&&<FuerzaTab brand={brand} clients={clients} s={s} saveClientFn={saveClientFn}/>}
