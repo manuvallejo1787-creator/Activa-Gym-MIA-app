@@ -558,8 +558,17 @@ Cliente: ${datos.nombre || ""} ${datos.apellido || ""}
         return `- ${fase}: ${lista}`;
       }).join('\n');
 
-      const prompt = `Analizá esta evaluación y sugerí dónde ubicar a la persona dentro del Método Activa Integra.
+      // ─── CAPA DETERMINISTA ────────────────────────────────────────────
+      // Todo lo aritmético lo calcula motor.js antes de llegar acá. La IA no
+      // vuelve a hacer una sola cuenta: solo interpreta banderas ya resueltas.
+      // Sin esto había que auditar cada número antes de confiar en el texto, y
+      // auditar cuentas ajenas cuesta casi lo mismo que hacerlas.
+      const bloqueDet = datos.deterministico
+        ? `\n${'='.repeat(64)}\nMÉTRICAS YA CALCULADAS POR EL SISTEMA — SON DEFINITIVAS\n${'='.repeat(64)}\n${datos.deterministico}\n${'='.repeat(64)}\n\nREGLAS SOBRE ESTE BLOQUE (no negociables):\n1. NO recalcules ninguno de estos valores. Ya están verificados.\n2. NO contradigas el VEREDICTO DE AVANCE ni el estado de cada criterio.\n3. "sin medir" significa MEDICIÓN PENDIENTE, nunca "mal resultado". No lo\n   trates como déficit ni lo uses para justificar una fase más baja.\n4. Si un dato del bloque difiere de los datos crudos de abajo, MANDA EL BLOQUE.\n5. Los datos crudos de abajo son contexto cualitativo para redactar mejor,\n   no una fuente alternativa de números.\n`
+        : '';
 
+      const prompt = `Analizá esta evaluación y sugerí dónde ubicar a la persona dentro del Método Activa Integra.
+${bloqueDet}
 ${contexto}
 
 Fases disponibles: ${fases}
@@ -584,7 +593,8 @@ Respondé ÚNICAMENTE con este JSON:
     {"nombre": "ejercicio", "razon": "qué déficit o capacidad puntual ataca en ESTE cliente"}
   ],
   "precauciones": "consideraciones de seguridad concretas, integrando banderas, dolor y restricciones",
-  "objetivos_sugeridos": ["objetivo 1", "objetivo 2", "objetivo 3"]
+  "objetivos_sugeridos": ["objetivo 1", "objetivo 2", "objetivo 3"],
+  "falta_medir": ["medición pendiente y por qué importa para decidir"]
 }
 
 Incluí 4-6 ejercicios base y 2-4 ítems en cada lista de deficiencias y prioridades (si no hay déficit en un eje, devolvé lista vacía).
@@ -595,7 +605,10 @@ INSTRUCCIONES CRÍTICAS:
 - Solo declarás un dato ausente si el texto dice literalmente "NO REGISTRADA", "NO HAY", "no registrado" o "sin tests". No asumas ausencia de lo que sí está.
 - Usá los grados exactos cuando estén informados y la escala (Óptimo/Limitado/Muy limitado/Dolor) para fundamentar movilidad; usá 1RM, ratios (×peso corporal) y PVFI para fundamentar fuerza. "Dolor" en cualquier movimiento es una precaución obligatoria.
 - Una bandera roja obliga a derivación y a fase RESTAURA con precaución explícita, sin importar la fuerza. Las restricciones (impacto/overhead/carga axial) deben respetarse en los ejercicios sugeridos.
-- Coherencia: no mandes a RESTAURA a alguien con fuerza Intermedia/Avanzada y movilidad normal salvo dolor/lesión/bandera; no mandes a POTENCIA/RINDE a alguien con déficits funcionales marcados o semáforo PVFI rojo.`;
+- Coherencia: no mandes a RESTAURA a alguien con fuerza Intermedia/Avanzada y movilidad normal salvo dolor/lesión/bandera; no mandes a POTENCIA/RINDE a alguien con déficits funcionales marcados o semáforo PVFI rojo.
+- Si hay bloque de MÉTRICAS YA CALCULADAS, tu "fase_sugerida" debe ser coherente con su VEREDICTO DE AVANCE. Si el veredicto dice que no avanza o que faltan datos, no sugieras la fase siguiente.
+- En "falta_medir" listá SOLO lo que el bloque marca como "sin medir" o los datos crudos declaran ausentes. Si no falta nada, devolvé lista vacía. Nunca inventes mediciones pendientes.
+- Escribí en español rioplatense (voseo), directo y sin relleno. Nada de "es importante destacar" ni frases de transición vacías.`;
 
       const data = await callClaude(prompt, 3200);
       setResult(data);

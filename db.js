@@ -932,13 +932,54 @@ export function useIncidencias(){
     } else setIncidencias(p=>[inc,...p])
     return inc
   },[fetch])
-  const marcarResuelta=useCallback(async(inc)=>{
-    const upd={...inc,resuelto:true}
+  // Conducta del profesional sobre una incidencia.
+  // estado: 'abierta' | 'seguimiento' | 'derivada' | 'resuelta'
+  // El trigger de la base mantiene `resuelto` y `derivado_fisio` sincronizados
+  // y pone fecha de revisión por defecto a 7 días si es seguimiento.
+  const setEstadoIncidencia=useCallback(async(inc,estado,extra={})=>{
+    const evento={fecha:new Date().toISOString(),estado,nota:extra.notas_seguimiento||''}
+    const historial=[...(Array.isArray(inc.historial)?inc.historial:[]),evento]
+    const patch={estado,historial,...extra}
     if(isSupabaseReady){
-      const{error}=await supabase.from('gym_incidencias').update({resuelto:true}).eq('id',inc.id)
+      const{error}=await supabase.from('gym_incidencias').update(patch).eq('id',inc.id)
       if(error)throw error
       await fetch()
-    } else setIncidencias(p=>p.map(x=>x.id===inc.id?upd:x))
+    } else setIncidencias(p=>p.map(x=>x.id===inc.id?{...x,...patch,resuelto:estado==='resuelta'}:x))
   },[fetch])
-  return{incidencias,loading,saveIncidencia,marcarResuelta,refetch:fetch}
+
+  // Compatibilidad con el llamado anterior
+  const marcarResuelta=useCallback((inc)=>setEstadoIncidencia(inc,'resuelta'),[setEstadoIncidencia])
+
+  return{incidencias,loading,saveIncidencia,marcarResuelta,setEstadoIncidencia,refetch:fetch}
+}
+
+// ─── HOOK: Planes clínicos a largo plazo (multi-región) ───────────────────
+export function usePlanesClinicos(pacienteId){
+  const [planes,setPlanes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!pacienteId){setPlanes([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('fisio_planes_clinicos').select('*')
+        .eq('paciente_id',pacienteId).order('created_at',{ascending:false})
+      if(error)throw error
+      setPlanes(data||[])
+    }catch(e){console.error('fisio_planes_clinicos:',e.message);setPlanes([])}
+    finally{setLoading(false)}
+  },[pacienteId])
+  useEffect(()=>{fetch()},[fetch])
+  const savePlan=useCallback(async(plan)=>{
+    const toSave={...plan,paciente_id:pacienteId,updated_at:new Date().toISOString()}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('fisio_planes_clinicos').upsert(toSave,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    } else setPlanes(p=>p.find(x=>x.id===plan.id)?p.map(x=>x.id===plan.id?toSave:x):[toSave,...p])
+    return toSave
+  },[pacienteId,fetch])
+  const deletePlan=useCallback(async(id)=>{
+    if(isSupabaseReady){await supabase.from('fisio_planes_clinicos').delete().eq('id',id);await fetch()}
+    else setPlanes(p=>p.filter(x=>x.id!==id))
+  },[fetch])
+  return{planes,loading,savePlan,deletePlan,refetch:fetch}
 }

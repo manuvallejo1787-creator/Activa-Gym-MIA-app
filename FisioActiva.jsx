@@ -5,7 +5,8 @@ import { FASES_METODO, generarCriteriosPersonalizados, checkCriteriosAvance, get
 import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
-import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCriteriosAvanceTemplate, usePlanesClinicos, genId } from "./db.js";
+import PlanClinico from "./PlanClinico.jsx";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
@@ -31,6 +32,7 @@ const NV='#0A3D62', TL='#1BAA86', CR='#FF6F4C';
 const WH='#FFFFFF', BG='#F0F4F8', GL='#E2E8F0';
 const GM='#94A3B8', GD='#475569', GDK='#1E293B';
 const GN='#16A34A', AM='#D97706', RJ='#DC2626';
+const MOV='#7C3AED';
 
 // ─── ROM NORMAS ────────────────────────────────────────────────────────────
 const ROM_NORMS={
@@ -232,8 +234,21 @@ const CRITERIOS_ALTA=[
 
 // ─── UTILIDADES ───────────────────────────────────────────────────────────
 const calcEVA=(v)=>{const n=parseFloat(v);if(isNaN(n))return null;if(n<=2)return{color:GN,label:'Leve'};if(n<=5)return{color:AM,label:'Moderado'};return{color:RJ,label:'Intenso'};};
-const romGrados=(rom,mov)=>{const r=rom?.[mov];if(r==null)return null;return typeof r==='object'?r.grados:r;}; // compat con evaluaciones viejas guardadas como número suelto
-const calcROMpct=(rom,region)=>{const norms=ROM_NORMS[region];if(!norms||!rom)return null;let t=0,c=0;norms.forEach(n=>{const v=parseFloat(romGrados(rom,n.mov));if(!isNaN(v)&&n.normal>0){t+=Math.min(v/n.normal*100,100);c++;}});return c>0?Math.round(t/c):null;};
+// ROM ahora se guarda ANIDADO POR REGIÓN: rom = { hombro:{Flexión:{...}}, codo:{...} }
+// Antes era plano por movimiento, lo que impedía evaluar dos regiones en una
+// misma planilla: "Flexión" existe en hombro, codo, cadera, rodilla y lumbar,
+// así que la segunda región pisaba a la primera.
+// Se leen las dos formas: si la clave de región no existe, cae al plano viejo.
+const romNodo=(rom,mov,region)=>{
+  if(!rom)return null;
+  if(region&&rom[region]&&typeof rom[region]==='object'&&!('grados' in rom[region]))return rom[region][mov]??null;
+  return rom[mov]??null;
+};
+const romGrados=(rom,mov,region)=>{const r=romNodo(rom,mov,region);if(r==null)return null;return typeof r==='object'?r.grados:r;};
+const romObjDe=(rom,mov,region)=>{const r=romNodo(rom,mov,region);return (typeof r==='object'&&r)||{};};
+const calcROMpct=(rom,region)=>{const norms=ROM_NORMS[region];if(!norms||!rom)return null;let t=0,c=0;norms.forEach(n=>{const v=parseFloat(romGrados(rom,n.mov,region));if(!isNaN(v)&&n.normal>0){t+=Math.min(v/n.normal*100,100);c++;}});return c>0?Math.round(t/c):null;};
+// ROM promedio de TODAS las regiones evaluadas (para el resumen y la IA)
+const calcROMpctMulti=(rom,regiones)=>{const ps=(regiones||[]).map(r=>calcROMpct(rom,r)).filter(v=>v!=null);return ps.length?Math.round(ps.reduce((a,b)=>a+b,0)/ps.length):null;};
 const calcYBalanceDiff=(yb)=>{if(!yb)return null;const vals=['ant','pm','pl'].map(d=>[parseFloat(yb['d_'+d]||''),parseFloat(yb['i_'+d]||'')]);const diffs=vals.filter(([a,b])=>!isNaN(a)&&!isNaN(b)).map(([a,b])=>Math.abs(a-b));return diffs.length?Math.max(...diffs).toFixed(1):null;};
 const calcFMSTotal=(fms)=>Object.values(fms||{}).reduce((s,v)=>s+(parseInt(v)||0),0);
 const calcDN4=(dn4)=>Object.values(dn4||{}).filter(Boolean).length;
@@ -268,8 +283,82 @@ const EVAL_STEPS=[
 // screening multi-región, antropometría completa no aplican a un dolor de
 // hombro puntual; sí aplican para dar el alta a POTENCIA o en deportistas).
 
+// ─── Resumen clínico determinista, multi-región ───────────────────────────
+// El payload anterior de la IA pedía campos inexistentes (last.diagnostico,
+// last.fuerza_mrc, last.peso, last.tiempo_evolucion) — los reales son
+// diagnosticoPT, fuerza, antrop.peso y evolucion — así que la mitad llegaba
+// como "no registrado". Y usaba la región PRINCIPAL del paciente, ignorando
+// las demás regiones evaluadas.
+// Esto consolida TODAS las regiones de la evaluación en un bloque de hechos.
+const resumenClinicoMultiRegion=(pac,ev)=>{
+  if(!ev)return '';
+  const L=[];
+  const regs=(ev.regiones&&ev.regiones.length)?ev.regiones:[ev.region||'lumbar'];
+  const lbl=(rk)=>REGIONES_LIST.find(r=>r.k===rk)?.label||rk;
+  L.push(`Paciente: ${pac.nombre} ${pac.apellido}`);
+  L.push(`Evaluación ${ev.tipo||'inicial'} del ${ev.fecha||'—'} · evaluador: ${ev.evaluador||'—'}`);
+  L.push(`REGIONES EVALUADAS (${regs.length}): ${regs.map(lbl).join(', ')} · principal: ${lbl(ev.region)}`);
+  L.push('');
+  L.push(`Motivo: ${ev.motivo||'—'}`);
+  L.push(`Evolución: ${ev.evolucion||'—'} · Antecedentes: ${ev.antecedentes||'—'}`);
+  L.push(`Objetivo del paciente: ${ev.objetivo||'—'}`);
+  L.push(`DOLOR: EVA reposo ${ev.eva_reposo||'—'}/10 · EVA movimiento ${ev.eva_movimiento||'—'}/10`);
+  const rf=Object.entries(ev.redFlags||{}).filter(([,v])=>v).map(([k])=>k);
+  L.push(`BANDERAS ROJAS: ${rf.length?rf.join(', '):'ninguna marcada'}`);
+  const dn4=calcDN4(ev.dn4);
+  if(dn4!=null)L.push(`DN4 (dolor neuropático): ${dn4}/7 — ${dn4>=4?'SUGIERE componente neuropático':'no sugiere componente neuropático'}`);
+
+  regs.forEach(rk=>{
+    L.push('');
+    L.push(`══ ${lbl(rk).toUpperCase()} ══`);
+    const tj=(ev.tejidos?.[rk])||(rk===ev.region?ev.tejidoSospechado:'')||'';
+    L.push(`Tejido/hipótesis: ${tj||'screening amplio, sin tejido definido'}`);
+    const norms=ROM_NORMS[rk]||[];
+    const filas=norms.map(n=>{
+      const v=romGrados(ev.rom,n.mov,rk);
+      if(v==null||v==='')return null;
+      const o=romObjDe(ev.rom,n.mov,rk);
+      const pct=n.normal>0?Math.round(parseFloat(v)/n.normal*100):null;
+      return `${n.mov} ${v}°/${n.normal}°${pct!=null?` (${pct}%)`:''}${o.funcional===false?' DISFUNCIONAL':o.funcional===true?' funcional':''}${o.eva!==undefined&&o.eva!==''?` EVA ${o.eva}`:''}`;
+    }).filter(Boolean);
+    L.push(filas.length?`ROM: ${filas.join(' · ')}`:'ROM: sin medir');
+    const pctR=calcROMpct(ev.rom,rk);
+    if(pctR!=null)L.push(`ROM promedio de la región: ${pctR}%`);
+    const tests=(TESTS_ESP[rk]||[]);
+    const pos=[],neg=[];
+    tests.forEach(t=>['Derecho','Izquierdo'].forEach(lado=>{
+      const r=ev.testsEsp?.[rk+'::'+t.n+'_'+lado] ?? ev.testsEsp?.[t.n+'_'+lado];
+      if(r==='positivo')pos.push(`${t.n} (${lado})`);
+      else if(r==='negativo')neg.push(`${t.n} (${lado})`);
+    }));
+    L.push(`Tests positivos: ${pos.length?pos.join(', '):'ninguno'}`);
+    if(neg.length)L.push(`Tests negativos: ${neg.join(', ')}`);
+  });
+
+  const fz=Object.entries(ev.fuerza||{}).filter(([,v])=>v!=='' &&v!=null);
+  L.push('');
+  L.push(`FUERZA (MRC 0-5): ${fz.length?fz.map(([k,v])=>`${k}=${v}`).join(' · '):'sin medir'}`);
+  const yb=calcYBalanceDiff(ev.ybalance);
+  L.push(`Y-BALANCE: ${yb!=null?`diferencia máxima ${yb} cm`:'sin medir'}`);
+  const fms=calcFMSTotal(ev.fms);
+  L.push(`FMS: ${fms>0?`${fms}/21`:'sin medir'}`);
+  const a=ev.antrop||{};
+  L.push(`ANTROPOMETRÍA: ${a.peso?`peso ${a.peso} kg`:'peso sin registrar'}${a.talla?`, talla ${a.talla} cm`:''}${a.imc?`, IMC ${a.imc}`:''}`);
+  L.push('');
+  L.push(`DIAGNÓSTICO FISIOTERAPÉUTICO: ${ev.diagnosticoPT||'no registrado'}`);
+  L.push(`HIPÓTESIS: ${ev.hipotesis||'no registrada'}`);
+  L.push(`FASE ACTUAL: ${ev.fase||'—'} (rehab: ${ev.faseRehab||'—'})`);
+  L.push(`OBJETIVOS DE TRATAMIENTO: ${ev.objetivos_tratamiento||'no registrados'}`);
+  return L.join('\n');
+};
+
 const emptyEval=()=>({
   id:'eval_'+Date.now(),fecha:new Date().toISOString().split('T')[0],tipo:'inicial',region:'lumbar',evaluador:'',
+  // MULTI-REGIÓN: una evaluación puede cubrir varias regiones en una sola
+  // planilla. `region` se mantiene como la principal (compatibilidad con la
+  // columna de la base, el PDF y el trigger); `regiones` es la lista real.
+  regiones:['lumbar'],
+  tejidos:{},           // { [region]: tejidoSospechado }
   tejidoSospechado:'',avanzadoManual:false,
   motivo:'',evolucion:'',antecedentes:'',medicacion:'',ocupacion:'',deporte:'',objetivo:'',historialLesional:'',
   redFlags:{},eva_reposo:'',eva_movimiento:'',
@@ -322,6 +411,7 @@ const fs={
 function SesionClienteComp({ paciente, reglas=[] }) {
   const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
   const [showForm, setShowForm] = useState(false);
+  const [filtroReg, setFiltroReg] = useState('');
   const [form, setF] = useState(null);
   const [exEditando, setExEditando] = useState(''); // para input nuevo ejercicio
 
@@ -333,9 +423,26 @@ function SesionClienteComp({ paciente, reglas=[] }) {
   const faseLabels = { restaura:'🔴 RESTAURA', activa:'🟡 ACTIVA', potencia:'🟣 POTENCIA', rinde:'🔥 RINDE' };
 
   // Obtener fase y región del paciente desde su última evaluación
-  const ultimaEval = paciente?.evaluaciones?.slice(-1)[0];
+  // MULTI-REGIÓN. Antes: ultimaEval = evaluaciones.slice(-1)[0], o sea la
+  // última cargada sea de la región que sea. Un paciente con hombro y lumbar
+  // en paralelo perdía una de las dos: la más vieja dejaba de existir para el
+  // protocolo, la fase y las restricciones al gym.
+  // La base siempre soportó varias evaluaciones por paciente con `region`
+  // distinta; lo que colapsaba era esta línea.
+  const evalsPorRegion = useMemo(()=>{
+    const m={};
+    (paciente?.evaluaciones||[]).forEach(e=>{const k=e.region||'lumbar';(m[k]=m[k]||[]).push(e);});
+    Object.keys(m).forEach(k=>m[k].sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||'')));
+    return m;
+  },[paciente]);
+  const regionesTratadas = useMemo(()=>Object.keys(evalsPorRegion),[evalsPorRegion]);
+  const [regionSel,setRegionSel] = useState(null);
+  const regionFoco = (regionSel&&evalsPorRegion[regionSel])
+    ? regionSel
+    : (paciente?.evaluaciones?.slice(-1)[0]?.region || paciente?.region || 'lumbar');
+  const ultimaEval = (evalsPorRegion[regionFoco]||[]).slice(-1)[0] || paciente?.evaluaciones?.slice(-1)[0];
   const faseActual  = ultimaEval?.fase || 'restaura';
-  const regionActual = (paciente?.region || ultimaEval?.region || 'lumbar').toLowerCase();
+  const regionActual = (ultimaEval?.region || paciente?.region || 'lumbar').toLowerCase();
 
   // ── Auto-cargar ejercicios del protocolo según región y fase ─────────────
   const protocoloEjercicios = useMemo(() => {
@@ -611,7 +718,18 @@ function SesionClienteComp({ paciente, reglas=[] }) {
         </div>
       )}
       {sesiones.length===0&&<div style={{...s2.card,textAlign:'center',padding:20,borderStyle:'dashed',color:G3c}}>Sin sesiones registradas. Iniciá con "+ Nueva sesión".</div>}
-      {sesiones.map(ses=>{
+      {(()=>{
+        const regs=[...new Set(sesiones.map(x=>x.region).filter(Boolean))];
+        if(regs.length<2)return null;
+        return(
+          <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:G3c,fontWeight:700}}>Filtrar por región:</span>
+            <button onClick={()=>setFiltroReg('')} style={{...s2.btnG,fontSize:10,padding:'3px 9px',...(filtroReg?{}:{background:NV2,color:WH2,borderColor:NV2})}}>Todas</button>
+            {regs.map(r=><button key={r} onClick={()=>setFiltroReg(r)} style={{...s2.btnG,fontSize:10,padding:'3px 9px',...(filtroReg===r?{background:NV2,color:WH2,borderColor:NV2}:{})}}>{r}</button>)}
+          </div>
+        );
+      })()}
+      {sesiones.filter(x=>!filtroReg||x.region===filtroReg).map(ses=>{
         let ejercsData, critsData;
         try{ ejercsData=JSON.parse(ses.ejercicios_lista||'[]'); }catch{ ejercsData=[]; }
         try{ critsData=JSON.parse(ses.criterios_lista||'[]'); }catch{ critsData=[]; }
@@ -624,6 +742,7 @@ function SesionClienteComp({ paciente, reglas=[] }) {
                 <div style={{fontSize:12,fontWeight:700}}>Sesión #{ses.numero_sesion} · {ses.fecha}</div>
                 <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10,marginTop:3}}>
                   <span style={{fontWeight:700,color:faseColors[ses.fase]||G4c}}>{faseLabels[ses.fase]||ses.fase}</span>
+                  {ses.region&&<span style={{background:'#EFF6FF',color:NV2,border:`1px solid #93C5FD`,borderRadius:99,padding:'0 7px',fontWeight:700}}>🩺 {ses.region}</span>}
                   {ses.eva_inicio!==undefined&&<span>EVA: <strong style={{color:evaColor(ses.eva_inicio)}}>{ses.eva_inicio}</strong>→<strong style={{color:evaColor(ses.eva_fin)}}>{ses.eva_fin}</strong></span>}
                   {ses.respuesta&&<span style={{color:TL2}}>{ses.respuesta}</span>}
                   {ses.avance_fase&&<span style={{color:GN2,fontWeight:700}}>✅ Avance de fase</span>}
@@ -725,21 +844,43 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
 
   // ── SINCRONIZAR CON APP DE GYM ─────────────────────────────────────────
   // Cuando se guarda una evaluación con síntesis, actualiza el cliente en la app de gym
+  // evaRector — el EVA que gobierna la tolerancia a la carga.
+  //
+  // ANTES: todas las restricciones se derivaban de eva_reposo. Auditando las
+  // 8 evaluaciones reales, 3 de 6 tenían eva_reposo 0 con eva_movimiento
+  // entre 5 y 8 — es decir, la mitad de los casos entraban al gimnasio con
+  // cero banderas de restricción teniendo dolor real al moverse.
+  // El dolor en reposo es mal predictor de tolerancia a la carga; el dolor
+  // en movimiento es el que importa para decidir qué puede entrenar.
+  //
+  // AHORA: manda el peor de los dos. eva_reposo sigue contando (un dolor
+  // nocturno/en reposo alto es bandera por sí mismo), pero ya no puede
+  // tapar un movimiento doloroso.
+  const evaRector=(ev)=>{
+    const r=parseFloat(ev?.eva_reposo||'0')||0;
+    const m=parseFloat(ev?.eva_movimiento||ev?.eva_mov||'0')||0;
+    return Math.max(r,m);
+  };
+
   const syncConGym=(pac,eval_)=>{
     if(!pac.gym_clienteId||!onUpdateGymClient)return;
     const fase=eval_.fase||'restaura';
     const semaforoNuevo=FASES_BASE[fase]?.semaforo||'pendiente';
+    const eva=evaRector(eval_);
+    const evaRep=parseFloat(eval_.eva_reposo||'0')||0;
+    const evaMov=parseFloat(eval_.eva_movimiento||eval_.eva_mov||'0')||0;
     const restricciones=[];
     if(eval_.redFlags&&Object.values(eval_.redFlags).some(Boolean))restricciones.push('Red flag activa — solo fisioterapia');
-    if(eval_.eva_reposo&&parseFloat(eval_.eva_reposo)>6)restricciones.push('Dolor intenso activo');
+    if(eva>6)restricciones.push(`Dolor intenso activo (EVA reposo ${evaRep} / movimiento ${evaMov})`);
+    else if(evaMov>=4&&evaRep<=3)restricciones.push(`Dolor al movimiento EVA ${evaMov} — regresar ejercicios de la region`);
     onUpdateGymClient(pac.gym_clienteId,{
       nivel:fase,
       semaforo:semaforoNuevo,
       restricciones:restricciones.join(' · '),
       restricciones_flags:{
-        impacto:fase==='restaura'||parseFloat(eval_.eva_reposo||'0')>5,
-        overhead:(['hombro','esc','cervical'].includes(eval_.region)&&parseFloat(eval_.eva_reposo||'0')>3),
-        cargaAxial:(['lumbar','columna'].includes(eval_.region)&&parseFloat(eval_.eva_reposo||'0')>4),
+        impacto:fase==='restaura'||eva>5,
+        overhead:(['hombro','esc','cervical'].includes(eval_.region)&&eva>3),
+        cargaAxial:(['lumbar','columna'].includes(eval_.region)&&eva>4),
       },
       fechaEval:eval_.fecha,
       screeningCompleto:true,
@@ -750,13 +891,36 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   const saveEval=()=>{
     if(!currentPac||!currentEval)return;
     const criterios=generarCriteriosPersonalizados(currentEval.objetivo,currentEval.fase,currentEval.eva_reposo,calcROMpct(currentEval.rom,currentEval.region),'clinico');
-    const evalFinal={...currentEval,id:genId('eval'),criterios_personalizados:criterios};
-    // Persistir en Supabase
+
+    // EDICIÓN: antes esto hacía SIEMPRE id:genId('eval'), así que cada guardado
+    // creaba una fila nueva y no existía forma de corregir una evaluación mal
+    // cargada — quedaba en el historial para siempre. La capa de datos ya hacía
+    // upsert por id; el que no lo permitía era este renglón.
+    const editando=!!currentEval._editandoId;
+    const evalFinal={...currentEval,id:editando?currentEval._editandoId:genId('eval'),criterios_personalizados:criterios};
+    delete evalFinal._editandoId;
+    const pacOrigenId=currentEval._pacienteOriginalId;
+    delete evalFinal._pacienteOriginalId;
+
+    // REASIGNAR PACIENTE: el caso de equivocarse al elegir en el selector.
+    // Se mueve la fila cambiando paciente_id; no se duplica ni se pierde nada.
+    const moverDeOtroPaciente=editando&&pacOrigenId&&pacOrigenId!==currentPac.id;
+    if(moverDeOtroPaciente&&!confirm(
+      `Esta evaluación se va a mover a ${currentPac.nombre} ${currentPac.apellido}.\n\n`+
+      `Deja de figurar en el historial del paciente anterior. ¿Continuar?`))return;
+
     dbSaveEvaluacion(currentPac.id, evalFinal)
-      .catch(e=>console.error('Error guardando evaluación:',e));
-    // Sincronizar con gym
+      .catch(e=>alert('Error guardando evaluación: '+e.message));
     syncConGym(currentPac, evalFinal);
     setView('ver-paciente');
+  };
+
+  // Abre una evaluación existente en el mismo formulario, en modo edición.
+  const editarEval=(ev,pac)=>{
+    setCurrentPac(pac||currentPac);
+    setCurrentEval({...ev,_editandoId:ev.id,_pacienteOriginalId:(pac||currentPac)?.id});
+    setEvalStep(0);
+    setView('nueva-eval');
   };
 
   const savePaciente=(p)=>{
@@ -786,7 +950,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:14}}>
           {[
-            {icon:'➕',label:'Nueva Evaluación',sub:'Iniciar evaluación funcional',action:()=>{if(pacientes.length===0){setEditingPac(emptyPaciente());setShowPacForm(true);}else{setCurrentPac(pacientes[0]);setCurrentEval(emptyEval());setEvalStep(0);setView('nueva-eval');}},color:TL},
+            {icon:'➕',label:'Nueva Evaluación',sub:'Elegir paciente y evaluar',action:()=>{if(pacientes.length===0){setEditingPac(emptyPaciente());setShowPacForm(true);}else{setCurrentPac(null);setView('pacientes');}},color:TL},
             {icon:'👥',label:'Pacientes',sub:`${pacientes.length} registrados`,action:()=>setView('pacientes'),color:NV},
             {icon:'📊',label:'KPIs Clínicos',sub:'Progreso y métricas',action:()=>setView('kpis'),color:'#7C3AED'},
             {icon:'📋',label:'Protocolos',sub:'Fases y criterios',action:()=>setView('protocolos'),color:'#0284C7'},
@@ -1037,17 +1201,19 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         })()}
         {/* Análisis IA de la evaluación */}
         {last&&(()=>{
+          const _regsLast=(last.regiones&&last.regiones.length)?last.regiones:[last.region||'lumbar'];
           const datosIA={
+            deterministico:resumenClinicoMultiRegion(currentPac,last),
             nombre:currentPac.nombre,apellido:currentPac.apellido,
-            region:REGIONES_LIST.find(r=>r.k===currentPac.region)?.label||currentPac.region,
-            diagnostico:last.diagnostico||last.diagnosticoPT||'no registrado',
-            eva:last.eva_reposo||'no registrado',
-            rom:rp?`${rp}% del normal`:'no registrado',
-            fuerza:last.fuerza_mrc||last.fuerza||'no registrado',
-            screening:last.hallazgos_screening||last.tests_positivos||'no registrado',
-            antropometria:last.peso?`Peso ${last.peso}kg, Talla ${last.talla||'?'}cm`:'no registrada',
+            region:_regsLast.map(rk=>REGIONES_LIST.find(r=>r.k===rk)?.label||rk).join(' + '),
+            diagnostico:last.diagnosticoPT||last.diagnostico||'no registrado',
+            eva:`reposo ${last.eva_reposo||'—'} / movimiento ${last.eva_movimiento||'—'}`,
+            rom:rp?`${rp}% del normal (promedio de las regiones evaluadas)`:'no registrado',
+            fuerza:Object.keys(last.fuerza||{}).length?Object.entries(last.fuerza).filter(([,v])=>v!=='').map(([k,v])=>`${k}=${v}`).join(' · '):'no registrado',
+            screening:(()=>{const p=[];_regsLast.forEach(rk=>(TESTS_ESP[rk]||[]).forEach(t=>['Derecho','Izquierdo'].forEach(l=>{const r=last.testsEsp?.[rk+'::'+t.n+'_'+l]??last.testsEsp?.[t.n+'_'+l];if(r==='positivo')p.push(`${t.n} ${l} (${rk})`);})));return p.length?p.join(', '):'sin tests positivos';})(),
+            antropometria:last.antrop?.peso?`Peso ${last.antrop.peso}kg, Talla ${last.antrop.talla||'?'}cm, IMC ${last.antrop.imc||'?'}`:'no registrada',
             objetivos:last.objetivo||'no especificados',
-            evolucion:last.tiempo_evolucion||'no registrado',
+            evolucion:last.evolucion||'no registrado',
           };
           const aplicarFisio=(ai)=>{
             const upd={...currentPac};
@@ -1119,7 +1285,39 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         <div style={fs.card}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
             <div style={{fontSize:12,fontWeight:700}}>Historial del tratamiento</div>
+            {/* REGIONES EN TRATAMIENTO — un paciente puede tener más de un
+                cuadro en paralelo (p. ej. hombro en protección y lumbar en
+                carga progresiva). El protocolo, la fase y las restricciones al
+                gym se calculan sobre la región seleccionada acá. */}
+            {regionesTratadas.length>1&&(
+              <div style={{background:'#EFF6FF',border:`1px solid #93C5FD`,borderRadius:8,padding:'8px 10px',marginBottom:9}}>
+                <div style={{fontSize:10,fontWeight:800,color:NV,marginBottom:6}}>
+                  🩺 {regionesTratadas.length} REGIONES EN TRATAMIENTO — elegí sobre cuál trabajar
+                </div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  {regionesTratadas.map(rk=>{
+                    const evs=evalsPorRegion[rk]||[];
+                    const ult=evs.slice(-1)[0];
+                    const act=rk===regionFoco;
+                    const rl=REGIONES_LIST.find(r=>r.k===rk);
+                    return(
+                      <div key={rk} onClick={()=>setRegionSel(rk)} style={{cursor:'pointer',padding:'6px 10px',borderRadius:7,border:`2px solid ${act?(rl?.color||NV):GL}`,background:act?`${rl?.color||NV}18`:WH,minWidth:112}}>
+                        <div style={{fontSize:11,fontWeight:800}}>{rl?.label||rk}</div>
+                        <div style={{fontSize:9,color:GM,marginTop:1}}>
+                          {FASES_BASE[ult?.fase]?.badge||'—'} · EVA {ult?.eva_movimiento||ult?.eva_reposo||'—'} · {evs.length} eval.
+                        </div>
+                        <div style={{fontSize:8,color:GM}}>últ. {ult?.fecha||'—'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:9,color:GM,marginTop:6,fontStyle:'italic'}}>
+                  Para tratar una región nueva en paralelo, cargá una evaluación eligiendo esa región.
+                </div>
+              </div>
+            )}
             <button onClick={()=>{setAltaPacId(currentPac.id);setView('altas');}} style={{...fs.btnG,fontSize:10,padding:'4px 9px',color:GN,borderColor:GN}}>🏁 Ver estado de alta</button>
+            <button onClick={()=>setView('plan-clinico')} style={{...fs.btnG,fontSize:10,padding:'4px 9px',color:MOV,borderColor:MOV}}>🗓️ Plan clínico</button>
           </div>
           {(()=>{
             const eventos=[
@@ -1144,6 +1342,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                     </div>
                     <div style={{display:'flex',gap:6}}>
                       <button onClick={()=>{setViewingEval(ev);setView('ver-eval');}} style={{...fs.btnNV,fontSize:10,padding:'3px 9px'}}>Ver</button>
+                      <button onClick={()=>editarEval(ev,currentPac)} title="Corregir datos o reasignar a otro paciente" style={{...fs.btnG,fontSize:10,padding:'3px 9px'}}>✏️ Editar</button>
                       {i===eventos.length-1&&<button onClick={()=>{setCurrentEval({...emptyEval(),tipo:'reeval',region:ev.region,objetivo:ev.objetivo});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'3px 9px'}}>Reeval.</button>}
                     </div>
                   </div>
@@ -1172,18 +1371,40 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
     if(!currentEval)return null;
     const ev=currentEval;
     const set=(k,v)=>setCurrentEval(p=>({...p,[k]:v}));
-    const setROM=(mov,val)=>setCurrentEval(p=>({...p,rom:{...p.rom,[mov]:{...(typeof p.rom[mov]==='object'?p.rom[mov]:{}),grados:val}}}));
-    const setROMField=(mov,field,val)=>setCurrentEval(p=>({...p,rom:{...p.rom,[mov]:{...(typeof p.rom[mov]==='object'?p.rom[mov]:{grados:p.rom[mov]||''}),[field]:val}}}));
+    // Los setters escriben ANIDADO por región para que dos regiones con el
+    // mismo nombre de movimiento no se pisen.
+    const setROMR=(region,mov,field,val)=>setCurrentEval(p=>{
+      const base=(p.rom&&p.rom[region]&&typeof p.rom[region]==='object'&&!('grados' in p.rom[region]))?p.rom[region]:{};
+      const prev=(typeof base[mov]==='object'&&base[mov])||(base[mov]!=null?{grados:base[mov]}:{});
+      return {...p,rom:{...(p.rom||{}),[region]:{...base,[mov]:{...prev,[field]:val}}}};
+    });
+    const setROM=(mov,val)=>setROMR(ev.region,mov,'grados',val);
+    const setROMField=(mov,field,val)=>setROMR(ev.region,mov,field,val);
+    // Tests especiales anidados por región (mismo motivo: nombres repetidos)
+    const setTestEspR=(region,nombre,res)=>setCurrentEval(p=>({...p,testsEsp:{...(p.testsEsp||{}),[region+'::'+nombre]:res}}));
+    const getTestEspR=(region,nombre)=>ev.testsEsp?.[region+'::'+nombre] ?? ev.testsEsp?.[nombre];
     const setFuerza=(k,v)=>setCurrentEval(p=>({...p,fuerza:{...p.fuerza,[k]:v}}));
     const setFMS=(id,v)=>setCurrentEval(p=>({...p,fms:{...p.fms,[id]:v}}));
     const setTestEsp=(nombre,res)=>setCurrentEval(p=>({...p,testsEsp:{...p.testsEsp,[nombre]:res}}));
     const setPostural=(vista,campo,val)=>setCurrentEval(p=>({...p,postural:{...p.postural,[vista]:{...p.postural[vista],[campo]:val}}}));
     const setDN4=(k,v)=>setCurrentEval(p=>({...p,dn4:{...p.dn4,[k]:v}}));
+    // Regiones activas de esta evaluación. Si es una evaluación vieja sin
+    // `regiones`, se usa la principal para no romper nada.
+    const regionesEv=(ev.regiones&&ev.regiones.length)?ev.regiones:[ev.region||'lumbar'];
+    const tejidoDe=(rk)=>(ev.tejidos?.[rk] ?? (rk===ev.region?ev.tejidoSospechado:'')) || '';
+    const setTejidoRegion=(rk,v)=>setCurrentEval(p=>({...p,tejidos:{...(p.tejidos||{}),[rk]:v},...(rk===p.region?{tejidoSospechado:v}:{})}));
+    const toggleRegion=(rk)=>setCurrentEval(p=>{
+      const act=(p.regiones&&p.regiones.length)?p.regiones:[p.region||'lumbar'];
+      const nuevas=act.includes(rk)?act.filter(x=>x!==rk):[...act,rk];
+      if(nuevas.length===0)return p;                       // siempre al menos una
+      if(nuevas.length>4){alert('Cuatro regiones es el máximo por planilla. Más que eso conviene una segunda evaluación.');return p;}
+      return {...p,regiones:nuevas,region:nuevas.includes(p.region)?p.region:nuevas[0]};
+    });
     const romKeys=ROM_NORMS[ev.region]||ROM_NORMS.lumbar;
     const fuerzaKeys=FUERZA_GRUPOS[ev.region]||FUERZA_GRUPOS.general;
     const testsKeys=TESTS_ESP[ev.region]||TESTS_ESP.columna;
     const dn4Score=calcDN4(ev.dn4);
-    const romPct=calcROMpct(ev.rom,ev.region);
+    const romPct=calcROMpctMulti(ev.rom,regionesEv);
 
     const renderStep=()=>{
       switch(evalStep){
@@ -1195,25 +1416,48 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                 <span style={fs.lbl}>Región principal</span>
                 <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:5,marginTop:4}}>
                   {REGIONES_LIST.map(r=>(
-                    <div key={r.k} onClick={()=>set('region',r.k)} style={{cursor:'pointer',padding:'7px 4px',borderRadius:7,border:`2px solid ${ev.region===r.k?r.color:GL}`,background:ev.region===r.k?`${r.color}18`:WH,textAlign:'center',transition:'all .15s'}}>
+                    <div key={r.k} onClick={()=>toggleRegion(r.k)} style={{cursor:'pointer',padding:'7px 4px',borderRadius:7,border:`2px solid ${regionesEv.includes(r.k)?r.color:GL}`,background:regionesEv.includes(r.k)?`${r.color}18`:WH,textAlign:'center',transition:'all .15s'}}>
                       <div style={{fontSize:18}}>{r.emoji}</div>
-                      <div style={{fontSize:9,fontWeight:ev.region===r.k?700:400,color:ev.region===r.k?r.color:GD,marginTop:1,lineHeight:1.2}}>{r.label}</div>
+                      <div style={{fontSize:9,fontWeight:regionesEv.includes(r.k)?700:400,color:regionesEv.includes(r.k)?r.color:GD,marginTop:1,lineHeight:1.2}}>{r.label}{regionesEv.includes(r.k)?' ✓':''}</div>
                       <div style={{fontSize:8,color:GM}}>{r.desc}</div>
                     </div>
                   ))}
                 </div>
               </div>
-              {getTejidosPorRegion(ev.region).length>0&&(
-                <div style={{gridColumn:'1/-1'}}>
-                  <span style={fs.lbl}>Tejido / hipótesis sospechada — acota anamnesis, ROM y tests al paso siguiente</span>
-                  <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:4}}>
-                    <div onClick={()=>set('tejidoSospechado','')} style={{cursor:'pointer',padding:'6px 10px',borderRadius:99,border:`1px solid ${!ev.tejidoSospechado?NV:GL}`,background:!ev.tejidoSospechado?`${NV}15`:WH,fontSize:10,fontWeight:!ev.tejidoSospechado?700:400,color:!ev.tejidoSospechado?NV:GD}}>Sin definir / screening amplio</div>
-                    {getTejidosPorRegion(ev.region).map(tj=>(
-                      <div key={tj} onClick={()=>set('tejidoSospechado',tj)} style={{cursor:'pointer',padding:'6px 10px',borderRadius:99,border:`1px solid ${ev.tejidoSospechado===tj?TL:GL}`,background:ev.tejidoSospechado===tj?`${TL}15`:WH,fontSize:10,fontWeight:ev.tejidoSospechado===tj?700:400,color:ev.tejidoSospechado===tj?TL:GD}}>{tj}</div>
-                    ))}
-                  </div>
+              {/* TEJIDO POR REGIÓN. Antes había un solo `tejidoSospechado`
+                  para toda la evaluación: con dos regiones, la hipótesis de
+                  una se aplicaba a la otra y filtraba mal los tests. */}
+              <div style={{gridColumn:'1/-1'}}>
+                <span style={fs.lbl}>Tejido / hipótesis por región — acota los tests de cada una</span>
+                {regionesEv.map(rk=>{
+                  const tjs=getTejidosPorRegion(rk);
+                  const rl=REGIONES_LIST.find(x=>x.k===rk);
+                  const act=tejidoDe(rk);
+                  return(
+                    <div key={rk} style={{border:`1px solid ${GL}`,borderLeft:`3px solid ${rl?.color||NV}`,borderRadius:7,padding:'8px 10px',marginTop:6}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:5}}>
+                        <span style={{fontSize:11,fontWeight:800}}>{rl?.emoji} {rl?.label||rk}</span>
+                        <label style={{fontSize:9,color:GD,display:'flex',gap:4,alignItems:'center',cursor:'pointer'}}>
+                          <input type="radio" name="regprin" checked={ev.region===rk} onChange={()=>set('region',rk)}/>
+                          región principal
+                        </label>
+                      </div>
+                      {tjs.length>0?(
+                        <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                          <div onClick={()=>setTejidoRegion(rk,'')} style={{cursor:'pointer',padding:'5px 9px',borderRadius:99,border:`1px solid ${!act?NV:GL}`,background:!act?`${NV}15`:WH,fontSize:10,fontWeight:!act?700:400,color:!act?NV:GD}}>Screening amplio</div>
+                          {tjs.map(tj=>(
+                            <div key={tj} onClick={()=>setTejidoRegion(rk,tj)} style={{cursor:'pointer',padding:'5px 9px',borderRadius:99,border:`1px solid ${act===tj?TL:GL}`,background:act===tj?`${TL}15`:WH,fontSize:10,fontWeight:act===tj?700:400,color:act===tj?TL:GD}}>{tj}</div>
+                          ))}
+                        </div>
+                      ):<div style={{fontSize:10,color:GM}}>Sin tejidos tipificados para esta región.</div>}
+                    </div>
+                  );
+                })}
+                <div style={{fontSize:9,color:GM,marginTop:6,fontStyle:'italic'}}>
+                  Podés evaluar hasta 4 regiones en una misma planilla. La principal es la que
+                  se guarda como región de la evaluación y define el semáforo enviado al gimnasio.
                 </div>
-              )}
+              </div>
               <div><span style={fs.lbl}>Fecha</span><DateInput value={ev.fecha} onChange={v=>set('fecha',v)} style={fs.inp}/></div>
               <div><span style={fs.lbl}>Evaluador/a</span><input value={ev.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={fs.inp} placeholder="Nombre del profesional"/></div>
               <div style={{gridColumn:'1/-1'}}>
@@ -1389,9 +1633,19 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         case 6: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>📐 Por movimiento: grados (goniómetro o foto), si el rango es funcional o disfuncional, y EVA si el paciente refiere dolor en ese movimiento.</div>
-            {romKeys.map(n=>{
-              const romObj=(typeof ev.rom[n.mov]==='object'&&ev.rom[n.mov])||{};
-              const val=romObj.grados??(typeof ev.rom[n.mov]!=='object'?ev.rom[n.mov]:'')??'';
+            {regionesEv.map(rk=>{
+             const rl=REGIONES_LIST.find(x=>x.k===rk);
+             const romKeysR=ROM_NORMS[rk]||ROM_NORMS.lumbar;
+             const pctR=calcROMpct(ev.rom,rk);
+             return(
+             <div key={rk} style={{marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:`${rl?.color||NV}12`,border:`1px solid ${rl?.color||NV}44`,borderRadius:7,padding:'6px 10px',marginBottom:7}}>
+                <span style={{fontSize:12,fontWeight:800,color:rl?.color||NV}}>{rl?.emoji} {rl?.label||rk}</span>
+                {pctR!=null&&<span style={{fontSize:10,fontWeight:700,color:pctR>90?GN:pctR>70?AM:RJ}}>{pctR}% del rango normal</span>}
+              </div>
+            {romKeysR.map(n=>{
+              const romObj=romObjDe(ev.rom,n.mov,rk);
+              const val=romObj.grados??romGrados(ev.rom,n.mov,rk)??'';
               const pct=val&&n.normal>0?Math.round(parseFloat(val)/n.normal*100):null;
               const funcional=romObj.funcional; // undefined = sin marcar, true/false
               const evaMov=romObj.eva??'';
@@ -1399,22 +1653,24 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
               return(<div key={n.mov} style={{background:WH,border:`1px solid ${GL}`,borderLeft:`3px solid ${col}`,borderRadius:6,padding:'8px 10px',marginBottom:6}}>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 60px 80px',gap:6,alignItems:'center'}}>
                   <div><div style={{fontSize:11,fontWeight:600}}>{n.mov}</div><div style={{fontSize:9,color:GM}}>Normal {n.normal}°{pct?` · ${pct}%`:''}</div></div>
-                  <input type="number" min="0" value={val} onChange={e=>setROM(n.mov,e.target.value)} placeholder="°" style={{...fs.inp,textAlign:'center'}}/>
-                  <PoseROM movimiento={n.mov} region={ev.region} onMedido={(grados)=>setROM(n.mov,String(grados))}/>
+                  <input type="number" min="0" value={val} onChange={e=>setROMR(rk,n.mov,'grados',e.target.value)} placeholder="°" style={{...fs.inp,textAlign:'center'}}/>
+                  <PoseROM movimiento={n.mov} region={rk} onMedido={(grados)=>setROMR(rk,n.mov,'grados',String(grados))}/>
                 </div>
                 <div style={{display:'flex',gap:8,alignItems:'center',marginTop:6,flexWrap:'wrap'}}>
                   <div style={{display:'flex',gap:4}}>
                     {[['Funcional',true,GN],['Disfuncional',false,RJ]].map(([lbl,v,c])=>(
-                      <button key={lbl} onClick={()=>setROMField(n.mov,'funcional',v)} style={{fontSize:9,fontWeight:700,padding:'4px 8px',borderRadius:99,border:`1px solid ${funcional===v?c:GL}`,background:funcional===v?c:WH,color:funcional===v?WH:GD,cursor:'pointer'}}>{lbl}</button>
+                      <button key={lbl} onClick={()=>setROMR(rk,n.mov,'funcional',v)} style={{fontSize:9,fontWeight:700,padding:'4px 8px',borderRadius:99,border:`1px solid ${funcional===v?c:GL}`,background:funcional===v?c:WH,color:funcional===v?WH:GD,cursor:'pointer'}}>{lbl}</button>
                     ))}
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:4}}>
                     <span style={{fontSize:9,color:GM,fontWeight:700}}>EVA en el movimiento</span>
-                    <input type="number" min="0" max="10" value={evaMov} onChange={e=>setROMField(n.mov,'eva',e.target.value)} placeholder="0-10" style={{...fs.inp,width:50,padding:'3px 6px',fontSize:11}}/>
+                    <input type="number" min="0" max="10" value={evaMov} onChange={e=>setROMR(rk,n.mov,'eva',e.target.value)} placeholder="0-10" style={{...fs.inp,width:50,padding:'3px 6px',fontSize:11}}/>
                     {evaMov!==''&&<span style={{...fs.tag(calcEVA(evaMov)?.color||GM),fontSize:8}}>{calcEVA(evaMov)?.label}</span>}
                   </div>
                 </div>
               </div>);
+            })}
+             </div>);
             })}
             {romPct&&<div style={{marginTop:8,padding:'10px',borderRadius:7,background:romPct>90?'#DCFCE7':romPct>70?'#FEF9C3':'#FEE2E2',border:`1px solid ${romPct>90?'#86EFAC':romPct>70?'#FDE047':'#FCA5A5'}`,display:'flex',gap:12,alignItems:'center'}}>
               <div style={{fontSize:22,fontWeight:800,color:romPct>90?GN:romPct>70?AM:RJ}}>{romPct}%</div>
@@ -1425,11 +1681,22 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
         case 7: return(
           <div>
             <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'8px 10px',marginBottom:10,fontSize:11}}>
-              🧪 <strong>Tests específicos — {REGIONES_LIST.find(r=>r.k===ev.region)?.label||ev.region}</strong>{ev.tejidoSospechado?<> · filtrados por tejido sospechado: <strong>{ev.tejidoSospechado}</strong></>:<> · elegí un tejido sospechado en el paso 1 para acotar la lista, o dejalo vacío para ver todos.</>}
+              🧪 <strong>Tests específicos</strong> — se muestran los de cada región evaluada, filtrados por el tejido que elegiste para esa región en el paso 1.
             </div>
-            {(TESTS_ESP[ev.region]||[]).filter(t=>!ev.tejidoSospechado||t.indica===ev.tejidoSospechado).map(t=>{
-              const resD=ev.testsEsp[t.n+'_Derecho']||'';
-              const resI=ev.testsEsp[t.n+'_Izquierdo']||'';
+            {regionesEv.map(rk=>{
+             const rl=REGIONES_LIST.find(x=>x.k===rk);
+             const tj=tejidoDe(rk);
+             const lista=(TESTS_ESP[rk]||[]).filter(t=>!tj||t.indica===tj);
+             return(
+             <div key={rk} style={{marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:`${rl?.color||NV}12`,border:`1px solid ${rl?.color||NV}44`,borderRadius:7,padding:'6px 10px',marginBottom:7}}>
+                <span style={{fontSize:12,fontWeight:800,color:rl?.color||NV}}>{rl?.emoji} {rl?.label||rk}</span>
+                <span style={{fontSize:10,color:GD}}>{tj?`tejido: ${tj}`:'screening amplio'} · {lista.length} tests</span>
+              </div>
+              {lista.length===0&&<div style={{fontSize:11,color:GM,fontStyle:'italic',padding:'6px 2px'}}>Sin tests para esa combinación de región y tejido.</div>}
+             {lista.map(t=>{
+              const resD=getTestEspR(rk,t.n+'_Derecho')||'';
+              const resI=getTestEspR(rk,t.n+'_Izquierdo')||'';
               const anyPos=resD==='positivo'||resI==='positivo';
               const anyDone=resD||resI;
               return(
@@ -1461,12 +1728,12 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                       </details>
                       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
                         {['Derecho','Izquierdo'].map(lado=>{
-                          const val=ev.testsEsp[t.n+'_'+lado]||'';
+                          const val=getTestEspR(rk,t.n+'_'+lado)||'';
                           const bg=val==='positivo'?'#FEE2E2':val==='negativo'?'#DCFCE7':WH;
                           return(
                             <div key={lado}>
                               <span style={{...fs.lbl,marginBottom:2}}>{lado}</span>
-                              <select value={val} onChange={e=>setTestEsp(t.n+'_'+lado,e.target.value)} style={{...fs.sel,width:'100%',background:bg,borderColor:val==='positivo'?RJ:val==='negativo'?GN:GL}}>
+                              <select value={val} onChange={e=>setTestEspR(rk,t.n+'_'+lado,e.target.value)} style={{...fs.sel,width:'100%',background:bg,borderColor:val==='positivo'?RJ:val==='negativo'?GN:GL}}>
                                 <option value=''>— Sin realizar —</option>
                                 <option value='negativo'>✓ Negativo</option>
                                 <option value='positivo'>⚠ Positivo</option>
@@ -1477,15 +1744,14 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                           );
                         })}
                       </div>
-                      <input value={ev.testsEsp[t.n+'_nota']||''} onChange={e=>setTestEsp(t.n+'_nota',e.target.value)} placeholder="Notas de este test..." style={{...fs.inp,marginTop:5,fontSize:10}} />
+                      <input value={(getTestEspR(rk,t.n+'_nota')||'')||''} onChange={e=>setTestEspR(rk,t.n+'_nota',e.target.value)} placeholder="Notas de este test..." style={{...fs.inp,marginTop:5,fontSize:10}} />
                     </div>
                   </div>
                 </div>
               );
             })}
-            {(TESTS_ESP[ev.region]||[]).filter(t=>!ev.tejidoSospechado||t.indica===ev.tejidoSospechado).length===0&&(
-              <div style={{...fs.card,textAlign:'center',padding:20,borderStyle:'dashed',color:GM,fontSize:12}}>No hay tests cargados para esta región/tejido todavía.</div>
-            )}
+             </div>);
+            })}
           </div>
         );
         case 8: return(
@@ -1909,6 +2175,47 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
       <div style={{padding:'12px 14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
           <button onClick={()=>setView('ver-paciente')} style={{...fs.btnG,fontSize:11}}>← Cancelar</button>
+          {/* Confirmación explícita del paciente. Antes los accesos a "Nueva
+              Evaluación" preseleccionaban pacientes[0] en silencio: si no
+              mirabas el selector, evaluabas a quien estuviera primero en la
+              lista. Ese fue el origen de una evaluación de rodilla cargada al
+              paciente equivocado. */}
+          {currentPac&&!currentEval?._editandoId&&(
+            <div style={{background:'#EFF6FF',border:`2px solid ${NV}`,borderRadius:9,padding:'10px 12px',margin:'9px 0'}}>
+              <div style={{fontSize:9,fontWeight:800,letterSpacing:'.07em',color:NV,marginBottom:3}}>EVALUANDO A</div>
+              <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <span style={{fontSize:15,fontWeight:800}}>{currentPac.nombre} {currentPac.apellido}</span>
+                <select value={currentPac.id} onChange={e=>{const np=pacientes.find(x=>x.id===e.target.value);if(np)setCurrentPac(np);}}
+                  style={{...fs.sel,fontSize:11,flex:1,minWidth:150}}>
+                  {pacientes.map(px=><option key={px.id} value={px.id}>{px.nombre} {px.apellido}</option>)}
+                </select>
+              </div>
+              {currentPac.notas&&<div style={{fontSize:10,color:GD,marginTop:5,fontStyle:'italic'}}>{currentPac.notas.slice(0,140)}</div>}
+            </div>
+          )}
+          {currentEval?._editandoId&&(
+            <div style={{background:'#FFFBEB',border:`1px solid ${AM}`,borderRadius:8,padding:'9px 11px',margin:'9px 0'}}>
+              <div style={{fontSize:11,fontWeight:800,color:'#92400E',marginBottom:6}}>
+                ✏️ Editando una evaluación existente — se corrige la misma, no se crea otra
+              </div>
+              {/* Corrección del caso concreto: equivocarse de paciente en el
+                  selector. Se mueve la fila cambiando paciente_id. */}
+              <div style={{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
+                <span style={{fontSize:10,color:'#92400E',fontWeight:700}}>Paciente:</span>
+                <select value={currentPac?.id||''} onChange={e=>{
+                    const np=pacientes.find(x=>x.id===e.target.value);
+                    if(np)setCurrentPac(np);
+                  }} style={{...fs.sel,fontSize:11,flex:1,minWidth:170}}>
+                  {pacientes.map(px=><option key={px.id} value={px.id}>{px.nombre} {px.apellido}</option>)}
+                </select>
+              </div>
+              {currentEval._pacienteOriginalId&&currentEval._pacienteOriginalId!==currentPac?.id&&(
+                <div style={{fontSize:10,color:'#DC2626',marginTop:5,fontWeight:700}}>
+                  ⚠ Al guardar, esta evaluación se mueve de paciente y deja de figurar en el historial anterior.
+                </div>
+              )}
+            </div>
+          )}
           <div style={{fontWeight:700,fontSize:12,color:GDK}}>{currentPac?.nombre} {currentPac?.apellido}</div>
           <div style={{fontSize:10,color:GM}}>{posActual+1}/{stepsVisibles.length}</div>
         </div>
@@ -2382,6 +2689,11 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   };
 
   const VIEWS={
+    'plan-clinico':<PlanClinico paciente={currentPac} regionesList={REGIONES_LIST}
+      evaluaciones={currentPac?.evaluaciones||[]} planes={planesClinicos}
+      savePlan={savePlanClinico} deletePlan={deletePlanClinico}
+      sesiones={todasSesiones?.filter(x=>x.paciente_id===currentPac?.id)||[]}
+      onVolver={()=>setView('ver-paciente')} fs={fs}/>,
     dashboard:Dashboard(),pacientes:PacientesView(),'ver-paciente':VerPaciente(),'nueva-eval':NuevaEval(),'ver-eval':VerEval(),
     kpis:KPIs(),protocolos:Protocolos(),altas:AltasCli(),sesiones:RegistroSesiones(),
     reevals:<div style={{padding:'14px'}}><div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Re-evaluaciones</div>{pacientes.filter(p=>p.evaluaciones.length>0).map(p=>{const l=p.evaluaciones[p.evaluaciones.length-1];return(<div key={p.id} style={{...fs.card,borderLeft:`4px solid ${AM}`,marginBottom:8}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><div style={{fontSize:12,fontWeight:700}}>{p.nombre} {p.apellido}</div><div style={{fontSize:10,color:GM}}>Última eval.: {l?.fecha} · {FASES_BASE[l?.fase]?.badge}</div>{l?.objetivo&&<div style={{fontSize:10,color:TL}}>🎯 "{l.objetivo}"</div>}</div><button onClick={()=>{setCurrentPac(p);setCurrentEval({...emptyEval(),tipo:'reeval',region:p.region,objetivo:l?.objetivo||''});setEvalStep(0);setView('nueva-eval');}} style={{...fs.btnTL,fontSize:10,padding:'4px 10px'}}>Re-evaluar</button></div></div>);})}
@@ -2407,7 +2719,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             {lbl}
           </button>
         ))}
-        <button onClick={()=>{if(pacientes.length>0){setCurrentPac(pacientes[0]);setCurrentEval(emptyEval());setEvalStep(0);setView('nueva-eval');}else{setEditingPac(emptyPaciente());setShowPacForm(true);}}} style={{marginLeft:'auto',padding:'5px 12px',border:'none',background:TL,color:WH,cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'Arial,sans-serif',borderRadius:5,margin:'5px 0',flexShrink:0}}>
+        <button onClick={()=>{if(pacientes.length>0){setCurrentPac(null);setView('pacientes');}else{setEditingPac(emptyPaciente());setShowPacForm(true);}}} style={{marginLeft:'auto',padding:'5px 12px',border:'none',background:TL,color:WH,cursor:'pointer',fontSize:11,fontWeight:700,fontFamily:'Arial,sans-serif',borderRadius:5,margin:'5px 0',flexShrink:0}}>
           + Evaluación
         </button>
       </div>

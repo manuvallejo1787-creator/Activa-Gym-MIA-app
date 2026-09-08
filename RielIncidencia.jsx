@@ -45,7 +45,7 @@ const BANDAS = [
 
 export default function RielIncidencia({
   clients = [], exs = [], config = {}, saveConfig,
-  saveIncidencia, incidencias = [], marcarResuelta, usuarioEmail = "",
+  saveIncidencia, incidencias = [], marcarResuelta, setEstadoIncidencia, usuarioEmail = "",
 }) {
   const [abierto, setAbierto] = useState(false);
   const [paso, setPaso]       = useState(0);
@@ -146,7 +146,12 @@ export default function RielIncidencia({
     } finally { setGuard(false); }
   };
 
-  const pendientes = incidencias.filter(i => !i.resuelto);
+  const hoyISO = new Date().toISOString().slice(0, 10);
+  const est = (i) => i.estado || (i.resuelto ? 'resuelta' : 'abierta');
+  const abiertas      = incidencias.filter(i => est(i) === 'abierta');
+  const enSeguimiento = incidencias.filter(i => est(i) === 'seguimiento' && !(i.fecha_revision && i.fecha_revision <= hoyISO));
+  const vencidas      = incidencias.filter(i => est(i) === 'seguimiento' &&  (i.fecha_revision && i.fecha_revision <= hoyISO));
+  const pendientes    = [...abiertas, ...vencidas];
 
   // ══════════════════ PANTALLA DE LISTA (profesional) ══════════════════
   if (!abierto) {
@@ -181,44 +186,17 @@ export default function RielIncidencia({
           )}
         </div>
 
-        <div style={{ fontSize: 12, fontWeight: 800, color: G4, marginBottom: 8 }}>
-          Pendientes de conducta ({pendientes.length})
-        </div>
-        {pendientes.length === 0 && (
-          <div style={{ fontSize: 12, color: G3, fontStyle: "italic", padding: "10px 0" }}>Nada pendiente.</div>
-        )}
-        {pendientes.map(i => {
-          const col = i.banda === "bandera" || i.banda === "severo" ? RJ : i.banda === "moderado" ? AM : GN;
-          return (
-            <div key={i.id} style={{ background: WH, border: `1px solid ${G2}`, borderLeft: `4px solid ${col}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 800, fontSize: 13 }}>{i.cliente_nombre}</div>
-                  <div style={{ fontSize: 11, color: G4, marginTop: 2 }}>
-                    {i.ejercicio_nombre || "—"} · <span style={{ color: col, fontWeight: 700 }}>
-                      {i.banda === "bandera" ? "🚩 Bandera clínica" : i.banda === "severo" ? "🔴 Severo" : "🟡 Moderado"}
-                    </span>
-                  </div>
-                  {i.sustituto_nombre && <div style={{ fontSize: 10, color: G3, marginTop: 2 }}>→ sustituido por {i.sustituto_nombre}</div>}
-                  {i.bandera_activa && (
-                    <div style={{ fontSize: 10, color: RJ, marginTop: 3 }}>
-                      {BANDERAS.filter(f => i.banderas?.[f.k]).map(f => f.sub).join(" · ")}
-                    </div>
-                  )}
-                  {i.nota && <div style={{ fontSize: 10, color: G4, marginTop: 3, fontStyle: "italic" }}>“{i.nota}”</div>}
-                  <div style={{ fontSize: 9, color: G3, marginTop: 4 }}>
-                    {new Date(i.fecha).toLocaleString("es-UY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                    {i.reportado_por ? ` · ${i.reportado_por.split("@")[0]}` : ""}
-                  </div>
-                </div>
-                <button onClick={() => marcarResuelta(i)}
-                  style={{ background: GN, color: WH, border: "none", borderRadius: 5, padding: "5px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
-                  Resuelta
-                </button>
-              </div>
-            </div>
-          );
-        })}
+        {/* ── BANDEJA DE CONDUCTA ──────────────────────────────────────
+            Sala no decide la conducta: registra y frena. La conducta
+            (seguir internamente / derivar / cerrar) la decide el profesional
+            desde acá. Separarlo evita el falso dilema de "derivo y cobro" o
+            "cierro como si nada". */}
+        <Bandeja titulo="Requieren tu conducta" items={abiertas} vacio="Nada esperando decisión."
+          setEstado={setEstadoIncidencia} tipo="abierta" />
+        <Bandeja titulo="Revisión vencida" items={vencidas} vacio={null}
+          setEstado={setEstadoIncidencia} tipo="vencida" />
+        <Bandeja titulo="En seguimiento" items={enSeguimiento} vacio={null}
+          setEstado={setEstadoIncidencia} tipo="seguimiento" />
       </div>
     );
   }
@@ -408,6 +386,117 @@ export default function RielIncidencia({
               : "Registrar"}
           </button>
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── Bandeja de conducta ────────────────────────────────────────────────────
+// Tres salidas explícitas, porque dos no alcanzan:
+//   Seguimiento → se controla adentro, con fecha. Ni se deriva ni se cobra.
+//   Derivar     → pasa a FisioActiva como paciente.
+//   Resuelta    → cerrada, sin pendientes.
+// Sin la del medio, una molestia chica queda abierta para siempre o se cierra
+// borrando el rastro. Las dos empujan a dejar de marcar incidencias.
+function Bandeja({ titulo, items, vacio, setEstado, tipo }) {
+  if (!items.length && vacio === null) return null;
+  const colTipo = tipo === 'vencida' ? RJ : tipo === 'seguimiento' ? AM : G4;
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: colTipo, marginBottom: 8 }}>
+        {tipo === 'vencida' ? '⏰ ' : tipo === 'seguimiento' ? '👁 ' : ''}{titulo} ({items.length})
+      </div>
+      {!items.length && vacio && (
+        <div style={{ fontSize: 12, color: G3, fontStyle: 'italic', padding: '8px 0' }}>{vacio}</div>
+      )}
+      {items.map(i => <FilaIncidencia key={i.id} i={i} setEstado={setEstado} vencida={tipo === 'vencida'} />)}
+    </div>
+  );
+}
+
+function FilaIncidencia({ i, setEstado, vencida }) {
+  const [abierto, setAbierto] = useState(false);
+  const [dias, setDias] = useState(7);
+  const [nota, setNota] = useState('');
+  const col = i.banda === 'bandera' || i.banda === 'severo' ? RJ : i.banda === 'moderado' ? AM : GN;
+  const enSeg = (i.estado || '') === 'seguimiento';
+
+  const aplicar = async (estado) => {
+    const extra = {};
+    if (estado === 'seguimiento') {
+      const f = new Date(); f.setDate(f.getDate() + Number(dias || 7));
+      extra.fecha_revision = f.toISOString().slice(0, 10);
+      extra.notas_seguimiento = nota;
+    }
+    if (estado === 'derivada' && !confirm(`¿Derivar a ${i.cliente_nombre} a FisioActiva?\n\nEsto lo marca como caso clínico, no como seguimiento interno.`)) return;
+    try { await setEstado(i, estado, extra); setAbierto(false); }
+    catch (e) { alert('No se pudo guardar: ' + e.message); }
+  };
+
+  return (
+    <div style={{ background: WH, border: `1px solid ${vencida ? RJ : G2}`, borderLeft: `4px solid ${col}`, borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
+      <div style={{ fontWeight: 800, fontSize: 13 }}>{i.cliente_nombre}</div>
+      <div style={{ fontSize: 11, color: G4, marginTop: 2 }}>
+        {i.ejercicio_nombre || '—'} · <span style={{ color: col, fontWeight: 700 }}>
+          {i.banda === 'bandera' ? '🚩 Bandera clínica' : i.banda === 'severo' ? '🔴 Severo' : i.banda === 'moderado' ? '🟡 Moderado' : '🟢 Leve'}
+        </span>
+      </div>
+      {i.sustituto_nombre && <div style={{ fontSize: 10, color: G3, marginTop: 2 }}>→ sustituido por {i.sustituto_nombre}</div>}
+      {i.bandera_activa && (
+        <div style={{ fontSize: 10, color: RJ, marginTop: 3 }}>
+          {BANDERAS.filter(f => i.banderas?.[f.k]).map(f => f.sub).join(' · ')}
+        </div>
+      )}
+      {i.nota && <div style={{ fontSize: 10, color: G4, marginTop: 3, fontStyle: 'italic' }}>“{i.nota}”</div>}
+      {enSeg && i.fecha_revision && (
+        <div style={{ fontSize: 10, marginTop: 3, color: vencida ? RJ : AM, fontWeight: 700 }}>
+          {vencida ? '⏰ Revisión vencida el ' : '👁 Revisar el '}{new Date(i.fecha_revision + 'T12:00').toLocaleDateString('es-UY')}
+          {i.notas_seguimiento ? ` · ${i.notas_seguimiento}` : ''}
+        </div>
+      )}
+      <div style={{ fontSize: 9, color: G3, marginTop: 4 }}>
+        {new Date(i.fecha).toLocaleString('es-UY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+        {i.reportado_por ? ` · ${i.reportado_por.split('@')[0]}` : ''}
+      </div>
+
+      {!abierto ? (
+        <button onClick={() => setAbierto(true)}
+          style={{ marginTop: 8, background: '#1a1a1a', color: WH, border: 'none', borderRadius: 6, padding: '7px 13px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'Arial,sans-serif' }}>
+          Definir conducta
+        </button>
+      ) : (
+        <div style={{ marginTop: 9, borderTop: `1px solid ${G2}`, paddingTop: 9 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 7, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: G4 }}>Revisar en</span>
+            <input type="number" min={1} max={90} value={dias} onChange={e => setDias(e.target.value)}
+              style={{ width: 52, border: `1px solid ${G2}`, borderRadius: 5, padding: '5px 7px', fontSize: 12, outline: 'none' }} />
+            <span style={{ fontSize: 11, color: G4 }}>días</span>
+          </div>
+          <input value={nota} onChange={e => setNota(e.target.value)} placeholder="Qué se hizo / qué controlar"
+            style={{ width: '100%', border: `1px solid ${G2}`, borderRadius: 5, padding: '7px 9px', fontSize: 12, outline: 'none', boxSizing: 'border-box', marginBottom: 8 }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button onClick={() => aplicar('seguimiento')}
+              style={{ flex: 1, minWidth: 120, background: AM, color: WH, border: 'none', borderRadius: 6, padding: '9px', fontSize: 11, fontWeight: 800, cursor: 'pointer', fontFamily: 'Arial,sans-serif' }}>
+              👁 Seguimiento interno
+            </button>
+            <button onClick={() => aplicar('derivada')}
+              style={{ flex: 1, minWidth: 110, background: MO, color: WH, border: 'none', borderRadius: 6, padding: '9px', fontSize: 11, fontWeight: 800, cursor: 'pointer', fontFamily: 'Arial,sans-serif' }}>
+              🏥 Derivar a fisio
+            </button>
+            <button onClick={() => aplicar('resuelta')}
+              style={{ flex: 1, minWidth: 90, background: GN, color: WH, border: 'none', borderRadius: 6, padding: '9px', fontSize: 11, fontWeight: 800, cursor: 'pointer', fontFamily: 'Arial,sans-serif' }}>
+              ✓ Resuelta
+            </button>
+            <button onClick={() => setAbierto(false)}
+              style={{ background: 'none', border: `1px solid ${G2}`, borderRadius: 6, padding: '9px 12px', fontSize: 11, cursor: 'pointer', color: G4, fontFamily: 'Arial,sans-serif' }}>
+              Cancelar
+            </button>
+          </div>
+          <div style={{ fontSize: 9, color: G3, marginTop: 6, lineHeight: 1.5 }}>
+            <strong>Seguimiento interno</strong> no genera consulta ni cobro: frena el patrón,
+            queda registrado y vuelve a aparecer acá en la fecha que elijas.
+          </div>
+        </div>
       )}
     </div>
   );
