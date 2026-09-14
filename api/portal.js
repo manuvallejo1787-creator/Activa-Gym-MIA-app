@@ -1,4 +1,5 @@
 // api/portal.js — Portal del cliente (frontera de seguridad)
+// redeploy
 // El portal del cliente NUNCA toca Supabase directo. Pasa por acá.
 // Esta función valida el token personal del cliente y usa la SERVICE ROLE KEY
 // (solo en el servidor) para devolver/escribir EXCLUSIVAMENTE los datos de ese cliente.
