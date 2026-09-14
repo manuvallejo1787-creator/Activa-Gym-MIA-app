@@ -74,8 +74,27 @@ export default async function handler(req, res) {
           dias: diasCombinados,
         };
         const idsList = planesActivos.map(p => `"${p.id}"`).join(",");
-        logs = await sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at`);
-        const ejs = await sb(`ejercicios?select=id,nombre,media_url,media_tipo,media_desc`);
+
+        // Solo los ejercicios que REALMENTE están en el plan de este cliente.
+        // Antes se pedían los 424 de la base en cada carga del portal, aunque
+        // un plan típico use ~25. Eso hacía una respuesta de ~87 kB y, en free
+        // tier con arranque en frío, la cadena de consultas superaba el tiempo
+        // límite: Supabase devolvía "Bad Gateway" o "Failed to get project
+        // config" de forma intermitente.
+        const idsEjercicios = new Set();
+        planesActivos.forEach(pl => (pl.dias || []).forEach(d =>
+          (d.blocks || []).forEach(b => (b.exercises || []).forEach(e => {
+            if (e && e.exId) idsEjercicios.add(e.exId);
+          }))));
+
+        // Las dos consultas restantes no dependen entre sí: van en paralelo.
+        const [logsRes, ejs] = await Promise.all([
+          sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at&order=updated_at.desc&limit=600`),
+          idsEjercicios.size
+            ? sb(`ejercicios?id=in.(${[...idsEjercicios].map(i => `"${i}"`).join(",")})&select=id,nombre,media_url,media_tipo,media_desc`)
+            : Promise.resolve([]),
+        ]);
+        logs = logsRes;
         (ejs || []).forEach(e => {
           nombres[e.id] = e.nombre;
           if (e.media_url) media[e.id] = { url: e.media_url, tipo: e.media_tipo || "imagen", desc: e.media_desc || "" };

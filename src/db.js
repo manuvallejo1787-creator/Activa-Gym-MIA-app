@@ -952,3 +952,34 @@ export function useIncidencias(){
 
   return{incidencias,loading,saveIncidencia,marcarResuelta,setEstadoIncidencia,refetch:fetch}
 }
+
+// ─── HOOK: Planes clínicos a largo plazo (multi-región) ───────────────────
+export function usePlanesClinicos(pacienteId){
+  const [planes,setPlanes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!pacienteId){setPlanes([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('fisio_planes_clinicos').select('*')
+        .eq('paciente_id',pacienteId).order('created_at',{ascending:false})
+      if(error)throw error
+      setPlanes(data||[])
+    }catch(e){console.error('fisio_planes_clinicos:',e.message);setPlanes([])}
+    finally{setLoading(false)}
+  },[pacienteId])
+  useEffect(()=>{fetch()},[fetch])
+  const savePlan=useCallback(async(plan)=>{
+    const toSave={...plan,paciente_id:pacienteId,updated_at:new Date().toISOString()}
+    if(isSupabaseReady){
+      const{error}=await supabase.from('fisio_planes_clinicos').upsert(toSave,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    } else setPlanes(p=>p.find(x=>x.id===plan.id)?p.map(x=>x.id===plan.id?toSave:x):[toSave,...p])
+    return toSave
+  },[pacienteId,fetch])
+  const deletePlan=useCallback(async(id)=>{
+    if(isSupabaseReady){await supabase.from('fisio_planes_clinicos').delete().eq('id',id);await fetch()}
+    else setPlanes(p=>p.filter(x=>x.id!==id))
+  },[fetch])
+  return{planes,loading,savePlan,deletePlan,refetch:fetch}
+}
