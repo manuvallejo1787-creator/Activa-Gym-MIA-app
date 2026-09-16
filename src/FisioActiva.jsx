@@ -7,21 +7,10 @@ import { getPrintCSS } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCriteriosAvanceTemplate, usePlanesClinicos, genId } from "./db.js";
 import PlanClinico from "./PlanClinico.jsx";
+import { FASE_A_PROT, prescripcionDeHoy, PROT_SESION } from "./planClinicoMotor.js";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
-const PROT_SESION = {
-  cervical:{ aguda:['Isométrico cervical anterior','Isométrico cervical posterior','Retracción cervical en supino','Movilización escapular activa','Respiración diafragmática'], subaguda:['Chin tuck dinámico sentado','Rotación cervical activa-asistida','Flexión-extensión cervical activa','Inclinación lateral activa','Estiramiento trapecio superior','Deep neck flexor (DNF) progresivo'], cronica:['Chin tuck con banda de resistencia','Fortalecimiento extensores cervicales','Propiocepción cervical con laser pointer','Fortalecimiento postural global','Estabilización cervical en cuadrupedia'] },
-  hombro:  { aguda:['Péndulo de Codman','Isométrico de hombro en posición neutra','Rotación externa isométrica 0° abd','Control escapular en reposo','Crioterapia post-actividad'], subaguda:['Polea de hombro (flexión asistida)','Rotación externa con banda (neutro)','Scaption en plano escapular','Estiramiento cápsula posterior','Retracción escapular con banda','Y/T/W en banco inclinado'], cronica:['Press de hombro con mancuerna','Remo vertical en polea','Push-up plus (protracción)','Rotación externa a 90° abducción','Entrenamiento excéntrico manguito'] },
-  codo:    { aguda:['Inmovilización relativa + elevación','Isométrico de flexores de codo','Movilización activa de muñeca','Crioterapia + compresión'], subaguda:['Flexo-extensión de codo activa','Pronosupinación activa','Excéntrico extensores de muñeca','Excéntrico flexores de muñeca','Estiramiento extensores antebrazo','Fortalecimiento agarre progresivo'], cronica:['Curl de bíceps con mancuerna','Extensión de tríceps en polea','Fortalecimiento global antebrazo','Ejercicios funcionales de empuje/tracción'] },
-  muneca:  { aguda:['Reposo relativo + ortesis funcional','Movilización activa dedos','Isométrico muñeca en neutro','Crioterapia + elevación'], subaguda:['Flexo-extensión muñeca activa','Desviación radial-cubital activa','Pronosupinación progresiva','Fortalecimiento agarre con pelota'], cronica:['Fortalecimiento muñeca con banda','Ejercicios propioceptivos de muñeca','Fortalecimiento funcional de pinza'] },
-  esc:     { aguda:['Isométrico escapular suave','Retracción escapular pasiva','Respiración diafragmática','Control postural cervical'], subaguda:['Retracción escapular con banda','Remo con foco escapular','Serrato anterior (serratus push-up)','Y/T/W bajo peso'], cronica:['Press hombro con mancuerna','Remo en polea alta','Fortalecimiento postural integrado','Planificación funcional sobre la cabeza'] },
-  columna: { aguda:['Respiración diafragmática','Movilización suave en descarga','Isométrico lumbar en neutro','Educación postural'], subaguda:['Cat-camel en cuadrupedia','Bird-dog progresivo','Puente de glúteo básico','Estiramiento cadena posterior'], cronica:['Peso muerto con barra','Sentadilla goblet','Plancha anterior y lateral','Fortalecimiento funcional integrado'] },
-  lumbar:  { aguda:['Respiración diafragmática','Decúbito con almohada bajo rodillas','Movilización suave en descarga','Retracción abdominal suave'], subaguda:['Cat-camel en cuadrupedia','Bird-dog progresivo','Puente de glúteo bilateral','Estiramiento piriforme y psoas'], cronica:['Peso muerto rumano progresivo','Sentadilla goblet','Dead bug avanzado','Fortalecimiento funcional lumbar'] },
-  cadera:  { aguda:['Isométrico de glúteo','Movilización activa en descarga','Retracción abdominal suave','Crioterapia si hay inflamación'], subaguda:['Clamshell con banda','Puente de glúteo unilateral','Estiramiento psoas y TFL','Sentadilla parcial con banda'], cronica:['Hip thrust con barra','Sentadilla búlgara','Peso muerto unilateral','Trabajo funcional de cadera'] },
-  rodilla: { aguda:['Isométrico cuádriceps','Elevación pierna extendida','Movilización rotuliana suave','Crioterapia + compresión + elevación'], subaguda:['Sentadilla parcial','TKE (extensión terminal de rodilla)','Curl de isquiotibiales','Propiocepción básica bipodal'], cronica:['Sentadilla completa progresiva','Peso muerto rumano','Saltos reactivos progresivos','Fortalecimiento funcional de rodilla'] },
-  tobillo: { aguda:['RICE: reposo relativo + hielo + compresión + elevación','Movilización activa del tobillo','Alfabeto con el pie','Peroneales isométricos'], subaguda:['Ejercicios de fuerza peroneales con banda','Elevaciones de talón en escalón','Propiocepción bipodal en superficie estable','Estiramiento del gemelo y sóleo'], cronica:['Propiocepción unipodal en inestable','Salto y aterrizaje progresivo','Fortalecimiento funcional tobillo','Deporte-específico'] },
-};
 
 
 // Alias local para compatibilidad con el código existente
@@ -408,8 +397,11 @@ const fs={
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── SesionClienteComp — external component (hooks: useState + useSesionesClinicas) ──
-function SesionClienteComp({ paciente, reglas=[] }) {
+function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
   const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
+  // Prescripción del plan clínico para la fecha de la sesión: en qué semana
+  // estamos, qué fase corresponde a cada región y qué ejercicios van hoy.
+  const planActivo = (planesClinicos || []).find(p => p.estado === 'activo') || null;
   const [showForm, setShowForm] = useState(false);
   const [filtroReg, setFiltroReg] = useState('');
   const [form, setF] = useState(null);
@@ -446,11 +438,18 @@ function SesionClienteComp({ paciente, reglas=[] }) {
 
   // ── Auto-cargar ejercicios del protocolo según región y fase ─────────────
   const protocoloEjercicios = useMemo(() => {
+    // FIX: acá se consultaba PROT_SESION con `faseActual`, que es la fase de
+    // NEGOCIO (restaura/activa/potencia/rinde), cuando las claves del catálogo
+    // son las fases CLÍNICAS (aguda/subaguda/cronica). prot['restaura'] nunca
+    // existió, así que este catálogo de 10 regiones × 3 fases NUNCA devolvió
+    // un solo ejercicio desde que se escribió.
     const regionKey = regionActual.replace(/\s+/g,'_');
     const prot = PROT_SESION[regionKey] || PROT_SESION[regionActual] || {};
-    const ejercs = prot[faseActual] || [];
-    return ejercs.map((nombre, i) => ({ id: 'prot_' + i, nombre, activo: true, editado: false }));
-  }, [regionActual, faseActual]);
+    const faseClinica = ultimaEval?.faseRehab || 'proteccion';
+    const clave = FASE_A_PROT[faseClinica] || 'subaguda';
+    const ejercs = prot[clave] || [];
+    return ejercs.map((nombre, i) => ({ id: 'prot_' + i, nombre, activo: true, editado: false, fase: faseClinica }));
+  }, [regionActual, ultimaEval]);
 
   // ── Auto-cargar criterios de avance según fase ───────────────────────────
   // Antes tomaba directo FASES_METODO[faseActual].criterios_avance — eso es
@@ -706,6 +705,58 @@ function SesionClienteComp({ paciente, reglas=[] }) {
         </div>
       </div>
       {/* Banner protocolo activo */}
+      {/* ── PRESCRIPCIÓN DEL PLAN PARA HOY ───────────────────────────────
+          Ata el plan clínico a la sesión: el plan dice en qué semana y fase
+          está cada región y qué ejercicios corresponden; la sesión lo toma
+          de ahí en vez de que haya que recordarlo. */}
+      {planActivo&&(()=>{
+        const pres=prescripcionDeHoy(planActivo,f.fecha||new Date().toISOString().slice(0,10));
+        if(!pres)return null;
+        if(pres.fueraDePlan)return(
+          <div style={{background:'#FFFBEB',border:`1px solid ${AM}`,borderRadius:8,padding:'9px 11px',marginBottom:10,fontSize:11,color:'#92400E'}}>
+            ⚠ <strong>Fuera del plan:</strong> {pres.motivo}
+          </div>
+        );
+        return(
+          <div style={{background:'#EFF6FF',border:`1px solid #93C5FD`,borderRadius:8,padding:'10px 12px',marginBottom:10}}>
+            <div style={{fontSize:11,fontWeight:800,color:NV2,marginBottom:6}}>
+              🗓️ {planActivo.nombre} · semana {pres.semana} de {pres.totalSemanas}
+            </div>
+            {pres.regiones.map(r=>(
+              <div key={r.region} style={{borderLeft:`3px solid ${r.color}`,paddingLeft:9,marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:800}}>
+                  {r.region} — <span style={{color:r.color}}>{r.label}</span>
+                  <span style={{color:G3c,fontWeight:400}}> (sem {r.semanaDeFase} de {r.totalFase} de esta fase)</span>
+                </div>
+                <div style={{fontSize:10,color:G4c,marginTop:2}}>
+                  {r.dosis.series} × {r.dosis.reps} · {r.dosis.carga} · descanso {r.dosis.descanso}
+                </div>
+                {r.ejercicios.length>0&&(
+                  <div style={{marginTop:5}}>
+                    <button onClick={()=>{
+                        const nuevos=r.ejercicios.map((e,i)=>({id:'plan_'+r.region+'_'+i,nombre:e.nombre,activo:true,editado:false}));
+                        setF(p=>({...p,
+                          region:p.region||r.region,
+                          fase:p.fase||r.fase,
+                          plan_clinico_id:planActivo.id,
+                          semana_plan:pres.semana,
+                          ejercicios_lista:[...(p.ejercicios_lista||[]),...nuevos.filter(n=>!(p.ejercicios_lista||[]).some(x=>x.nombre===n.nombre))],
+                          criterios_lista:(p.criterios_lista&&p.criterios_lista.length)?p.criterios_lista:r.criterios.map((c,i)=>({id:'cr_'+i,texto:c,cumplido:false})),
+                        }));
+                      }}
+                      style={{...s2.btnTl,fontSize:10,padding:'4px 10px'}}>
+                      + Cargar los {r.ejercicios.length} ejercicios de esta fase
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+            <div style={{fontSize:9,color:G3c,marginTop:4,fontStyle:'italic'}}>
+              La sesión queda ligada al plan y a la semana, así el progreso se puede leer contra lo planificado.
+            </div>
+          </div>
+        );
+      })()}
       {protocoloEjercicios.length>0&&(
         <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:7,padding:'8px 12px',marginBottom:10}}>
           <div style={{fontSize:10,fontWeight:700,color:GN2,marginBottom:4}}>🏥 Protocolo activo: {regionActual} — {faseLabels[faseActual]}</div>
@@ -2682,7 +2733,7 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
             {pacientes.map(p=><option key={p.id} value={p.id}>{p.nombre} {p.apellido} {p.region?`· ${p.region}`:''}</option>)}
           </select>
         </div>
-        {pacSel&&<SesionClienteComp paciente={pacSel} reglas={reglas}/>}
+        {pacSel&&<SesionClienteComp paciente={pacSel} reglas={reglas} planesClinicos={planesSesion}/>}
         {!sesionPacId&&<div style={{...fs.card,textAlign:'center',padding:28,borderStyle:'dashed',color:GM}}>Seleccioná un paciente para ver y registrar sesiones.</div>}
       </div>
     );

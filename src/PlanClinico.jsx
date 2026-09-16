@@ -16,6 +16,7 @@
 // y tratar los efectos en paralelo gasta sesiones sin resolver la causa.
 
 import { useState, useMemo, useEffect } from "react";
+import { HORIZONTES, generarPlanClinico, DOSIS_FASE, PROT_SESION } from "./planClinicoMotor.js";
 
 const NV = '#0A3D62', TL = '#1BAA86', CR = '#FF6F4C';
 const WH = '#FFFFFF', BG = '#F0F4F8', GL = '#E2E8F0';
@@ -97,6 +98,14 @@ export default function PlanClinico({
       <div style={{ fontSize: 11, color: GM, marginBottom: 14 }}>
         Planificación a largo plazo con asignación de sesiones entre regiones.
       </div>
+
+      {/* ── GENERADOR POR HORIZONTE ─────────────────────────────────────────
+          El plazo lo propone el tejido, no la preferencia. Un plan de 4
+          semanas para una tendinopatía es un error con interfaz linda: la
+          remodelación del colágeno no se acelera poniendo una fecha corta. */}
+      <GeneradorHorizonte
+        paciente={paciente} evaluaciones={evaluaciones} regionesList={regionesList}
+        onGenerado={async (plan) => { await savePlan(plan); }} fs={fs} />
 
       {!activo && (
         <div style={{ background: '#EFF6FF', border: `1px solid #93C5FD`, borderRadius: 9, padding: '13px 15px', marginBottom: 14 }}>
@@ -389,3 +398,182 @@ function Editor({ plan: planIn, paciente, regionesList, onCancel, onSave, fs }) 
 
 const th = { background: NV, color: WH, fontSize: 9, fontWeight: 700, padding: '5px 6px', textAlign: 'center', border: `1px solid ${NV}` };
 const td = { border: `1px solid ${GL}`, padding: '4px 6px', fontSize: 11, textAlign: 'center' };
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GENERADOR POR HORIZONTE TEMPORAL
+// ═══════════════════════════════════════════════════════════════════════════
+function GeneradorHorizonte({ paciente, evaluaciones, regionesList, onGenerado, fs }) {
+  const [abierto, setAbierto] = useState(false);
+  const [horizonte, setHorizonte] = useState(null);   // null = el que sugiere el tejido
+  const [semanas, setSemanas] = useState(null);
+  const [regionesSel, setRegionesSel] = useState(null);
+  const [res, setRes] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const regionesDisp = useMemo(() => {
+    const set = new Set();
+    (evaluaciones || []).forEach(e => {
+      const rs = (e.regiones && e.regiones.length) ? e.regiones : [e.region];
+      rs.forEach(r => r && set.add(r));
+    });
+    return [...set];
+  }, [evaluaciones]);
+
+  const lbl = (rk) => regionesList.find(x => x.k === rk)?.label || rk;
+
+  const generar = () => {
+    try {
+      setRes(generarPlanClinico({
+        paciente, evaluaciones,
+        regionesSel: regionesSel && regionesSel.length ? regionesSel : null,
+        horizonteElegido: horizonte, semanasElegidas: semanas,
+        sesionesContratadas: Number(paciente?.sesionesContratadas || paciente?.sesiones_contratadas || 0) || 0,
+        protSesion: PROT_SESION, custom: [],
+      }));
+    } catch (e) { alert('No se pudo generar: ' + e.message); }
+  };
+
+  if (!abierto) {
+    return (
+      <div style={{ background: '#EFF6FF', border: `1px solid #93C5FD`, borderRadius: 9, padding: '13px 15px', marginBottom: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: NV, marginBottom: 4 }}>⚡ Generar plan desde las evaluaciones</div>
+        <div style={{ fontSize: 11, color: GD, lineHeight: 1.55, marginBottom: 10 }}>
+          Corto (≤4 sem), medio (4-12) o largo plazo (&gt;12), con fases, criterios de salida
+          y ejercicios prescritos por fase. El plazo se propone según el tejido evaluado.
+        </div>
+        <button onClick={() => { setAbierto(true); }} style={{ ...fs.btnTL, fontSize: 12 }}>Armar plan por horizonte</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: WH, border: `1px solid ${GL}`, borderRadius: 9, padding: 13, marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 800 }}>⚡ Plan por horizonte temporal</span>
+        <button onClick={() => { setAbierto(false); setRes(null); }} style={{ background: 'none', border: 'none', color: GM, fontSize: 18, cursor: 'pointer' }}>✕</button>
+      </div>
+
+      {/* Regiones */}
+      {regionesDisp.length > 1 && (
+        <div style={{ marginBottom: 10 }}>
+          <span style={fs.lbl}>Regiones a incluir (por defecto, todas las evaluadas)</span>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+            {regionesDisp.map(rk => {
+              const act = !regionesSel || regionesSel.includes(rk);
+              return (
+                <button key={rk} onClick={() => {
+                    const base = regionesSel || regionesDisp;
+                    const n = base.includes(rk) ? base.filter(x => x !== rk) : [...base, rk];
+                    setRegionesSel(n.length ? n : null); setRes(null);
+                  }}
+                  style={{ background: act ? NV : WH, color: act ? WH : GD, border: `1px solid ${NV}`, borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                  {lbl(rk)}{act ? ' ✓' : ''}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Horizonte */}
+      <span style={fs.lbl}>Horizonte</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 6, marginTop: 4, marginBottom: 10 }}>
+        <button onClick={() => { setHorizonte(null); setSemanas(null); setRes(null); }}
+          style={{ gridColumn: '1/-1', background: horizonte === null ? TL : WH, color: horizonte === null ? WH : GD, border: `1px solid ${TL}`, borderRadius: 7, padding: '9px', fontSize: 11, fontWeight: 800, cursor: 'pointer', textAlign: 'left' }}>
+          🧬 El que corresponda al tejido (recomendado)
+        </button>
+        {Object.values(HORIZONTES).map(h => (
+          <button key={h.k} onClick={() => { setHorizonte(h.k); setSemanas(null); setRes(null); }}
+            style={{ background: horizonte === h.k ? h.color : WH, color: horizonte === h.k ? WH : GD, border: `1px solid ${h.color}`, borderRadius: 7, padding: '8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}>
+            {h.label}<span style={{ display: 'block', fontSize: 9, opacity: .8, fontWeight: 400 }}>{h.rango}</span>
+          </button>
+        ))}
+      </div>
+
+      {horizonte && (
+        <div style={{ marginBottom: 10 }}>
+          <span style={fs.lbl}>Semanas (dentro de {HORIZONTES[horizonte].rango})</span>
+          <input type="number" min={HORIZONTES[horizonte].semanasMin} max={HORIZONTES[horizonte].semanasMax}
+            value={semanas ?? ''} placeholder="auto"
+            onChange={e => { setSemanas(e.target.value ? +e.target.value : null); setRes(null); }}
+            style={{ ...fs.inp, width: 90 }} />
+        </div>
+      )}
+
+      <button onClick={generar} style={{ ...fs.btnTL, fontSize: 12, width: '100%' }}>Generar</button>
+
+      {res && <ResultadoGenerado res={res} lbl={lbl} guardando={guardando}
+        onAplicar={async () => {
+          const d = res.diagnostico;
+          const msg = d.listoParaAplicar
+            ? `¿Guardar "${res.plan.nombre}"?`
+            : `⚠ Este plan tiene ${d.bloqueantes.length} punto(s) que contradicen el plazo biológico o el presupuesto:\n\n${d.bloqueantes.join('\n\n')}\n\n¿Guardarlo igual?`;
+          if (!confirm(msg)) return;
+          setGuardando(true);
+          try { await onGenerado(res.plan); setRes(null); setAbierto(false); }
+          catch (e) { alert('No se pudo guardar: ' + e.message); }
+          finally { setGuardando(false); }
+        }} fs={fs} />}
+    </div>
+  );
+}
+
+function ResultadoGenerado({ res, lbl, onAplicar, guardando, fs }) {
+  const d = res.diagnostico, p = res.plan;
+  const H = HORIZONTES[p.horizonte];
+  return (
+    <div style={{ marginTop: 12, background: BG, borderRadius: 8, padding: 11 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: H.color }}>{p.nombre}</div>
+      <div style={{ fontSize: 10, color: GD, marginTop: 2, marginBottom: 8 }}>
+        {p.semanas} semanas · {p.regiones.length} región(es) · ~{d.sesionesEstimadas} sesiones estimadas
+        ({d.sesionesPorSemana}/semana)
+      </div>
+
+      {d.bloqueantes.map((b, i) => (
+        <div key={i} style={{ background: '#FEF2F2', border: `1px solid ${RJ}`, borderRadius: 6, padding: '8px 10px', marginBottom: 6, fontSize: 10, color: '#991B1B', lineHeight: 1.5 }}>⛔ {b}</div>
+      ))}
+      {d.avisos.slice(0, 4).map((a, i) => (
+        <div key={i} style={{ fontSize: 10, color: '#92400E', marginBottom: 4, lineHeight: 1.5 }}>🧬 {a}</div>
+      ))}
+
+      {/* Timeline por región */}
+      {(p.fases_detalle || []).map(reg => (
+        <div key={reg.region} style={{ marginTop: 10, background: WH, borderRadius: 7, padding: '9px 10px' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 2 }}>{lbl(reg.region)}</div>
+          <div style={{ fontSize: 9, color: GM, marginBottom: 7 }}>
+            {reg.tejido || 'sin tejido definido'} · EVA {reg.eva ?? '—'} · arranca en {reg.faseInicial}
+          </div>
+          {reg.fases.map(f => (
+            <div key={f.fase} style={{ borderLeft: `3px solid ${f.color}`, paddingLeft: 9, marginBottom: 9 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: f.color }}>
+                {f.emoji} {f.label} <span style={{ color: GM, fontWeight: 400 }}>· semanas {f.semanaDesde}–{f.semanaHasta} ({f.semanas})</span>
+              </div>
+              <div style={{ fontSize: 10, color: GD, marginTop: 2, lineHeight: 1.45 }}>{f.objetivo}</div>
+              <div style={{ fontSize: 9, color: NV, marginTop: 3, background: '#EFF6FF', borderRadius: 5, padding: '5px 7px', lineHeight: 1.5 }}>
+                <strong>Dosis:</strong> {f.dosis.series} × {f.dosis.reps} · {f.dosis.carga} · {f.dosis.frecuencia} · descanso {f.dosis.descanso}
+                <br /><em>{f.dosis.intencion}</em>
+              </div>
+              {f.ejercicios.length > 0 && (
+                <div style={{ fontSize: 10, color: GD, marginTop: 4 }}>
+                  <strong>{f.ejercicios.length} ejercicios:</strong> {f.ejercicios.slice(0, 4).map(e => e.nombre).join(' · ')}
+                  {f.ejercicios.length > 4 && ` … +${f.ejercicios.length - 4}`}
+                </div>
+              )}
+              {f.criterios.length > 0 && (
+                <div style={{ fontSize: 9, color: GM, marginTop: 4 }}>
+                  <strong>Para pasar de fase:</strong> {f.criterios.slice(0, 3).join(' · ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+
+      <button onClick={onAplicar} disabled={guardando}
+        style={{ width: '100%', marginTop: 11, background: d.listoParaAplicar ? TL : AM, color: WH, border: 'none', borderRadius: 7, padding: '11px', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+        {guardando ? 'Guardando…' : d.listoParaAplicar ? 'Guardar plan' : 'Guardar igual y ajustar'}
+      </button>
+    </div>
+  );
+}

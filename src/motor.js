@@ -161,7 +161,12 @@ export function calcEva({ screening = {}, evaluacion = null, incidencias = [] } 
   const d = screening.dolorActual;
   if (d && DOLOR_EVA[d] !== undefined) {
     const fEval = screening.fechaEvaluacion ? new Date(screening.fechaEvaluacion) : null;
-    const dias = fEval && !isNaN(fEval) ? Math.round((Date.now() - fEval.getTime()) / 864e5) : null;
+    let dias = fEval && !isNaN(fEval) ? Math.round((Date.now() - fEval.getTime()) / 864e5) : null;
+    // Guarda contra fechas corruptas: en la base hay un "262026-12-06" que
+    // producía -94.963.132 días y pasaba el control de vigencia como si fuera
+    // reciente. Cualquier valor negativo o mayor a 10 años es un dato inválido,
+    // no un dato viejo: se reporta como no medido.
+    if (dias !== null && (dias < 0 || dias > 3650)) dias = null;
     const vencido = dias === null || dias > VIGENCIA_SCREENING_DIAS;
     if (vencido) {
       return {

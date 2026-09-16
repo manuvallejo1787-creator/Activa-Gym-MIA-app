@@ -10,6 +10,7 @@ import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
+import { generarPlanBase } from "./generadorPlan.js";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
 import { POTENCIA_NORMAS, PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
@@ -3101,6 +3102,8 @@ export default function App(){
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
   const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia } = useIncidencias();
+  const [gpDias,setGpDias]=useState(3);
+  const [gpResultado,setGpResultado]=useState(null);
   const usuario = useUsuarioActual();
   // El badge cuenta solo lo que requiere acción HOY: incidencias sin conducta
   // definida y seguimientos cuya fecha de revisión ya venció. Un seguimiento
@@ -4108,6 +4111,86 @@ export default function App(){
               ))}
             </div>
             <div style={{marginTop:8,fontSize:9,color:'#9FD9EC',fontStyle:'italic'}}>Estas son las fases del <strong style={{color:'#7FE9CE'}}>plan</strong> (ej. periodización). La fase del <strong style={{color:'#7FE9CE'}}>Método</strong> ({activeClient&&FASES_METODO[activeClient.nivel]?FASES_METODO[activeClient.nivel].label:activeClient?.nivel}) es transversal y se mantiene en el encabezado.</div>
+          </div>
+        )}
+        {/* ── GENERAR PLAN DESDE LA EVALUACIÓN ──────────────────────────────
+            Antes suggestBlocks() dejaba los bloques VACÍOS y había que
+            llenarlos a mano: ~30 min por cliente. Todas las piezas del motor
+            combinatorio ya existían sueltas (OBJS.blocks, PERIODIZACIONES,
+            checkRestriction, sugerirPeso, motor.js) — nadie las encadenaba. */}
+        {activeClient&&(
+          <div style={{background:'#0B2E24',borderRadius:10,padding:'16px',marginBottom:16,border:`1px solid #1BAA86`}}>
+            <div style={{fontSize:14,fontWeight:800,color:'#7FE9CE',marginBottom:3}}>⚡ Generar plan desde la evaluación</div>
+            <div style={{fontSize:11,color:'#9FD9EC',marginBottom:11,lineHeight:1.5}}>
+              Arma los {gpDias} días completos usando los déficits detectados en el screening de {activeClient.nombre},
+              sus restricciones y sus tests de fuerza. Después lo ajustás.
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:10}}>
+              <span style={{fontSize:11,color:'#9FD9EC'}}>Días por semana:</span>
+              {[2,3,4,5].map(d=>(
+                <button key={d} onClick={()=>setGpDias(d)}
+                  style={{background:gpDias===d?'#1BAA86':'transparent',color:gpDias===d?'#04231C':'#7FE9CE',
+                    border:`1px solid #1BAA86`,borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:800,cursor:'pointer'}}>{d}</button>
+              ))}
+            </div>
+            <button onClick={()=>{
+                try{
+                  const r=generarPlanBase({cliente:activeClient,exs,tests:activeClientTests||[],
+                    incidencias,diasSemana:gpDias,checkRestriction,genId});
+                  setGpResultado(r);
+                }catch(e){alert('No se pudo generar: '+e.message);}
+              }}
+              style={{background:'#1BAA86',color:'#04231C',border:'none',borderRadius:7,padding:'11px 16px',fontSize:13,fontWeight:800,cursor:'pointer',width:'100%'}}>
+              Generar plan de {gpDias} días
+            </button>
+
+            {gpResultado&&(()=>{
+              const d=gpResultado.diagnostico;
+              return(
+                <div style={{marginTop:12,background:'#04231C',borderRadius:8,padding:'12px'}}>
+                  <div style={{fontSize:12,fontWeight:800,color:d.listoParaAplicar?'#7FE9CE':'#FCA5A5',marginBottom:6}}>
+                    {d.listoParaAplicar?'✅ Listo para aplicar':'⛔ Requiere tu confirmación'}
+                  </div>
+                  <div style={{fontSize:10,color:'#9FD9EC',lineHeight:1.6,marginBottom:8}}>
+                    <strong style={{color:'#7FE9CE'}}>De qué datos salió:</strong><br/>
+                    {d.procedencia.length?d.procedencia.map((p,i)=><span key={i}>· {p}<br/></span>):<span>· sin datos de evaluación<br/></span>}
+                  </div>
+                  {d.bloqueantes.map((b,i)=>(
+                    <div key={i} style={{background:'#3A1215',border:'1px solid #DC2626',borderRadius:6,padding:'7px 9px',marginBottom:5,fontSize:10,color:'#FCA5A5',lineHeight:1.45}}>⛔ {b}</div>
+                  ))}
+                  {d.avisos.map((a,i)=>(
+                    <div key={i} style={{fontSize:10,color:'#FCD34D',marginBottom:3,lineHeight:1.45}}>⚠ {a}</div>
+                  ))}
+                  {d.patronesDeficit.length>0&&(
+                    <div style={{fontSize:10,color:'#9FD9EC',marginTop:6}}>
+                      <strong style={{color:'#7FE9CE'}}>Prioridades detectadas:</strong> {d.patronesDeficit.slice(0,8).join(' · ')}
+                    </div>
+                  )}
+                  <div style={{fontSize:10,color:'#9FD9EC',marginTop:6}}>
+                    {d.cobertura.totalEj} ejercicios · {d.cobertura.pctConPeso}% con peso sugerido
+                    {d.cobertura.conAviso>0&&` · ${d.cobertura.conAviso} marcados por restricción`}
+                  </div>
+                  <div style={{display:'flex',gap:7,marginTop:11,flexWrap:'wrap'}}>
+                    <button onClick={()=>{
+                        const msg=d.listoParaAplicar
+                          ?`¿Aplicar el plan generado?\n\nReemplaza los ${gpDias} días del constructor.`
+                          :`⚠ Este plan tiene ${d.bloqueantes.length} punto(s) que requieren tu criterio:\n\n${d.bloqueantes.join('\n\n')}\n\n¿Aplicarlo igual y ajustarlo a mano?`;
+                        if(!confirm(msg))return;
+                        // La sesión guarda los días en session.dias y el día
+                        // activo en session.activeDia.
+                        setSession(prev=>({...prev,dias:gpResultado.plan.dias,activeDia:0,
+                          periodizacion:gpResultado.plan.periodizacion||prev.periodizacion}));
+                        setGpResultado(null);
+                      }}
+                      style={{flex:1,minWidth:150,background:d.listoParaAplicar?'#1BAA86':'#D97706',color:'#04231C',border:'none',borderRadius:6,padding:'9px',fontSize:12,fontWeight:800,cursor:'pointer'}}>
+                      {d.listoParaAplicar?'Aplicar al constructor':'Aplicar igual y ajustar'}
+                    </button>
+                    <button onClick={()=>setGpResultado(null)}
+                      style={{background:'none',border:'1px solid #1BAA86',color:'#7FE9CE',borderRadius:6,padding:'9px 13px',fontSize:11,cursor:'pointer'}}>Descartar</button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
         <div style={{background:BK,borderRadius:10,padding:'18px 16px',marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
