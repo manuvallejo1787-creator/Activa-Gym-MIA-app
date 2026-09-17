@@ -710,7 +710,7 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
           está cada región y qué ejercicios corresponden; la sesión lo toma
           de ahí en vez de que haya que recordarlo. */}
       {planActivo&&(()=>{
-        const pres=prescripcionDeHoy(planActivo,f.fecha||new Date().toISOString().slice(0,10));
+        const pres=prescripcionDeHoy(planActivo,form?.fecha||new Date().toISOString().slice(0,10));
         if(!pres)return null;
         if(pres.fueraDePlan)return(
           <div style={{background:'#FFFBEB',border:`1px solid ${AM}`,borderRadius:8,padding:'9px 11px',marginBottom:10,fontSize:11,color:'#92400E'}}>
@@ -735,14 +735,21 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
                   <div style={{marginTop:5}}>
                     <button onClick={()=>{
                         const nuevos=r.ejercicios.map((e,i)=>({id:'plan_'+r.region+'_'+i,nombre:e.nombre,activo:true,editado:false}));
-                        setF(p=>({...p,
-                          region:p.region||r.region,
-                          fase:p.fase||r.fase,
-                          plan_clinico_id:planActivo.id,
-                          semana_plan:pres.semana,
-                          ejercicios_lista:[...(p.ejercicios_lista||[]),...nuevos.filter(n=>!(p.ejercicios_lista||[]).some(x=>x.nombre===n.nombre))],
-                          criterios_lista:(p.criterios_lista&&p.criterios_lista.length)?p.criterios_lista:r.criterios.map((c,i)=>({id:'cr_'+i,texto:c,cumplido:false})),
-                        }));
+                        // Este panel vive en la lista, no en el formulario: si
+                        // no hay sesión abierta, se crea una en el acto.
+                        setF(prev=>{
+                          const p=prev||newForm();
+                          const yaEstan=p.ejercicios_lista||[];
+                          return {...p,
+                            region:p.region||r.region,
+                            fase:p.fase||r.fase,
+                            plan_clinico_id:planActivo.id,
+                            semana_plan:pres.semana,
+                            ejercicios_lista:[...yaEstan,...nuevos.filter(n=>!yaEstan.some(x=>x.nombre===n.nombre))],
+                            criterios_lista:(p.criterios_lista&&p.criterios_lista.length)?p.criterios_lista:r.criterios.map((c,i)=>({id:'cr_'+i,texto:c,cumplido:false})),
+                          };
+                        });
+                        setShowForm(true);
                       }}
                       style={{...s2.btnTl,fontSize:10,padding:'4px 10px'}}>
                       + Cargar los {r.ejercicios.length} ejercicios de esta fase
@@ -884,6 +891,32 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   const [showPacForm,setShowPacForm]=useState(false);
   const [viewingEval,setViewingEval]=useState(null);
   const [sesionPacId,setSesionPacId]=useState('');
+  // Planes clínicos del paciente abierto en la ficha (para la pantalla de plan)
+  // y del paciente seleccionado en el registro de sesiones (para la prescripción
+  // de hoy). Son dos pacientes distintos: la ficha y el registro no se mueven
+  // juntos, así que cada uno necesita su propia consulta.
+  const { planes: planesClinicos, savePlan: savePlanClinico, deletePlan: deletePlanClinico } = usePlanesClinicos(currentPac?.id||null);
+  const { planes: planesSesion } = usePlanesClinicos(sesionPacId||null);
+
+  // ── MULTI-REGIÓN en la ficha del paciente ────────────────────────────────
+  // Estas derivaciones ya existían dentro de SesionClienteComp, que es OTRO
+  // componente: los chips de región de la ficha las referenciaban desde acá y
+  // el módulo rompía con "not defined". Cada componente necesita las suyas,
+  // calculadas sobre el paciente que ese componente tiene abierto.
+  const evalsPorRegion = useMemo(()=>{
+    const m={};
+    (currentPac?.evaluaciones||[]).forEach(e=>{
+      const regs=(e.regiones&&e.regiones.length)?e.regiones:[e.region||'lumbar'];
+      regs.forEach(rk=>{(m[rk]=m[rk]||[]).push(e);});
+    });
+    Object.keys(m).forEach(k=>m[k].sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||'')));
+    return m;
+  },[currentPac]);
+  const regionesTratadas = useMemo(()=>Object.keys(evalsPorRegion),[evalsPorRegion]);
+  const [regionSel,setRegionSel] = useState(null);
+  const regionFoco = (regionSel&&evalsPorRegion[regionSel])
+    ? regionSel
+    : (currentPac?.evaluaciones?.slice(-1)[0]?.region || currentPac?.region || 'lumbar');
   const [filterRegion,setFilterRegion]=useState('');
   const [searchPac,setSearchPac]=useState('');
   const BPrimary=brand?.colorPrimary||NV;
