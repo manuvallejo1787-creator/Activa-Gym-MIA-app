@@ -199,7 +199,28 @@ export default async function handler(req, res) {
       }
 
       const id = `${plan_id}__${dia_id}__${ejercicio_id}__w${semana}`;
-      const pesoNum = (b.peso_real === "" || b.peso_real == null) ? null : Number(b.peso_real);
+      // ═══════════════════════════════════════════════════════════════════
+      // ACTUALIZACIÓN PARCIAL — solo se escriben los campos que cambiaron.
+      //
+      // BUG QUE ESTO CORRIGE: antes se mandaba la fila COMPLETA en cada
+      // guardado. El cliente escribía kg, pasaba a reps, y el guardado de reps
+      // salía con el peso VIEJO (el primero todavía no había vuelto). El upsert
+      // pisaba la fila entera: quedaban las reps y se borraban los kg. Lo mismo
+      // con series_detalle (siempre iba []) y rpe_real (siempre iba '').
+      //
+      // Ahora el upsert solo incluye las columnas que corresponden. PostgREST,
+      // con merge-duplicates, actualiza únicamente las columnas presentes en
+      // el JSON: las demás quedan intactas aunque lleguen dos pedidos cruzados.
+      //
+      // Reglas:
+      //  · b.campo === 'peso' | 'reps' → se escribe ESE campo, aunque venga
+      //    vacío (el cliente lo borró a propósito).
+      //  · Sin b.campo (portal viejo todavía abierto en algún celular) → solo
+      //    se escribe lo que venga con valor. Un vacío NUNCA pisa un dato.
+      //  · series_detalle solo si viene como array (carga por serie).
+      // ═══════════════════════════════════════════════════════════════════
+      const vacio = (v) => v === "" || v == null;
+      const aNumero = (v) => { const n = Number(String(v).replace(",", ".")); return isNaN(n) ? null : n; };
       const row = {
         id,
         gym_client_id: cli.id,
@@ -208,21 +229,31 @@ export default async function handler(req, res) {
         ejercicio_id,
         ejercicio_nombre: ejercicio_nombre || "",
         semana: parseInt(semana),
-        peso_real: isNaN(pesoNum) ? null : pesoNum,
-        reps_real: (b.reps_real ?? "").toString(),
-        rpe_real: (b.rpe_real ?? "").toString(),
-        // Detalle por serie. peso_real/reps_real siguen siendo el RESUMEN
-        // (serie más pesada y reps totales) para no romper nada de lo que ya
-        // los consume: KPIs, motor, portal viejo y consultas existentes.
-        series_detalle: Array.isArray(b.series_detalle)
-          ? b.series_detalle.slice(0, 12).map((x, i) => ({
-              s: i + 1,
-              peso: (x && x.peso != null) ? String(x.peso) : "",
-              reps: (x && x.reps != null) ? String(x.reps) : "",
-            }))
-          : [],
         updated_at: new Date().toISOString(),
       };
+      const campo = b.campo;
+      if (campo === "peso") row.peso_real = vacio(b.peso_real) ? null : aNumero(b.peso_real);
+      else if (!campo && !vacio(b.peso_real)) row.peso_real = aNumero(b.peso_real);
+
+      if (campo === "reps") row.reps_real = (b.reps_real ?? "").toString().trim();
+      else if (!campo && !vacio(b.reps_real)) row.reps_real = b.reps_real.toString().trim();
+
+      if (!vacio(b.rpe_real)) row.rpe_real = b.rpe_real.toString();
+
+      if (Array.isArray(b.series_detalle)) {
+        row.series_detalle = b.series_detalle.slice(0, 12).map((x, i) => ({
+          s: i + 1,
+          peso: (x && x.peso != null) ? String(x.peso) : "",
+          reps: (x && x.reps != null) ? String(x.reps) : "",
+        }));
+        // El resumen se recalcula acá, en el servidor, desde el detalle:
+        // no depende de lo que el celular haya calculado con datos viejos.
+        const pesos = row.series_detalle.map(x => aNumero(x.peso)).filter(v => v != null && v > 0);
+        const reps = row.series_detalle.map(x => aNumero(x.reps)).filter(v => v != null);
+        if (pesos.length) row.peso_real = Math.max(...pesos);
+        if (reps.length) row.reps_real = String(reps.reduce((a, c) => a + c, 0));
+      }
+
       await sb(`ejecucion_registros?on_conflict=id`, {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },

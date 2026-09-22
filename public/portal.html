@@ -617,29 +617,38 @@ function nSeries(p){
   return (!isNaN(n)&&n>0&&n<=10)?n:3;
 }
 
-window.guardarSerie=async(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo)=>{
+window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo)=>{
   const k=key(dia_id,ejercicio_id,semana);
   const prev=LOGMAP[k]||{};
-  const det=Array.isArray(prev.series_detalle)?prev.series_detalle.slice():[];
+  const det=Array.isArray(prev.series_detalle)?prev.series_detalle.map(x=>({...x})):[];
   while(det.length<idxSerie) det.push({s:det.length+1,peso:'',reps:''});
-  det[idxSerie-1]={...det[idxSerie-1],s:idxSerie,[campo]:inp.value.trim()};
-  // Resumen para compatibilidad: peso = serie más pesada, reps = total
-  const pesos=det.map(x=>parseFloat(x.peso)).filter(v=>!isNaN(v));
+  const val=inp.value.trim().replace(',','.');
+  if(String(det[idxSerie-1][campo]??'')===val) return;
+  det[idxSerie-1]={...det[idxSerie-1],s:idxSerie,[campo]:val};
+  const pesos=det.map(x=>parseFloat(x.peso)).filter(v=>!isNaN(v)&&v>0);
   const repsT=det.map(x=>parseFloat(x.reps)).filter(v=>!isNaN(v)).reduce((a,b)=>a+b,0);
-  const payload={token:TOKEN,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,
-    peso_real:pesos.length?String(Math.max(...pesos)):'',
-    reps_real:repsT?String(repsT):'',
-    series_detalle:det};
-  try{
-    const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    if(!r.ok) throw new Error();
-    LOGMAP[k]={...prev,plan_id,peso_real:payload.peso_real===''?null:payload.peso_real,reps_real:payload.reps_real,series_detalle:det,updated_at:new Date().toISOString()};
-    inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'),1200);
-    toast('Guardado ✓',true);
-  }catch(e){ toast('No se pudo guardar',false); }
+  // Optimista: la serie siguiente ya parte de este detalle.
+  LOGMAP[k]={...prev,plan_id,series_detalle:det,
+    peso_real:pesos.length?String(Math.max(...pesos)):(prev.peso_real??null),
+    reps_real:repsT?String(repsT):(prev.reps_real??''),updated_at:new Date().toISOString()};
+  PENDIENTES[k]=(PENDIENTES[k]||0)+1;
+  // Se manda el detalle completo MÁS RECIENTE en el momento de enviar, no el
+  // de cuando se escribió: si hubo dos series seguidas, viajan las dos.
+  COLA_GUARDADO[k]=(COLA_GUARDADO[k]||Promise.resolve()).then(async()=>{
+    const ok=await enviarConReintento({token:TOKEN,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,
+      series_detalle:(LOGMAP[k]||{}).series_detalle||det});
+    PENDIENTES[k]--;
+    if(ok){ inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'),1200); if(!PENDIENTES[k]) toast('Guardado ✓',true); }
+    else{ inp.style.borderColor='#DC2626'; toast('No se pudo guardar — revisá la conexión',false); }
+  });
 };
 
 window.setDia = i => { activeDia = i; render(); };
+// Si el cliente cierra o cambia de pestaña con guardados todavía en camino,
+// el navegador pregunta antes de salir.
+window.addEventListener('beforeunload', e => {
+  if(Object.values(PENDIENTES).some(n=>n>0)){ e.preventDefault(); e.returnValue=''; }
+});
 
 window.toggleEx = (uid) => {
   const b = document.getElementById('body_'+uid), a = document.getElementById('arr_'+uid);
@@ -649,24 +658,68 @@ window.toggleEx = (uid) => {
   if(a) a.textContent = willOpen ? '▾' : '▸';
 };
 
-window.guardar = async (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
+// ═══════════════════════════════════════════════════════════════════════
+// GUARDADO SIN PÉRDIDAS
+//
+// El bug: el cliente escribía kg y pasaba a reps. El guardado de reps salía
+// antes de que volviera el de kg, armado con el peso VIEJO de LOGMAP, y el
+// servidor pisaba la fila: quedaban las reps y se perdían los kg.
+//
+// Tres defensas:
+//  1. LOGMAP se actualiza ANTES de enviar (optimista): el guardado siguiente
+//     ya ve el valor recién escrito.
+//  2. Cola por fila: los pedidos de un mismo ejercicio/semana salen de a uno
+//     y en orden. Nunca hay dos en vuelo para la misma fila.
+//  3. Se envía SOLO el campo que cambió (campo: 'peso' | 'reps'); el
+//     servidor actualiza solo esa columna. Aunque algo se cruce, un campo
+//     no puede borrar al otro.
+// Si falla la red, se reintenta y se avisa con el valor todavía en pantalla.
+// ═══════════════════════════════════════════════════════════════════════
+const COLA_GUARDADO = {};
+const PENDIENTES = {};
+
+async function enviarConReintento(payload, intentos = 3){
+  for(let n=0;n<intentos;n++){
+    try{
+      const r = await fetch('/api/portal', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      if(r.ok) return true;
+      if(r.status>=400 && r.status<500) return false;     // error del pedido: no reintentar
+    }catch(e){}
+    await new Promise(res=>setTimeout(res, 700*(n+1)));    // 0,7 s · 1,4 s · 2,1 s
+  }
+  return false;
+}
+
+window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
   const k = key(dia_id, ejercicio_id, semana);
+  const col = campo==='peso' ? 'peso_real' : 'reps_real';
+  const val = inp.value.trim().replace(',', '.');
   const prev = LOGMAP[k] || {};
-  const payload = {
-    token: TOKEN, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
-    peso_real: campo==='peso' ? inp.value.trim() : (prev.peso_real ?? ''),
-    reps_real: campo==='reps' ? inp.value.trim() : (prev.reps_real ?? ''),
-  };
-  if(payload.peso_real==='' && payload.reps_real==='' && !prev.peso_real && !prev.reps_real) return;
-  try{
-    const r = await fetch('/api/portal', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-    if(!r.ok) throw new Error();
-    const nuevo = { ...prev, plan_id, peso_real: payload.peso_real==='' ? null : payload.peso_real, reps_real: payload.reps_real, updated_at: new Date().toISOString() };
-    LOGMAP[k] = nuevo;
-    (DATA.logs = DATA.logs||[]).push({ dia_id, ejercicio_id, semana, ...nuevo });
-    inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
-    toast('Guardado ✓', true);
-  }catch(e){ toast('No se pudo guardar', false); }
+  const actual = prev[col] == null ? '' : String(prev[col]);
+  if(val === actual) return;                              // no cambió nada: no se envía
+
+  // 1) Optimista: el próximo guardado ya ve este valor.
+  LOGMAP[k] = { ...prev, plan_id, [col]: (campo==='peso' && val==='') ? null : val, updated_at: new Date().toISOString() };
+  PENDIENTES[k] = (PENDIENTES[k]||0) + 1;
+
+  const payload = { token: TOKEN, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
+    campo, [col]: val };
+
+  // 2) Cola por fila.
+  COLA_GUARDADO[k] = (COLA_GUARDADO[k] || Promise.resolve()).then(async () => {
+    const ok = await enviarConReintento(payload);
+    PENDIENTES[k]--;
+    if(ok){
+      inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
+      if(!PENDIENTES[k]) toast('Guardado ✓', true);
+      const idx = (DATA.logs||[]).findIndex(l=>l.dia_id===dia_id&&l.ejercicio_id===ejercicio_id&&l.semana===semana);
+      const fila = { dia_id, ejercicio_id, semana, ...LOGMAP[k] };
+      if(idx>=0) DATA.logs[idx] = fila; else (DATA.logs = DATA.logs||[]).push(fila);
+    }else{
+      inp.style.borderColor = '#DC2626';
+      toast('No se pudo guardar — revisá la conexión y tocá el campo de nuevo', false);
+    }
+  });
 };
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
