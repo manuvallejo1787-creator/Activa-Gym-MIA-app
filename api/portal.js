@@ -89,7 +89,7 @@ export default async function handler(req, res) {
 
         // Las dos consultas restantes no dependen entre sí: van en paralelo.
         const [logsRes, ejs] = await Promise.all([
-          sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,updated_at&order=updated_at.desc&limit=600`),
+          sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,series_detalle,updated_at&order=updated_at.desc&limit=600`),
           idsEjercicios.size
             ? sb(`ejercicios?id=in.(${[...idsEjercicios].map(i => `"${i}"`).join(",")})&select=id,nombre,media_url,media_tipo,media_desc`)
             : Promise.resolve([]),
@@ -135,7 +135,15 @@ export default async function handler(req, res) {
         } catch {}
       }
 
+      // Feedback de sesión (RPE) del cliente — alimenta el portal y, del otro
+      // lado, el motor y la IA cuando se arma el plan siguiente.
+      let feedback = [];
+      try {
+        feedback = await sb(`gym_sesion_feedback?gym_client_id=eq.${cli.id}&select=dia_id,semana,fecha,rpe_sesion,energia,dolor,nota&order=fecha.desc&limit=60`) || [];
+      } catch {}
+
       return res.status(200).json({
+        feedback,
         cliente: { nombre: cli.nombre, apellido: cli.apellido, nivel: cli.nivel, objetivo: cli.objetivo,
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
@@ -148,6 +156,37 @@ export default async function handler(req, res) {
       const b = req.body || {};
       const cli = await clienteDeToken(b.token);
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
+
+      // ── RPE de la sesión ──────────────────────────────────────────────
+      // Una fila por (cliente, día, semana): el índice único hace que se
+      // renueve sola cada semana en vez de acumular duplicados.
+      if (b.accion === "feedback") {
+        if (!b.dia_id || !b.semana) return res.status(400).json({ error: "Faltan datos del feedback" });
+        const n = (v, min, max) => {
+          const x = parseInt(v);
+          return isNaN(x) ? null : Math.max(min, Math.min(max, x));
+        };
+        const fila = {
+          id: `${cli.id}__${b.dia_id}__w${b.semana}`,
+          gym_client_id: cli.id,
+          plan_id: b.plan_id || null,
+          dia_id: b.dia_id,
+          dia_nombre: b.dia_nombre || "",
+          semana: parseInt(b.semana),
+          fecha: new Date().toISOString().slice(0, 10),
+          rpe_sesion: n(b.rpe_sesion, 1, 10),
+          energia: n(b.energia, 1, 5),
+          dolor: n(b.dolor, 0, 10),
+          nota: (b.nota || "").toString().slice(0, 500),
+          updated_at: new Date().toISOString(),
+        };
+        await sb(`gym_sesion_feedback?on_conflict=id`, {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify(fila),
+        });
+        return res.status(200).json({ ok: true });
+      }
 
       const { plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana } = b;
       if (!plan_id || !dia_id || !ejercicio_id || !semana) {
@@ -172,6 +211,16 @@ export default async function handler(req, res) {
         peso_real: isNaN(pesoNum) ? null : pesoNum,
         reps_real: (b.reps_real ?? "").toString(),
         rpe_real: (b.rpe_real ?? "").toString(),
+        // Detalle por serie. peso_real/reps_real siguen siendo el RESUMEN
+        // (serie más pesada y reps totales) para no romper nada de lo que ya
+        // los consume: KPIs, motor, portal viejo y consultas existentes.
+        series_detalle: Array.isArray(b.series_detalle)
+          ? b.series_detalle.slice(0, 12).map((x, i) => ({
+              s: i + 1,
+              peso: (x && x.peso != null) ? String(x.peso) : "",
+              reps: (x && x.reps != null) ? String(x.reps) : "",
+            }))
+          : [],
         updated_at: new Date().toISOString(),
       };
       await sb(`ejecucion_registros?on_conflict=id`, {

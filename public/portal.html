@@ -76,6 +76,58 @@
   .msg{text-align:center;padding:40px 20px;color:#aaa;font-size:14px;line-height:1.6}
   .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#16A34A;color:#fff;padding:8px 18px;border-radius:99px;font-size:13px;font-weight:700;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20}
   .toast.show{opacity:1}
+
+  /* ── PROGRESO ─────────────────────────────────────────────────────── */
+  .prog{background:#1A1A1A;border-radius:9px;padding:10px 11px;margin-bottom:8px}
+  .prog .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}
+  .prog .nm2{font-size:12px;font-weight:700;color:#e8e8e8;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .prog .delta{font-size:12px;font-weight:900;flex-shrink:0;margin-left:8px}
+  .prog .delta.up{color:#22C55E}.prog .delta.flat{color:#888}
+  .bar{position:relative;height:9px;background:#2e2e2e;border-radius:99px;overflow:visible}
+  .bar .fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#16A34A,#4ADE80);transition:width .6s cubic-bezier(.34,1.3,.64,1)}
+  .bar .meta{position:absolute;top:-4px;width:2px;height:17px;background:#B794F6;border-radius:2px}
+  .bar .metalbl{position:absolute;top:-19px;transform:translateX(-50%);font-size:8px;color:#B794F6;font-weight:800;white-space:nowrap}
+  .prog .ends{display:flex;justify-content:space-between;font-size:9px;color:#777;margin-top:5px}
+  .prog .ends b{color:#bbb}
+  .hero{background:linear-gradient(135deg,#16A34A22,#1A1A1A);border:1px solid #16A34A44;border-radius:12px;padding:14px;margin-bottom:12px;text-align:center}
+  .hero .big{font-size:32px;font-weight:900;color:#4ADE80;line-height:1}
+  .hero .cap{font-size:10px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
+  .hero .sub2{font-size:11px;color:#bbb;margin-top:7px}
+  .racha{display:inline-flex;align-items:center;gap:5px;background:#2a2005;color:#FBBF24;border-radius:99px;padding:3px 11px;font-size:11px;font-weight:800;margin-top:8px}
+
+  /* ── SERIES ───────────────────────────────────────────────────────── */
+  .serieshead{display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px}
+  .sertog{background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer}
+  .sertog.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+  .serie{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .serie .sn{flex:0 0 26px;font-size:10px;color:#888;font-weight:800;text-align:center;background:#1A1A1A;border-radius:5px;padding:5px 0}
+  .serie input{flex:1;min-width:0;background:#141414;border:1px solid #333;border-radius:6px;color:#fff;padding:7px 8px;font-size:14px;outline:none;text-align:center}
+  .serie input:focus{border-color:var(--pri)}
+  .serie input.saved{border-color:#16A34A}
+  .serie .u2{font-size:9px;color:#666;flex:0 0 auto}
+  .wkbox{background:#1f1f1f;border:1px solid #2e2e2e;border-radius:9px;padding:9px;margin-bottom:6px}
+  .wkbox.hecha{border-color:#16A34A55;background:#14211a}
+  .wktit{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;color:#aaa;margin-bottom:6px}
+  .wktit .ok{color:#22C55E}
+
+  /* ── RPE ──────────────────────────────────────────────────────────── */
+  .rpecard{background:linear-gradient(135deg,#2a1055,#1A1A1A);border:1px solid #7C3AED66;border-radius:12px;padding:14px;margin:14px 0}
+  .rpecard h4{font-size:12px;font-weight:800;color:#C4B5FD;margin-bottom:3px}
+  .rpecard .hint{font-size:10px;color:#9CA3AF;margin-bottom:10px;line-height:1.4}
+  .rpescale{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin-bottom:6px}
+  .rpescale button{aspect-ratio:1;border:1px solid #3a3a3a;background:#1A1A1A;color:#999;border-radius:7px;font-size:13px;font-weight:800;cursor:pointer;padding:0}
+  .rpescale button.on{transform:scale(1.12)}
+  .rpelbl{font-size:10px;color:#9CA3AF;text-align:center;min-height:14px;margin-bottom:10px;font-weight:600}
+  .minirow{display:flex;gap:8px;margin-bottom:9px}
+  .minirow>div{flex:1}
+  .minirow .ml{font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;font-weight:700}
+  .chips{display:flex;gap:4px}
+  .chips button{flex:1;background:#1A1A1A;border:1px solid #3a3a3a;color:#999;border-radius:6px;padding:7px 0;font-size:13px;cursor:pointer}
+  .chips button.on{background:#7C3AED;border-color:#7C3AED;color:#fff}
+  .rpecard textarea{width:100%;background:#141414;border:1px solid #333;border-radius:7px;color:#fff;padding:8px;font-size:12px;outline:none;resize:vertical;font-family:inherit}
+  .rpesend{width:100%;background:#7C3AED;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;margin-top:9px}
+  .rpesend:disabled{opacity:.45}
+  .rpedone{background:#14211a;border:1px solid #16A34A55;border-radius:10px;padding:11px;margin:14px 0;font-size:12px;color:#86EFAC;text-align:center;font-weight:700}
   .foot{text-align:center;font-size:10px;color:#666;margin-top:20px;letter-spacing:1px}
 </style>
 </head>
@@ -225,6 +277,23 @@ function topMejoras(){
 
 function renderDashboard(){
   const hoy = new Date();
+  // Panel de logro: lo primero que ve el cliente al abrir.
+  const kg = kgTotalesMovidos();
+  const racha = rachaSemanas();
+  let mejorProg = null;
+  if(DATA.plan){
+    (DATA.plan.dias||[]).forEach(d=>(d.blocks||[]).forEach(b=>(b.exercises||[]).forEach(be=>{
+      const pr = progresoEjercicio(d.id, be.exId, be);
+      if(pr && pr.delta>0 && (!mejorProg || pr.delta>mejorProg.pr.delta))
+        mejorProg = {pr, nombre:(DATA.nombres&&DATA.nombres[be.exId])||be.exId};
+    })));
+  }
+  const heroHtml = kg>0 ? `<div class="hero">
+    <div class="big">${kg.toLocaleString('es-UY')}</div>
+    <div class="cap">kg totales levantados</div>
+    ${mejorProg?`<div class="sub2">Tu mayor salto: <strong style="color:#4ADE80">${esc(mejorProg.nombre)} +${mejorProg.pr.delta} kg</strong></div>`:''}
+    ${racha>1?`<div class="racha">🔥 ${racha} semanas seguidas</div>`:''}
+  </div>` : '';
   const primerDiaSemana = new Date(hoy.getFullYear(), hoy.getMonth(), 1).getDay();
   const diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
   const estadoDias = diasEntrenadosMesConEstado();
@@ -289,7 +358,7 @@ function renderDashboard(){
     html += `<div style="font-size:10px;color:#777;margin-top:8px">Esto lo marca tu entrenador cuando lo evalúa — no se edita desde acá.</div></div>`;
   }
 
-  return html;
+  return heroHtml + html;
 }
 
 function esYoutube(url){ return url && (url.includes('youtube')||url.includes('youtu.be')); }
@@ -352,17 +421,41 @@ function render(){
         }
         if(med.desc) mediaHtml += `<div class="exmediadesc">${esc(med.desc)}</div>`;
       }
-      let body = mediaHtml + `<div class="pr">Prescripción: ${esc(detalles)}${pesoSugTxt}</div>` + extras + `<div class="grid">`;
+      const pr = progresoEjercicio(d.id, be.exId, be);
+      const args = `'${esc(d._planId||plan.id)}','${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}'`;
+      let body = mediaHtml + `<div class="pr">Prescripción: ${esc(detalles)}${pesoSugTxt}</div>` + extras;
+      body += barraProgreso(pr, 'Tu progreso en este ejercicio');
+
+      const nSer = nSeries(p);
       for(let s=1;s<=SEMANAS;s++){
         const lg = LOGMAP[key(d.id, be.exId, s)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
-        body += `<div class="wk"><span class="lbl">Sem ${s}</span>`+
-          `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,'${esc(d._planId||plan.id)}','${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'peso')"><span class="u">kg</span>`+
-          `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,'${esc(d._planId||plan.id)}','${d.id}','${esc(d.name||'')}','${be.exId}','${escAttr(nombre)}',${s},'reps')"><span class="u">reps</span>`+
-          `</div>`;
+        const det = Array.isArray(lg.series_detalle) ? lg.series_detalle : [];
+        const sk = `${d.id}|${be.exId}|${s}`;
+        // Si ya hay detalle cargado, la vista por serie se abre sola.
+        const abierta = SERIES_ABIERTAS[sk] || det.length > 0;
+        const hecha = (peso!=='' || reps!=='');
+        body += `<div class="wkbox ${hecha?'hecha':''}">`+
+          `<div class="wktit"><span>Semana ${s} ${hecha?'<span class="ok">✓</span>':''}</span>`+
+          `<button class="sertog ${abierta?'on':''}" onclick="toggleSeries('${sk}')">${abierta?'▾ por serie':'▸ series distintas'}</button></div>`;
+        if(abierta){
+          for(let i=1;i<=nSer;i++){
+            const dd = det[i-1] || {};
+            body += `<div class="serie"><span class="sn">${i}ª</span>`+
+              `<input inputmode="decimal" placeholder="kg" value="${esc(dd.peso??'')}" onblur="guardarSerie(this,${args},${s},${i},'peso')"><span class="u2">kg</span>`+
+              `<input inputmode="numeric" placeholder="reps" value="${esc(dd.reps??'')}" onblur="guardarSerie(this,${args},${s},${i},'reps')"><span class="u2">reps</span>`+
+              `</div>`;
+          }
+          body += `<div style="font-size:9px;color:#666;margin-top:4px">Se guarda solo. El resumen usa la serie más pesada y el total de repeticiones.</div>`;
+        }else{
+          body += `<div class="serie"><span class="sn" style="flex:0 0 46px;font-size:9px">TODAS</span>`+
+            `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,${args},${s},'peso')"><span class="u2">kg</span>`+
+            `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,${args},${s},'reps')"><span class="u2">reps</span>`+
+            `</div>`;
+        }
+        body += `</div>`;
       }
-      body += `</div>`;
       html += `<div class="ex">`+
         `<div class="exhead" onclick="toggleEx('${uid}')">`+
           `<div class="exhead-l">${thumb}<span class="arrow" id="arr_${uid}">▸</span><span class="nm">${gtag}${esc(nombre)}</span></div>`+
@@ -372,9 +465,179 @@ function render(){
       `</div>`;
     });
   });
+  html += renderRPE(d);
   html += `<div class="foot">${(DATA.brand&&DATA.brand.gym_name)||'ACTIVA'} · Tus datos se guardan automáticamente</div>`;
   $('wrap').innerHTML = html;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// PROGRESO POR EJERCICIO
+// La barra va del peso de ARRANQUE (primera carga registrada) al ACTUAL,
+// con una marca violeta en la META. La meta es, por orden de preferencia:
+//   1. meta_kg que el entrenador puso en el plan
+//   2. el peso sugerido del ejercicio
+//   3. arranque + 15% (progresión razonable por defecto)
+// Así la barra siempre tiene sentido aunque nadie haya definido una meta.
+// ═══════════════════════════════════════════════════════════════════════
+function progresoEjercicio(diaId, exId, be){
+  const pts=[];
+  for(let s=1;s<=SEMANAS;s++){
+    const lg=LOGMAP[key(diaId,exId,s)]||{};
+    const p=parseFloat(lg.peso_real);
+    if(!isNaN(p)&&p>0) pts.push({semana:s,peso:p});
+  }
+  if(!pts.length) return null;
+  const inicio=pts[0].peso, actual=pts[pts.length-1].peso;
+  let meta=parseFloat(be&&be.meta_kg);
+  if(isNaN(meta)||meta<=0) meta=parseFloat(be&&be.pesoSug);
+  if(isNaN(meta)||meta<=inicio) meta=Math.round(inicio*1.15*2)/2;
+  const rango=Math.max(meta-inicio,0.5);
+  const pct=Math.max(0,Math.min(100,(actual-inicio)/rango*100));
+  const pctMeta=Math.max(0,Math.min(100,(meta-inicio)/rango*100));
+  return {inicio,actual,meta,pct,pctMeta,delta:Math.round((actual-inicio)*10)/10,sesiones:pts.length,logrado:actual>=meta};
+}
+
+function barraProgreso(pr,nombre){
+  if(!pr) return '';
+  const cls=pr.delta>0?'up':'flat';
+  const signo=pr.delta>0?'+':'';
+  return `<div class="prog">
+    <div class="top"><span class="nm2">${esc(nombre)}</span>
+      <span class="delta ${cls}">${pr.logrado?'🎯 ':''}${signo}${pr.delta} kg</span></div>
+    <div class="bar">
+      <div class="fill" style="width:${pr.pct}%"></div>
+      <div class="meta" style="left:${pr.pctMeta}%"></div>
+      <div class="metalbl" style="left:${pr.pctMeta}%">meta ${pr.meta}kg</div>
+    </div>
+    <div class="ends"><span>arranque <b>${pr.inicio} kg</b></span><span>hoy <b>${pr.actual} kg</b></span></div>
+  </div>`;
+}
+
+// Racha: semanas consecutivas (hacia atrás) con al menos una carga.
+function rachaSemanas(){
+  const porSem={};
+  (DATA.logs||[]).forEach(l=>{ if(l.peso_real!=null||l.reps_real) porSem[l.semana]=true; });
+  const sems=Object.keys(porSem).map(Number).sort((a,b)=>b-a);
+  if(!sems.length) return 0;
+  let r=1;
+  for(let i=1;i<sems.length;i++){ if(sems[i]===sems[i-1]-1) r++; else break; }
+  return r;
+}
+
+function kgTotalesMovidos(){
+  let t=0;
+  (DATA.logs||[]).forEach(l=>{
+    const det=Array.isArray(l.series_detalle)?l.series_detalle:[];
+    if(det.length){ det.forEach(x=>{const p=parseFloat(x.peso),r=parseFloat(x.reps); if(!isNaN(p)&&!isNaN(r)) t+=p*r;}); return; }
+    const p=parseFloat(l.peso_real), r=parseFloat(l.reps_real);
+    if(!isNaN(p)&&!isNaN(r)) t+=p*r;
+  });
+  return Math.round(t);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RPE DE SESIÓN — una vez por día del plan y por semana, se renueva sola.
+// ═══════════════════════════════════════════════════════════════════════
+const RPE_TXT={1:'Muy suave',2:'Suave',3:'Cómodo',4:'Moderado',5:'Algo exigente',6:'Exigente',7:'Duro',8:'Muy duro',9:'Casi al límite',10:'Al límite'};
+const RPE_COL={1:'#22C55E',2:'#22C55E',3:'#4ADE80',4:'#A3E635',5:'#FACC15',6:'#FB923C',7:'#F97316',8:'#EF4444',9:'#DC2626',10:'#991B1B'};
+let RPE_BORRADOR={rpe:null,energia:null,dolor:null,nota:''};
+
+function fbKey(diaId,sem){ return diaId+'|'+sem; }
+function feedbackDe(diaId,sem){ return (DATA.feedback||[]).find(f=>f.dia_id===diaId&&f.semana===sem)||null; }
+
+function semanaActual(){
+  // La semana "en curso" es la última con algo cargado; si no hay nada, la 1.
+  let mx=0;
+  (DATA.logs||[]).forEach(l=>{ if((l.peso_real!=null&&l.peso_real!=='')||l.reps_real) mx=Math.max(mx,l.semana||0); });
+  return mx||1;
+}
+
+function renderRPE(dia){
+  const sem=semanaActual();
+  const ya=feedbackDe(dia.id,sem);
+  if(ya){
+    return `<div class="rpedone">✓ Ya registraste cómo te fue en la semana ${sem}:
+      <strong style="color:${RPE_COL[ya.rpe_sesion]||'#86EFAC'}">RPE ${ya.rpe_sesion}/10 · ${RPE_TXT[ya.rpe_sesion]||''}</strong>
+      ${ya.dolor>=4?`<br><span style="color:#FCA5A5">Molestia reportada: ${ya.dolor}/10 — tu entrenador lo ve</span>`:''}
+      <br><span style="font-size:10px;color:#6b8f7a;font-weight:400">Se renueva solo la próxima semana.</span></div>`;
+  }
+  const b=RPE_BORRADOR;
+  return `<div class="rpecard">
+    <h4>¿Cómo te fue hoy?</h4>
+    <div class="hint">Tocá el número que mejor describa el esfuerzo de esta sesión. Es lo que usa tu entrenador para ajustar las cargas de la semana que viene.</div>
+    <div class="rpescale">${[1,2,3,4,5,6,7,8,9,10].map(n=>
+      `<button onclick="setRPE(${n})" class="${b.rpe===n?'on':''}" style="${b.rpe===n?`background:${RPE_COL[n]};border-color:${RPE_COL[n]};color:#fff`:''}">${n}</button>`).join('')}</div>
+    <div class="rpelbl" style="color:${b.rpe?RPE_COL[b.rpe]:'#9CA3AF'}">${b.rpe?RPE_TXT[b.rpe]:'1 = muy suave · 10 = al límite'}</div>
+    <div class="minirow">
+      <div><div class="ml">¿Cómo llegaste?</div><div class="chips">${['😴','😐','🙂','💪','🔥'].map((e,i)=>
+        `<button onclick="setEnergia(${i+1})" class="${b.energia===i+1?'on':''}">${e}</button>`).join('')}</div></div>
+    </div>
+    <div class="minirow">
+      <div><div class="ml">¿Molestia o dolor?</div><div class="chips">${[0,2,4,6,8].map(n=>
+        `<button onclick="setDolor(${n})" class="${b.dolor===n?'on':''}" style="font-size:11px;font-weight:800">${n===0?'No':n}</button>`).join('')}</div></div>
+    </div>
+    <textarea rows="2" placeholder="Algo para contarle a tu entrenador (opcional)" oninput="RPE_BORRADOR.nota=this.value">${esc(b.nota)}</textarea>
+    <button class="rpesend" ${b.rpe?'':'disabled'} onclick="enviarRPE('${esc(dia._planId||(DATA.plan&&DATA.plan.id)||'')}','${dia.id}','${escAttr(dia.name||'')}',${sem})">
+      ${b.rpe?'Enviar':'Elegí un número del 1 al 10'}</button>
+  </div>`;
+}
+
+window.setRPE=(n)=>{RPE_BORRADOR.rpe=n;render();};
+window.setEnergia=(n)=>{RPE_BORRADOR.energia=n;render();};
+window.setDolor=(n)=>{RPE_BORRADOR.dolor=n;render();};
+
+window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
+  const b=RPE_BORRADOR;
+  if(!b.rpe) return;
+  try{
+    const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,
+        rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,nota:b.nota})});
+    if(!r.ok) throw new Error();
+    (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,nota:b.nota,fecha:new Date().toISOString().slice(0,10)});
+    RPE_BORRADOR={rpe:null,energia:null,dolor:null,nota:''};
+    toast(b.dolor>=4?'Enviado — tu entrenador va a ver la molestia':'¡Gracias! Enviado ✓',true);
+    render();
+  }catch(e){ toast('No se pudo enviar',false); }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// CARGA POR SERIE — opcional.
+// Por defecto una sola fila (dos toques), igual que siempre. El botón
+// "series distintas" despliega una fila por serie prescrita. Multiplicar la
+// fricción por defecto arruinaría la adhesión, que hoy es lo que mejor
+// funciona del sistema.
+// ═══════════════════════════════════════════════════════════════════════
+const SERIES_ABIERTAS = {};
+window.toggleSeries=(k)=>{SERIES_ABIERTAS[k]=!SERIES_ABIERTAS[k];render();};
+
+function nSeries(p){
+  const n=parseInt(p&&p.series);
+  return (!isNaN(n)&&n>0&&n<=10)?n:3;
+}
+
+window.guardarSerie=async(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo)=>{
+  const k=key(dia_id,ejercicio_id,semana);
+  const prev=LOGMAP[k]||{};
+  const det=Array.isArray(prev.series_detalle)?prev.series_detalle.slice():[];
+  while(det.length<idxSerie) det.push({s:det.length+1,peso:'',reps:''});
+  det[idxSerie-1]={...det[idxSerie-1],s:idxSerie,[campo]:inp.value.trim()};
+  // Resumen para compatibilidad: peso = serie más pesada, reps = total
+  const pesos=det.map(x=>parseFloat(x.peso)).filter(v=>!isNaN(v));
+  const repsT=det.map(x=>parseFloat(x.reps)).filter(v=>!isNaN(v)).reduce((a,b)=>a+b,0);
+  const payload={token:TOKEN,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,
+    peso_real:pesos.length?String(Math.max(...pesos)):'',
+    reps_real:repsT?String(repsT):'',
+    series_detalle:det};
+  try{
+    const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok) throw new Error();
+    LOGMAP[k]={...prev,plan_id,peso_real:payload.peso_real===''?null:payload.peso_real,reps_real:payload.reps_real,series_detalle:det,updated_at:new Date().toISOString()};
+    inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'),1200);
+    toast('Guardado ✓',true);
+  }catch(e){ toast('No se pudo guardar',false); }
+};
 
 window.setDia = i => { activeDia = i; render(); };
 

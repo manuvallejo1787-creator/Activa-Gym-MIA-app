@@ -4,7 +4,7 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -40,6 +40,24 @@ const siguienteFase=(fase)=>{const i=ORDEN_FASES.indexOf(fase);return i>=0&&i<OR
 const esAvanceDeFase=(actual,propuesta)=>ORDEN_FASES.indexOf(propuesta)>ORDEN_FASES.indexOf(actual);
 
 // ─── OBJETIVOS (mapeados al continuum) ──────────────────────────────────────
+// CampoTest — contenedor de un test de potencia/salto.
+//
+// ESTABA DEFINIDO DENTRO DEL RENDER del paso de potencia. Al ser una función
+// nueva en cada render, React lo trataba como un componente DISTINTO en cada
+// pulsación de tecla: desmontaba el subárbol y montaba otro, así que el input
+// perdía el foco y solo aceptaba un carácter por vez.
+// Definido a nivel de módulo, la identidad del componente es estable y el
+// tipeo es fluido.
+const CampoTest = ({lbl, children, niv, s}) => (
+  <div style={{background:'#F4F4F4',borderRadius:6,padding:'8px 10px',marginBottom:8}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+      <span style={{fontSize:11,fontWeight:700,color:'#555'}}>{lbl}</span>
+      {niv && <span style={s.tag(niv.color)}>{niv.label}</span>}
+    </div>
+    {children}
+  </div>
+);
+
 const OBJS={
   restaura:{label:'RESTAURA · N0',icon:'⬛',desc:'Rehabilitación funcional',nivelKey:'restaura',
     blocks:['movilidad','prev_rehab','propiocepcion','activacion','flex_recovery']},
@@ -982,6 +1000,7 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
 
   const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,setTab,iaReglas})=>{
     const {tests:clientTests}=useFuerzaTests(cliente?.id||null);
+    const {feedback:clientFeedback}=useFeedbackSesiones(cliente?.id||null);
     const [iaInforme,setIaInforme]=useState(null);
     if(!cliente)return null;
     const sc=cliente.screening||{};
@@ -1362,7 +1381,7 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
     // ── Capa determinista: se calcula ANTES de llamar a la IA ────────────
     // La IA recibe estos números ya resueltos y tiene prohibido recalcularlos.
     // Así se deja de auditar aritmética y se pasa a leer prosa.
-    const _mt=computarMetricas(cliente,{tests:clientTests||[]});
+    const _mt=computarMetricas(cliente,{tests:clientTests||[],feedback:clientFeedback||[]});
     const _av=evaluarAvance(cliente.nivel||'activa',_mt,adaptadorGym);
     const _det=resumenDeterminista(cliente,_mt,_av);
 
@@ -2811,68 +2830,59 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
           const rsi = nivelRSI(rsiVal);
           const lsiVal = calcularLSI(parseFloat(sc.pot_hop_dom), parseFloat(sc.pot_hop_nodom));
           const lsi = nivelLSI(lsiVal);
-          const Campo = ({lbl, children, niv}) => (
-            <div style={{background:G1,borderRadius:6,padding:'8px 10px',marginBottom:8}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
-                <span style={{fontSize:11,fontWeight:700,color:G4}}>{lbl}</span>
-                {niv && <span style={s.tag(niv.color)}>{niv.label}</span>}
-              </div>
-              {children}
-            </div>
-          );
           return(
             <div>
               <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12,color:'#5B21B6'}}>
                 🏃 <strong>Solo para deportistas activos.</strong> No aplicar a población clínica, sedentaria o que entrena por salud/estética. Los niveles son <strong>orientativos y generales</strong>, no específicos por disciplina — usalos para seguir la progresión del deportista, no como corte diagnóstico.
               </div>
 
-              <Campo lbl="CMJ — Salto con contramovimiento (manos en cadera)" niv={cmj}>
+              <CampoTest s={s} lbl="CMJ — Salto con contramovimiento (manos en cadera)" niv={cmj}>
                 <div style={{display:'flex',gap:6,alignItems:'center'}}>
                   <input type="number" value={sc.pot_cmj||''} onChange={e=>setSCK('pot_cmj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
                   <span style={{fontSize:10,color:G3}}>cm</span>
                 </div>
-              </Campo>
+              </CampoTest>
 
-              <Campo lbl="SJ — Squat jump (sin contramovimiento, manos en cadera)" niv={sj}>
+              <CampoTest s={s} lbl="SJ — Squat jump (sin contramovimiento, manos en cadera)" niv={sj}>
                 <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                   <input type="number" value={sc.pot_sj||''} onChange={e=>setSCK('pot_sj',e.target.value)} placeholder="Altura (cm)" style={{...s.inp,width:110}}/>
                   <span style={{fontSize:10,color:G3}}>cm</span>
                   {sc.pot_cmj && sc.pot_sj && parseFloat(sc.pot_sj)>0 && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>Ratio CMJ/SJ: {(parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)).toFixed(2)} {parseFloat(sc.pot_cmj)/parseFloat(sc.pot_sj)<1.05?'(bajo uso del ciclo elástico)':''}</span>}
                 </div>
-              </Campo>
+              </CampoTest>
 
-              <Campo lbl="Salto horizontal (broad jump)" niv={broad}>
+              <CampoTest s={s} lbl="Salto horizontal (broad jump)" niv={broad}>
                 <div style={{display:'flex',gap:6,alignItems:'center'}}>
                   <input type="number" value={sc.pot_broad||''} onChange={e=>setSCK('pot_broad',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:110}}/>
                   <span style={{fontSize:10,color:G3}}>cm</span>
                 </div>
-              </Campo>
+              </CampoTest>
 
-              <Campo lbl="Drop Jump — Reactive Strength Index (RSI)" niv={rsi}>
+              <CampoTest s={s} lbl="Drop Jump — Reactive Strength Index (RSI)" niv={rsi}>
                 <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                   <input type="number" value={sc.pot_drop_altura||''} onChange={e=>setSCK('pot_drop_altura',e.target.value)} placeholder="Altura salto (cm)" style={{...s.inp,width:120}}/>
                   <input type="number" value={sc.pot_drop_contacto||''} onChange={e=>setSCK('pot_drop_contacto',e.target.value)} placeholder="Contacto (seg)" step="0.01" style={{...s.inp,width:110}}/>
                   {rsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>RSI = {rsiVal}</span>}
                 </div>
                 <div style={{fontSize:8,color:'#999',marginTop:3}}>Cajón 30cm de referencia · esta banda es aproximada, más dependiente del protocolo/equipo que el resto</div>
-              </Campo>
+              </CampoTest>
 
-              <Campo lbl="Salto unipodal (hop test) — simetría entre piernas" niv={lsi}>
+              <CampoTest s={s} lbl="Salto unipodal (hop test) — simetría entre piernas" niv={lsi}>
                 <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                   <input type="number" value={sc.pot_hop_dom||''} onChange={e=>setSCK('pot_hop_dom',e.target.value)} placeholder="Pierna dominante (cm)" style={{...s.inp,width:140}}/>
                   <input type="number" value={sc.pot_hop_nodom||''} onChange={e=>setSCK('pot_hop_nodom',e.target.value)} placeholder="Pierna no dom. (cm)" style={{...s.inp,width:140}}/>
                   {lsiVal!=null && <span style={{fontSize:9,color:'#7C3AED',fontWeight:700}}>LSI = {lsiVal}%</span>}
                 </div>
                 <div style={{fontSize:8,color:'#999',marginTop:3}}>Estándar de retorno deportivo: LSI ≥90% aceptable. Menor a 85% = mayor riesgo, especialmente post-lesión.</div>
-              </Campo>
+              </CampoTest>
 
-              <Campo lbl="Lanzamiento de balón medicinal (potencia tren superior)">
+              <CampoTest s={s} lbl="Lanzamiento de balón medicinal (potencia tren superior)">
                 <div style={{display:'flex',gap:6,alignItems:'center'}}>
                   <input type="number" value={sc.pot_mb_peso||''} onChange={e=>setSCK('pot_mb_peso',e.target.value)} placeholder="Peso balón (kg)" style={{...s.inp,width:120}}/>
                   <input type="number" value={sc.pot_mb_dist||''} onChange={e=>setSCK('pot_mb_dist',e.target.value)} placeholder="Distancia (cm)" style={{...s.inp,width:120}}/>
                 </div>
                 <div style={{fontSize:8,color:'#999',marginTop:3}}>Sin tabla normativa consolidada (varía mucho por peso de balón y técnica) — se registra solo para seguimiento de progresión, sin nivel asignado.</div>
-              </Campo>
+              </CampoTest>
             </div>
           );
         }
@@ -3133,10 +3143,28 @@ export default function App(){
   const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
   // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
+  const {feedback:activeClientFeedback}=useFeedbackSesiones(activeClient?.id||null);
   // Registro de planes del cliente activo + base de conocimiento de la IA
   const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
   // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
-  const planEjecutando=useMemo(()=>gymPlanes.find(p=>p.estado==='activo')||gymPlanes[0]||null,[gymPlanes]);
+  // SELECCIÓN DETERMINISTA DEL PLAN ACTIVO.
+  // Antes: .find(estado==='activo') tomaba el PRIMERO del array, o sea el que
+  // devolviera la consulta — orden arbitrario. La auditoría encontró 4 clientes
+  // con varios planes activos a la vez (Santiago Larrama con 4), así que el
+  // cliente y el portal veían un plan al azar entre los suyos.
+  // Ahora manda el plan vigente: el de fecha_inicio más reciente que ya empezó.
+  // Si ninguno empezó todavía, el que arranca primero.
+  const planEjecutando=useMemo(()=>{
+    const hoy=new Date().toISOString().slice(0,10);
+    const act=gymPlanes.filter(p=>p.estado==='activo');
+    if(!act.length)return gymPlanes[0]||null;
+    const fi=p=>p.fecha_inicio||p.created_at?.slice(0,10)||'0000-00-00';
+    const empezados=act.filter(p=>fi(p)<=hoy).sort((a,b)=>fi(b).localeCompare(fi(a)));
+    if(empezados.length)return empezados[0];
+    return act.slice().sort((a,b)=>fi(a).localeCompare(fi(b)))[0];
+  },[gymPlanes]);
+  // Aviso cuando hay más de uno activo: es ambiguo y conviene cerrar los viejos.
+  const planesActivosAmbiguos=useMemo(()=>gymPlanes.filter(p=>p.estado==='activo').length,[gymPlanes]);
   const {registros:ejecRegistros}=useEjecucion(planEjecutando?.id||null);
   // Resumen de cargas reales por ejercicio (para que la IA progrese sobre lo ejecutado)
   const ejecucionResumen=useMemo(()=>{
@@ -3878,7 +3906,7 @@ export default function App(){
                   cliente={c}
                   incidencias={incidencias}
                   siguienteFase={siguienteFase}
-                  onAvanzar={(sig)=>{saveClient({...c,nivel:sig,criterios_avance_estado:{}});setAvanceAbierto(null);}}
+                  onAvanzar={(sig)=>{saveClient({...c,nivel:sig,criterios_avance_estado:{}})?.catch?.(e=>alert("No se pudo guardar: "+e.message));setAvanceAbierto(null);}}
                 />
               )}
               {avanceAbierto===c.id&&(()=>{
@@ -3898,11 +3926,11 @@ export default function App(){
                 const todosCumplidos=criticos.length>0&&cumplidos===criticos.length;
                 const toggleItem=(itId)=>{
                   const nuevoEstado={...estado,[itId]:!estado[itId]};
-                  saveClient({...c,criterios_avance_estado:nuevoEstado});
+                  saveClient({...c,criterios_avance_estado:nuevoEstado})?.catch?.(e=>alert("No se pudo guardar: "+e.message));
                 };
                 const confirmarAvance=()=>{
                   if(!todosCumplidos||!sig)return;
-                  saveClient({...c,nivel:sig,criterios_avance_estado:{}});
+                  saveClient({...c,nivel:sig,criterios_avance_estado:{}})?.catch?.(e=>alert("No se pudo guardar: "+e.message));
                   setAvanceAbierto(null);
                   alert(`✅ ${c.nombre} avanzó a fase ${NIVEL[sig].label}. El checklist se reinició para la nueva fase.`);
                 };
@@ -4118,6 +4146,13 @@ export default function App(){
             llenarlos a mano: ~30 min por cliente. Todas las piezas del motor
             combinatorio ya existían sueltas (OBJS.blocks, PERIODIZACIONES,
             checkRestriction, sugerirPeso, motor.js) — nadie las encadenaba. */}
+        {planesActivosAmbiguos>1&&(
+          <div style={{background:'#3A2A0B',border:'1px solid #D97706',borderRadius:9,padding:'11px 13px',marginBottom:14,fontSize:11,color:'#FCD34D',lineHeight:1.5}}>
+            ⚠ <strong>Este cliente tiene {planesActivosAmbiguos} planes activos a la vez.</strong> Se está usando el de
+            fecha de inicio más reciente que ya empezó. Conviene marcar los anteriores como
+            "Completado" o "Reemplazado" para que no quede ambiguo qué ve el cliente en el portal.
+          </div>
+        )}
         {activeClient&&(
           <div style={{background:'#0B2E24',borderRadius:10,padding:'16px',marginBottom:16,border:`1px solid #1BAA86`}}>
             <div style={{fontSize:14,fontWeight:800,color:'#7FE9CE',marginBottom:3}}>⚡ Generar plan desde la evaluación</div>
@@ -4136,7 +4171,7 @@ export default function App(){
             <button onClick={()=>{
                 try{
                   const r=generarPlanBase({cliente:activeClient,exs,tests:activeClientTests||[],
-                    incidencias,diasSemana:gpDias,checkRestriction,genId});
+                    incidencias,feedback:activeClientFeedback||[],diasSemana:gpDias,checkRestriction,genId});
                   setGpResultado(r);
                 }catch(e){alert('No se pudo generar: '+e.message);}
               }}

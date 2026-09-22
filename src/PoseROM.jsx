@@ -129,6 +129,13 @@ const calcAngulo=(landmarks,def,lado)=>{
   return{angulo,faltantes:[]};
 };
 
+const btnFoto=(color)=>({
+  display:'inline-flex',alignItems:'center',gap:5,cursor:'pointer',
+  fontSize:11,fontWeight:700,padding:'8px 14px',borderRadius:7,
+  border:`1px solid ${color}`,background:`${color}15`,color,
+  fontFamily:'Arial,sans-serif',userSelect:'none',
+});
+
 export default function PoseROM({movimiento,region,onMedido}){
   const [open,setOpen]=useState(false);
   const [loading,setLoading]=useState(false);
@@ -191,7 +198,23 @@ export default function PoseROM({movimiento,region,onMedido}){
           <button key={l} onClick={()=>setLado(l)} style={{fontSize:9,fontWeight:700,padding:'4px 10px',borderRadius:99,border:`1px solid ${lado===l?'#1BAA86':'#E2E8F0'}`,background:lado===l?'#1BAA8620':'white',color:lado===l?'#1BAA86':'#475569',cursor:'pointer'}}>{l==='right'?'Lado Derecho':'Lado Izquierdo'}</button>
         ))}
       </div>
-      <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{fontSize:10,marginBottom:8}}/>
+      {/* DOS ENTRADAS SEPARADAS.
+          Antes había un solo input con capture="environment", que en móvil
+          fuerza la cámara y NO deja elegir de la galería: no se podía analizar
+          una foto tomada antes, ni una que te manda el paciente.
+          - "Tomar foto" mantiene capture para ir directo a la cámara.
+          - "Elegir de la galería" omite capture, que es lo que habilita el
+            carrete y el explorador de archivos en escritorio. */}
+      <div style={{display:'flex',gap:7,flexWrap:'wrap',marginBottom:8}}>
+        <label style={btnFoto('#1BAA86')}>
+          📷 Tomar foto
+          <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{display:'none'}}/>
+        </label>
+        <label style={btnFoto('#0A3D62')}>
+          🖼️ Elegir de la galería
+          <input type="file" accept="image/*" onChange={handleFile} style={{display:'none'}}/>
+        </label>
+      </div>
       {loading&&<div style={{fontSize:10,color:'#94A3B8'}}>Analizando imagen…</div>}
       {error&&<div style={{fontSize:10,color:'#DC2626',background:'#FEF2F2',padding:6,borderRadius:5,marginBottom:6}}>{error}</div>}
       {imgUrl&&<canvas ref={canvasRef} style={{maxWidth:'100%',borderRadius:6,marginBottom:6,display:resultado!=null||error?'block':'none'}}/>}

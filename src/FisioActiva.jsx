@@ -401,7 +401,16 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
   const { sesiones, saveSesion, deleteSesion } = useSesionesClinicas(paciente?.id || null);
   // Prescripción del plan clínico para la fecha de la sesión: en qué semana
   // estamos, qué fase corresponde a cada región y qué ejercicios van hoy.
-  const planActivo = (planesClinicos || []).find(p => p.estado === 'activo') || null;
+  // Determinista, por el mismo motivo que el plan del gym: con varios activos
+  // .find() devolvía uno al azar según el orden de la consulta.
+  const planActivo = useMemo(()=>{
+    const act=(planesClinicos||[]).filter(p=>p.estado==='activo');
+    if(!act.length)return null;
+    const hoy=new Date().toISOString().slice(0,10);
+    const fi=p=>p.fecha_inicio||'0000-00-00';
+    const emp=act.filter(p=>fi(p)<=hoy).sort((a,b)=>fi(b).localeCompare(fi(a)));
+    return emp[0]||act.slice().sort((a,b)=>fi(a).localeCompare(fi(b)))[0];
+  },[planesClinicos]);
   const [showForm, setShowForm] = useState(false);
   const [filtroReg, setFiltroReg] = useState('');
   const [form, setF] = useState(null);
@@ -2554,25 +2563,53 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   };
 
   // ── ALTAS CLÍNICAS ────────────────────────────────────────────────────
+  // Confirmaciones manuales de criterios que no se pueden autoevaluar.
+  // Clave: idPaciente::idEvaluacion::índice
+  const [altaConfirm,setAltaConfirm]=useState({});
+
   const AltasCli=()=>{
     const selPac=altaPacId; const setSelPac=setAltaPacId;
     const pac=pacientes.find(p=>p.id===selPac);
     const last=pac?.evaluaciones[pac.evaluaciones.length-1];
-    const rp=last?calcROMpct(last.rom,pac.region):null;
+    // FIX: usaba pac.region (la región PRINCIPAL del paciente) en lugar de la
+    // región de la evaluación. Con multi-región, el ROM se calculaba contra
+    // las normas de otra articulación.
+    const regionEval=last?.region||pac?.region;
+    const rp=last?calcROMpct(last.rom,regionEval):null;
+    const yaDeAlta=(pac?.evaluaciones||[]).some(e=>e.tipo==='alta');
     // Única fuente clínica — misma que sesiones y VerPaciente. Antes acá
     // había una tercera versión hardcodeada (EVA/ROM/Y-Balance/FMS/DN4 con
     // pesos fijos) desconectada de todo lo demás.
-    const protocoloAlta=last?generarProtocoloRehab(pac.region,last.tejidoSospechado||'',last.objetivo||'',last.eva_reposo,rp):[];
+    const protocoloAlta=last?generarProtocoloRehab(regionEval,last.tejidoDe?.(regionEval)||last.tejidoSospechado||'',last.objetivo||'',last.eva_reposo,rp):[];
     const faseRetorno=protocoloAlta.find(f=>f.k==='retorno_funcion');
     const criteriosTexto=faseRetorno?faseRetorno.criterios:[];
+    // El EVA rector es el peor entre reposo y movimiento, igual que en el gym.
+    const evaAlta=(()=>{
+      const r=parseFloat(last?.eva_reposo||'');const m=parseFloat(last?.eva_movimiento||last?.eva_mov||'');
+      const vals=[r,m].filter(v=>!isNaN(v));
+      return vals.length?Math.max(...vals):null;
+    })();
     const checkTexto=(c)=>{
-      if(/EVA/i.test(c)&&last?.eva_reposo)return parseFloat(last.eva_reposo)<=2;
-      if(/ROM/i.test(c)&&rp)return rp>90;
+      if(/EVA/i.test(c))return evaAlta==null?null:evaAlta<=2;
+      if(/ROM/i.test(c))return rp==null?null:rp>90;
       return null;
     };
+    // FIX CENTRAL: antes `pass: checkTexto(...)===true` convertía todo null en
+    // false, y no existía forma de confirmar a mano un criterio que el sistema
+    // no puede medir (tolerancia a la carga, ausencia de compensaciones, gesto
+    // específico). Con eso `allPass` no podía ser true NUNCA y el alta era
+    // imposible de aprobar. Es el mismo error que "sin medir ≠ no cumple".
+    const claveConf=(i)=>`${pac?.id}::${last?.id}::${i}`;
     const checks=criteriosTexto.map((texto,i)=>{
-      const pass=checkTexto(texto);
-      return{id:'c'+i,label:texto,pass:pass===true,val:pass===null?'A confirmar por el clínico':(pass?'Cumplido':'No cumplido'),peso:Math.round(100/Math.max(criteriosTexto.length,1))};
+      const auto=checkTexto(texto);
+      const conf=!!altaConfirm[claveConf(i)];
+      const pass=auto===true||(auto===null&&conf);
+      return{
+        id:'c'+i, idx:i, label:texto, pass,
+        auto, confirmable:auto===null, confirmado:conf,
+        val:auto===true?'Cumplido':auto===false?'No cumplido':(conf?'Confirmado por el clínico':'Requiere tu confirmación'),
+        peso:Math.round(100/Math.max(criteriosTexto.length,1)),
+      };
     });
     // Criterios personalizados según objetivo — solo se listan, no se autoevalúan
     const criteriosPers=last?.criterios_personalizados||[];
@@ -2617,24 +2654,89 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
                 <div style={{width:pct+'%',background:allPass?GN:pct>60?AM:RJ,height:'100%',borderRadius:99,transition:'width .5s'}}/>
               </div>
               {checks.map(c=>{
-                const pend=c.val==='A confirmar por el clínico';
+                const pend=c.confirmable&&!c.confirmado;
                 const color=c.pass?GN:pend?AM:RJ;
                 return(
-                <div key={c.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:6,background:c.pass?'#F0FDF4':pend?'#FFFBEB':'#FEF2F2',border:`1px solid ${c.pass?'#86EFAC':pend?'#FDE68A':'#FCA5A5'}`,marginBottom:5}}>
-                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                    <span style={{fontSize:15,color}}>{c.pass?'✓':pend?'○':'✗'}</span>
+                <div key={c.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'8px 10px',borderRadius:6,background:c.pass?'#F0FDF4':pend?'#FFFBEB':'#FEF2F2',border:`1px solid ${c.pass?'#86EFAC':pend?'#FDE68A':'#FCA5A5'}`,marginBottom:5}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',minWidth:0}}>
+                    {c.confirmable
+                      ? <input type="checkbox" checked={c.confirmado} title="Confirmar que este criterio se cumple"
+                          onChange={e=>setAltaConfirm(p=>({...p,[claveConf(c.idx)]:e.target.checked}))}
+                          style={{accentColor:GN,flexShrink:0,width:17,height:17,cursor:'pointer'}}/>
+                      : <span style={{fontSize:15,color,width:17,textAlign:'center'}}>{c.pass?'✓':'✗'}</span>}
                     <span style={{fontSize:12,fontWeight:600}}>{c.label}</span>
                   </div>
-                  <span style={{fontSize:11,fontWeight:800,color}}>{c.val}</span>
+                  <span style={{fontSize:10,fontWeight:800,color,textAlign:'right',flexShrink:0}}>{c.val}</span>
                 </div>
               );})}
+              <div style={{fontSize:9,color:GM,marginTop:6,lineHeight:1.5,fontStyle:'italic'}}>
+                Los criterios con casilla no los puede medir el sistema (tolerancia a la carga,
+                ausencia de compensaciones, gesto específico): los confirmás vos con tu criterio clínico.
+                Los que tienen ✓ o ✗ se calculan de los datos de la evaluación.
+              </div>
             </div>
+            {yaDeAlta&&(
+              <div style={{...fs.card,background:'#F0FDF4',border:`2px solid ${GN}`,marginBottom:10}}>
+                <div style={{fontSize:13,fontWeight:800,color:GN}}>🏁 Tratamiento concluido</div>
+                <div style={{fontSize:11,color:GD,marginTop:3}}>
+                  Alta registrada el {(pac.evaluaciones.find(e=>e.tipo==='alta')||{}).fecha||'—'}.
+                  Ya no cuenta como paciente activo en los KPIs.
+                </div>
+                <button onClick={exportAltaPDF} style={{...fs.btnTL,padding:'8px 16px',fontSize:11,marginTop:8}}>📄 Informe de alta PDF</button>
+              </div>
+            )}
             {allPass
               ?<div style={{...fs.card,background:'#F0FDF4',border:`2px solid ${GN}`,textAlign:'center',padding:'20px'}}>
                   <div style={{fontSize:24,marginBottom:6}}>🎉</div>
-                  <div style={{fontSize:14,fontWeight:800,color:GN,marginBottom:4}}>¡Alta clínica aprobada!</div>
+                  <div style={{fontSize:14,fontWeight:800,color:GN,marginBottom:4}}>
+                    {yaDeAlta?'Criterios de alta cumplidos':'¡Alta clínica aprobada!'}
+                  </div>
                   {last.objetivo&&<div style={{fontSize:12,color:GD,marginBottom:8}}>Objetivo alcanzado: "{last.objetivo}"</div>}
-                  <button onClick={exportAltaPDF} style={{...fs.btnTL,padding:'10px 24px'}}>📄 Generar informe de alta PDF</button>
+                  {/* ANTES ESTA PANTALLA NO REGISTRABA NADA: calculaba criterios y
+                      exportaba un PDF, pero el paciente seguía figurando como
+                      activo y pendiente de reevaluación. El alta no existía como
+                      hecho, solo como documento. */}
+                  {!yaDeAlta&&(
+                    <button onClick={async()=>{
+                        if(!confirm(`¿Registrar el ALTA CLÍNICA de ${pac.nombre} ${pac.apellido}?\n\n`+
+                          `· Se guarda una evaluación de tipo "Alta" con fecha de hoy\n`+
+                          `· El paciente deja de contar como activo en los KPIs\n`+
+                          `· Se cierra la próxima reevaluación pendiente\n`+
+                          `· Si entrena en el gimnasio, se le levanta la restricción clínica`))return;
+                        const hoy=new Date().toISOString().slice(0,10);
+                        const evAlta={
+                          ...last,
+                          id:genId('eval'),
+                          tipo:'alta',
+                          fecha:hoy,
+                          faseRehab:'alta',
+                          fase:'activa',
+                          prox_eval:'',                       // se cierra el pendiente
+                          criterios_alta:checks.map(c=>({texto:c.label,cumplido:c.pass,via:c.auto===null?'confirmado por el clínico':'calculado'})),
+                          alta_registrada_por:last.evaluador||'',
+                        };
+                        try{
+                          await dbSaveEvaluacion(pac.id,evAlta);
+                          // El paciente pasa a inactivo: es lo que hace que salga de
+                          // las listas de activos y de los pendientes de reeval.
+                          // dbSavePaciente directo: savePaciente() no devuelve
+                          // promesa y además cierra el formulario de paciente.
+                          await dbSavePaciente({...pac,activo:false,alta_fecha:hoy});
+                          // Y si entrena en el gym, se levanta la restricción clínica.
+                          if(pac.gym_clienteId&&onUpdateGymClient){
+                            onUpdateGymClient(pac.gym_clienteId,{
+                              semaforo:'verde', nivel:'activa', restricciones:'',
+                              restricciones_flags:{impacto:false,overhead:false,cargaAxial:false},
+                            });
+                          }
+                          alert('Alta clínica registrada.');
+                        }catch(e){alert('No se pudo registrar el alta: '+e.message);}
+                      }}
+                      style={{...fs.btnTL,padding:'12px 24px',fontSize:13,background:GN,marginBottom:8,display:'block',width:'100%'}}>
+                      🏁 Registrar alta clínica
+                    </button>
+                  )}
+                  <button onClick={exportAltaPDF} style={{...fs.btnG,padding:'9px 20px',fontSize:11}}>📄 Generar informe de alta PDF</button>
                 </div>
               :<div style={{...fs.card,background:'#FFFBEB',border:`1px solid #FDE047`}}>
                   <div style={{fontSize:12,fontWeight:700,color:AM,marginBottom:4}}>Criterios pendientes</div>

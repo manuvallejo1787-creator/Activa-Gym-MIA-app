@@ -281,10 +281,55 @@ export function calcAsimetriaFuerza(tests = []) {
   return { medido: true, pct: Math.round(Math.abs(mi - md) / may * 1000) / 10, izq: mi, der: md };
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10) FEEDBACK DEL PORTAL — RPE percibido, energía y molestia
+// El cliente reporta al terminar cada sesión. Es el único dato del sistema que
+// viene del propio cliente y no de una medición del profesional: dice cómo se
+// siente la carga que prescribimos, que es distinto de cuánta carga movió.
+// ═══════════════════════════════════════════════════════════════════════════
+export function calcFeedback(feedback = [], dias = 28) {
+  const limite = Date.now() - dias * 864e5;
+  const recientes = (feedback || []).filter(f => f.fecha && new Date(f.fecha + 'T12:00').getTime() >= limite);
+  if (!recientes.length) return { medido: false, n: 0 };
+
+  const prom = (k) => {
+    const v = recientes.map(f => num(f[k])).filter(x => x != null);
+    return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null;
+  };
+  const rpe = prom('rpe_sesion'), energia = prom('energia'), dolor = prom('dolor');
+  const conDolor = recientes.filter(f => num(f.dolor) >= 4);
+
+  // Lectura de la carga percibida. Referencia habitual de RPE de sesión:
+  // 5-7 sostenible, 8+ sostenido indica acumulación de fatiga.
+  let lectura = null, ajuste = null;
+  if (rpe != null) {
+    if (rpe >= 8.5) { lectura = 'Carga percibida muy alta de forma sostenida'; ajuste = 'bajar'; }
+    else if (rpe >= 7.5) { lectura = 'Carga exigente — sostenible solo por bloques cortos'; ajuste = 'vigilar'; }
+    else if (rpe <= 5) { lectura = 'Carga percibida baja: hay margen para progresar'; ajuste = 'subir'; }
+    else { lectura = 'Carga percibida en rango sostenible'; ajuste = 'mantener'; }
+  }
+  return {
+    medido: true, n: recientes.length, rpe, energia, dolor, lectura, ajuste,
+    sesionesConDolor: conDolor.length,
+    notas: recientes.filter(f => (f.nota || '').trim()).slice(0, 5).map(f => ({ fecha: f.fecha, nota: f.nota })),
+    tendencia: (() => {
+      const ord = recientes.slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
+      if (ord.length < 4) return null;
+      const mitad = Math.floor(ord.length / 2);
+      const p = (arr) => { const v = arr.map(f => num(f.rpe_sesion)).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+      const a = p(ord.slice(0, mitad)), b = p(ord.slice(mitad));
+      if (a == null || b == null) return null;
+      const d = Math.round((b - a) * 10) / 10;
+      return { delta: d, texto: d >= 1 ? `El esfuerzo percibido SUBIÓ ${d} puntos: puede ser progreso de carga o fatiga acumulada` : d <= -1 ? `El esfuerzo percibido BAJÓ ${Math.abs(d)} puntos: la misma carga se siente más fácil` : 'Esfuerzo percibido estable' };
+    })(),
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 6) COMPUTAR TODAS LAS MÉTRICAS
 // ═══════════════════════════════════════════════════════════════════════════
-export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], incidencias = [] } = {}) {
+export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], incidencias = [], feedback = [] } = {}) {
   const sc = cliente.screening || {};
   const incCliente = (incidencias || []).filter(i => i.gym_client_id === cliente.id);
 
@@ -293,6 +338,7 @@ export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], 
   const evaR     = calcEva({ screening: sc, evaluacion, incidencias: incCliente });
   const banderas = calcBanderas(sc, incCliente);
   const fuerza   = calcAsimetriaFuerza(tests);
+  const fb       = calcFeedback(feedback);
 
   // ROM %: prioriza la evaluación clínica (goniometría formal) y cae al ROM
   // del screening del gym si no hay paciente de fisio vinculado.
@@ -302,7 +348,7 @@ export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], 
                   : romGym.medido ? 'screening del gimnasio' : null;
 
   return {
-    calidad, ybalance, eva: evaR, banderas, fuerza, romPct, romGym, romOrigen,
+    calidad, ybalance, eva: evaR, banderas, fuerza, romPct, romGym, romOrigen, feedback: fb,
     // Forma que espera checkCriteriosAvance()
     paraCheck: {
       eva: evaR.medido ? evaR.eva : null,
@@ -401,6 +447,15 @@ export function resumenDeterminista(cliente, metricas, avance) {
   } else L.push(`ROM: sin medir`);
   L.push(metricas.fuerza.medido ? `ASIMETRÍA DE FUERZA: ${metricas.fuerza.pct}%` : `ASIMETRÍA DE FUERZA: ${metricas.fuerza.motivo}`);
 
+  const fb2 = metricas.feedback;
+  if (fb2?.medido) {
+    L.push(`PERCEPCIÓN DEL CLIENTE (${fb2.n} sesiones reportadas desde el portal):`);
+    L.push(`  · RPE de sesión promedio: ${fb2.rpe}/10 — ${fb2.lectura}`);
+    if (fb2.energia != null) L.push(`  · Energía con la que llega: ${fb2.energia}/5`);
+    if (fb2.dolor != null && fb2.dolor > 0) L.push(`  · Molestia promedio: ${fb2.dolor}/10${fb2.sesionesConDolor ? ` · ${fb2.sesionesConDolor} sesiones con molestia ≥4` : ''}`);
+    if (fb2.tendencia) L.push(`  · ${fb2.tendencia.texto}`);
+    fb2.notas.forEach(n => L.push(`  · Nota del cliente (${n.fecha}): "${n.nota}"`));
+  } else L.push('PERCEPCIÓN DEL CLIENTE: sin reportes de RPE desde el portal');
   if (metricas.banderas.hay) L.push(`BANDERAS: ${metricas.banderas.activas.map(a => `[${a.nivel}] ${a.texto}`).join(' · ')}`);
   else L.push(`BANDERAS: ninguna activa`);
 

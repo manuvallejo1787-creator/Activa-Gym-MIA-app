@@ -134,7 +134,7 @@ function paramsDeBloque(bloque, fasePer) {
 // GENERADOR PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════
 export function generarPlanBase({
-  cliente, exs = [], tests = [], incidencias = [], evaluacion = null,
+  cliente, exs = [], tests = [], incidencias = [], feedback = [], evaluacion = null,
   diasSemana = 3, periodizacionId = null, faseCicloIndex = 0,
   checkRestriction = null, genId = (p) => p + '_' + Date.now().toString(36),
 }) {
@@ -142,7 +142,7 @@ export function generarPlanBase({
   const fase = cliente.nivel || 'activa';
 
   // ── 1) Métricas y déficits desde la evaluación ──────────────────────────
-  const m = computarMetricas(cliente, { evaluacion, tests, incidencias });
+  const m = computarMetricas(cliente, { evaluacion, tests, incidencias, feedback });
 
   // Procedencia del dato de dolor — el criterio más decisivo y el más frágil
   if (m.eva.medido) {
@@ -170,6 +170,20 @@ export function generarPlanBase({
   if (m.ybalance.medido) procedencia.push(`Y-Balance: dif. anterior ${m.ybalance.difAntCm} cm${m.ybalance.simetrico ? '' : ` (lado corto: ${m.ybalance.ladoCorto})`}`);
   if (m.romPct != null) procedencia.push(`ROM: ${m.romPct}% · fuente ${m.romOrigen}`);
   if (m.banderas.bloqueante) bloqueantes.push('Bandera clínica activa. No generar plan de entrenamiento hasta resolverla.');
+
+  // El RPE que reporta el cliente desde el portal ajusta la intensidad del
+  // plan siguiente. Es el único dato que viene del cliente y no de una
+  // medición nuestra: dice cómo se SIENTE la carga que prescribimos.
+  const fb = m.feedback;
+  if (fb?.medido) {
+    procedencia.push(`Percepción del cliente: RPE ${fb.rpe}/10 en ${fb.n} sesiones — ${fb.lectura}`);
+    if (fb.ajuste === 'bajar') bloqueantes.push(
+      `RPE promedio ${fb.rpe}/10 sostenido: el cliente viene al límite. Subir carga acá acumula fatiga en vez de adaptación — revisá el plan antes de aplicarlo.`);
+    if (fb.ajuste === 'vigilar') avisos.push(`RPE ${fb.rpe}/10: carga exigente. Sostenible por bloques cortos, no de forma indefinida.`);
+    if (fb.ajuste === 'subir') avisos.push(`RPE ${fb.rpe}/10: hay margen real para progresar la carga.`);
+    if (fb.sesionesConDolor > 0) avisos.push(`${fb.sesionesConDolor} sesiones con molestia ≥4/10 reportada desde el portal. Revisá qué ejercicio la genera.`);
+    if (fb.tendencia) avisos.push(fb.tendencia.texto + '.');
+  } else avisos.push('Sin reportes de RPE desde el portal: la intensidad del plan sale de la prescripción, sin ajuste por percepción del cliente.');
 
   // ── 2) Patrones a priorizar, derivados de los déficits ──────────────────
   const patronesDeficit = [];

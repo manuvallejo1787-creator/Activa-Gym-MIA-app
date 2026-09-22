@@ -983,3 +983,23 @@ export function usePlanesClinicos(pacienteId){
   },[fetch])
   return{planes,loading,savePlan,deletePlan,refetch:fetch}
 }
+
+// ─── HOOK: Feedback de sesión del portal (RPE percibido) ──────────────────
+// Cierra el circuito: el cliente reporta esfuerzo, energía y molestia desde el
+// portal; acá entra al motor y al prompt de la IA para armar el plan siguiente.
+export function useFeedbackSesiones(clienteId){
+  const [feedback,setFeedback]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clienteId){setFeedback([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('gym_sesion_feedback').select('*')
+        .eq('gym_client_id',clienteId).order('fecha',{ascending:false}).limit(60)
+      if(error)throw error
+      setFeedback(data||[])
+    }catch(e){console.error('gym_sesion_feedback:',e.message);setFeedback([])}
+    finally{setLoading(false)}
+  },[clienteId])
+  useEffect(()=>{fetch()},[fetch])
+  return{feedback,loading,refetch:fetch}
+}
