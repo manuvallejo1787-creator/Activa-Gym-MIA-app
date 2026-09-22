@@ -1003,3 +1003,23 @@ export function useFeedbackSesiones(clienteId){
   useEffect(()=>{fetch()},[fetch])
   return{feedback,loading,refetch:fetch}
 }
+
+// ─── HOOK: Historial de ejecución de UN cliente (todos sus planes) ────────
+// Alimenta la carga sugerida desde lo que el cliente realmente levantó en
+// cada ejercicio, cuando no hay test del patrón.
+export function useEjecucionCliente(clienteId){
+  const [historial,setHistorial]=useState([])
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clienteId){setHistorial([]);return}
+    try{
+      const{data,error}=await supabase.from('ejecucion_registros')
+        .select('ejercicio_id,ejercicio_nombre,peso_real,reps_real,semana,updated_at')
+        .eq('gym_client_id',clienteId).not('peso_real','is',null)
+        .order('updated_at',{ascending:false}).limit(400)
+      if(error)throw error
+      setHistorial(data||[])
+    }catch(e){console.error('historial ejecucion:',e.message);setHistorial([])}
+  },[clienteId])
+  useEffect(()=>{fetch()},[fetch])
+  return{historial,refetch:fetch}
+}

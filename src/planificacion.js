@@ -1,3 +1,4 @@
+import { resolverTransferencia, estimacionConservadora } from "./transferencia.js";
 // planificacion.js — Sistemas de periodización + Tests de fuerza máxima
 // Fuente única de verdad para toda la planificación a largo plazo
 
@@ -512,12 +513,10 @@ const EXERCISE_TEST_MAP = [
 ];
 
 export const getTestIdForExercise = (nombreEjercicio) => {
-  if (!nombreEjercicio) return null;
-  const nombre = nombreEjercicio.toLowerCase();
-  for (const { testId, keywords } of EXERCISE_TEST_MAP) {
-    if (keywords.some(kw => nombre.includes(kw))) return testId;
-  }
-  return null;
+  // Ahora resuelve con el modelo de transferencia (transferencia.js), que
+  // además del test devuelve el coeficiente biomecánico del ejercicio.
+  const tr = resolverTransferencia(nombreEjercicio);
+  return tr && tr.modo !== 'corporal' ? tr.testId : null;
 };
 
 // ─── TABLA % 1RM POR REPETICIONES (Prilepin adaptado) ────────────────────
@@ -595,83 +594,142 @@ const parseRepsFromPhase = (repsStr) => {
 // repsEntered: reps escritas en el ejercicio del constructor (tienen prioridad).
 // El % se calcula SIEMPRE invirtiendo la fórmula con la que se midió el 1RM
 // del cliente (Epley+Brzycki o Lombardi), guardada en cada test.
-export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null, repsEntered = null) => {
+// ═══════════════════════════════════════════════════════════════════════════
+// sugerirPeso — SIEMPRE devuelve algo: un peso o el motivo por el que no hay.
+//
+// Cadena de fuentes, en orden de confianza:
+//   1. TEST  — 1RM del test del patrón × coeficiente de transferencia del
+//              ejercicio (transferencia.js). Unas aperturas con mancuernas ya
+//              no reciben la carga de un press con barra.
+//   2. HISTORIAL — la última carga que el propio cliente registró en ese
+//              ejercicio, con progresión chica si completó las reps.
+//   3. ESTIMACIÓN — peso corporal × ratio conservador del patrón × coeficiente.
+//              Carga de arranque deliberadamente baja, marcada como tal.
+//   4. SIN BASE — no hay test, ni historial, ni peso corporal: no se inventa
+//              un número. Se dice qué test hacer.
+// Ejercicios con peso corporal devuelven modo 'corporal' sin kg.
+//
+// Firma compatible: los 4 primeros parámetros son los de siempre; `opts` es
+// opcional y trae peso corporal, sexo e historial.
+// ═══════════════════════════════════════════════════════════════════════════
+export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null, repsEntered = null, opts = {}) => {
+  const { pesoCorporal = null, sexo = '', historial = [], exId = null } = opts || {};
+
   // Ejercicios por tiempo (isométricos, cardio) no se rigen por % de 1RM
-  if (repsEntered != null && /seg|min|\d+:\d{2}/.test(String(repsEntered).toLowerCase())) return null;
-  const testId = getTestIdForExercise(nombreEjercicio);
-  if (!testId || !testsCliente.length) return null;
+  if (repsEntered != null && /seg|min|\d+:\d{2}/.test(String(repsEntered).toLowerCase())) {
+    return { fuente: 'tiempo', pesoSugerido: null, motivo: 'Ejercicio por tiempo: no se prescribe por % de 1RM.' };
+  }
 
-  // Buscar el test más reciente para ese ejercicio
-  const testData = testsCliente
-    .filter(t => t.test_id === testId)
-    .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+  const tr = resolverTransferencia(nombreEjercicio);
+  if (tr && tr.modo === 'corporal') {
+    return { fuente: 'corporal', pesoSugerido: null, modo: 'corporal', confianza: tr.confianza, nota: tr.nota,
+      motivo: 'Peso corporal — ' + (tr.nota || 'sin carga externa') };
+  }
 
-  if (!testData.length) return null;
-
-  const last = testData[0];
-  const rm1 = parseFloat(last.rm1_real || last.rm1_calculado);
-  if (!rm1 || isNaN(rm1)) return null;
-
-  // Fórmula con la que se estimó ESTE 1RM
-  const formula = last.formula || 'epley_brzycki';
-  const formulaLabel = FORMULAS_1RM[formula]?.label || 'Epley + Brzycki';
-
-  // 1) Reps objetivo: prioridad ABSOLUTA a las reps ingresadas en el ejercicio.
-  //    Si no hay, se toman las de la fase del plan. Si tampoco, 10 por defecto.
-  let repsTarget = null;
-  let fuenteReps = null;
+  // Reps objetivo: prioridad a las ingresadas, después la fase, después 10.
+  let repsTarget = null, fuenteReps = null;
   const repsFromEntered = parseRepsFromPhase(repsEntered != null ? String(repsEntered) : '');
   if (repsFromEntered) { repsTarget = repsFromEntered; fuenteReps = 'ingresadas'; }
   else if (fasePlan?.reps) { repsTarget = parseRepsFromPhase(fasePlan.reps); fuenteReps = 'plan'; }
   if (!repsTarget) { repsTarget = 10; fuenteReps = 'default'; }
 
-  // 2) % sobre 1RM derivado de las reps con la MISMA fórmula del test
-  let pct = pctFromReps(repsTarget, formula);
-  let pctFueraRango = false;
-  if (pct == null) {                       // reps fuera del rango confiable de la fórmula
-    pct = getPctFor1RM(repsTarget) || 70;  // respaldo: tabla genérica Prilepin
-    pctFueraRango = true;
+  const round25 = (x) => Math.round(x / 2.5) * 2.5;
+  // Por mancuerna el salto mínimo real suele ser 1-2 kg, no 2,5.
+  const redondear = (x, modo) => modo === 'por_mano' ? Math.max(1, Math.round(x)) : Math.max(2.5, round25(x));
+  const unidad = (modo) => modo === 'por_mano' ? 'kg por mancuerna' : 'kg';
+
+  // ── 1) TEST × TRANSFERENCIA ───────────────────────────────────────────────
+  if (tr && tr.testId && testsCliente.length) {
+    const testData = testsCliente.filter(t => t.test_id === tr.testId)
+      .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    const last = testData[0];
+    const rm1Test = last ? parseFloat(last.rm1_real || last.rm1_calculado) : NaN;
+    if (last && rm1Test && !isNaN(rm1Test)) {
+      const formula = last.formula || 'epley_brzycki';
+      const formulaLabel = FORMULAS_1RM[formula]?.label || 'Epley + Brzycki';
+      const rm1 = rm1Test * tr.coef;              // 1RM estimado de ESTE ejercicio
+      let pct = pctFromReps(repsTarget, formula), pctFueraRango = false;
+      if (pct == null) { pct = getPctFor1RM(repsTarget) || 70; pctFueraRango = true; }
+      const pctAlta = pctFromReps(Math.max(1, repsTarget - 1), formula) || (pct + 3);
+      const pctBaja = pctFromReps(repsTarget + 1, formula) || (pct - 3);
+      const dias = Math.floor((new Date() - new Date(last.fecha)) / 86400000);
+      return {
+        fuente: 'test', testId: tr.testId, testNombre: tr.testNombre,
+        rm1: Math.round(rm1 * 10) / 10, rm1Test, rm1Fecha: last.fecha,
+        coef: tr.coef, modo: tr.modo, confianza: tr.confianza, nota: tr.nota, unidad: unidad(tr.modo),
+        formula, formulaLabel, reps: repsTarget, fuenteReps, pct, pctFueraRango,
+        pesoSugerido: redondear(rm1 * pct / 100, tr.modo),
+        pesoRango: `${redondear(rm1 * pctBaja / 100, tr.modo)}–${redondear(rm1 * pctAlta / 100, tr.modo)} ${unidad(tr.modo)}`,
+        repsTarget: `${repsTarget}`, rir: fasePlan?.rir || null, intensidad: fasePlan?.intensidad || null,
+        diasDesdeTest: dias, testVencido: dias > 120,
+        explicacion: tr.coef === 1
+          ? `${pct}% del 1RM de ${tr.testNombre} (${rm1Test} kg)`
+          : `${tr.testNombre} ${rm1Test} kg × ${tr.coef} (${tr.nota || 'transferencia'}) → ${pct}% para ${repsTarget} reps`,
+      };
+    }
   }
 
-  // 3) Peso para ese % + banda práctica (±1 rep)
-  const round25 = (x) => Math.round(x / 2.5) * 2.5;
-  const pesoSugerido = round25(rm1 * pct / 100);
-  const pctAlta = pctFromReps(Math.max(1, repsTarget - 1), formula) || (pct + 3); // 1 rep menos = más carga
-  const pctBaja = pctFromReps(repsTarget + 1, formula) || (pct - 3);              // 1 rep más = menos carga
-  const pesoMax = round25(rm1 * pctAlta / 100);
-  const pesoMin = round25(rm1 * pctBaja / 100);
+  // ── 2) HISTORIAL PROPIO DEL CLIENTE EN ESE EJERCICIO ──────────────────────
+  const hist = (historial || [])
+    .filter(h => (exId && h.ejercicio_id === exId) || (!exId && h.ejercicio_nombre === nombreEjercicio))
+    .filter(h => !isNaN(parseFloat(h.peso_real)) && parseFloat(h.peso_real) > 0)
+    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  if (hist.length) {
+    const ult = hist[0];
+    const peso = parseFloat(ult.peso_real);
+    const repsHechas = parseFloat(ult.reps_real);
+    const cumplio = !isNaN(repsHechas) && repsHechas >= repsTarget;
+    const modo = tr?.modo || 'total';
+    // Si completó las reps, progresa. Con mancuernas el +2,5% no mueve el
+    // número (14 kg → 14,35): el salto real es la mancuerna siguiente.
+    const prox = !cumplio ? peso
+      : modo === 'por_mano' ? peso + 1
+      : Math.max(peso * 1.025, peso + 2.5);
+    return {
+      fuente: 'historial', modo, confianza: 'alta', unidad: unidad(modo),
+      pesoSugerido: redondear(prox, modo), reps: repsTarget, repsTarget: `${repsTarget}`, fuenteReps,
+      pesoRango: `${redondear(peso * 0.95, modo)}–${redondear(peso * 1.05, modo)} ${unidad(modo)}`,
+      explicacion: cumplio
+        ? `Última carga registrada: ${peso} kg × ${repsHechas} reps → sube porque completó las repeticiones`
+        : `Última carga registrada: ${peso} kg${isNaN(repsHechas) ? '' : ` × ${repsHechas} reps`} → se mantiene hasta completarlas`,
+      nota: tr?.nota || '',
+    };
+  }
 
-  const dias = Math.floor((new Date() - new Date(last.fecha)) / 86400000);
+  // ── 3) ESTIMACIÓN CONSERVADORA POR PESO CORPORAL ──────────────────────────
+  if (tr && tr.testId) {
+    const rm1Base = estimacionConservadora(tr.testId, pesoCorporal, sexo);
+    if (rm1Base) {
+      const rm1 = rm1Base * tr.coef;
+      const pct = getPctFor1RM(repsTarget) || 70;
+      return {
+        fuente: 'estimacion', testId: tr.testId, testNombre: tr.testNombre,
+        modo: tr.modo, confianza: 'baja', unidad: unidad(tr.modo), coef: tr.coef,
+        pesoSugerido: redondear(rm1 * pct / 100, tr.modo), reps: repsTarget, repsTarget: `${repsTarget}`, fuenteReps, pct,
+        pesoRango: `${redondear(rm1 * (pct - 8) / 100, tr.modo)}–${redondear(rm1 * pct / 100, tr.modo)} ${unidad(tr.modo)}`,
+        explicacion: `Sin test de ${tr.testNombre}: estimación de ARRANQUE desde el peso corporal (${pesoCorporal} kg), deliberadamente baja. Ajustá en la primera serie.`,
+        nota: tr.nota,
+      };
+    }
+  }
 
+  // ── 4) SIN BASE — no se inventa un número ─────────────────────────────────
   return {
-    testId,
-    rm1,
-    rm1Fecha: last.fecha,
-    formula,
-    formulaLabel,
-    reps: repsTarget,
-    fuenteReps,                 // 'ingresadas' | 'plan' | 'default'
-    pct,                        // % del 1RM que representan esas reps
-    pctFueraRango,
-    pesoSugerido,
-    pesoRango: `${pesoMin}–${pesoMax} kg`,
-    repsTarget: `${repsTarget}`,
-    rir: fasePlan?.rir || null,
-    intensidad: fasePlan?.intensidad || null,
-    diasDesdeTest: dias,
-    testVencido: dias > 120,
+    fuente: 'sin_base', pesoSugerido: null, modo: tr?.modo || null,
+    motivo: tr?.testId
+      ? `Sin test de ${tr.testNombre}, sin historial y sin peso corporal cargado. Hacé el test de ${tr.testNombre} o cargá el peso corporal del cliente.`
+      : `Ejercicio sin patrón de carga tipificado. Cargá el peso a mano; desde la primera vez que el cliente lo registre, el sistema lo va a sugerir desde su historial.`,
   };
 };
 
-// ─── SUGERENCIAS PARA UN BLOQUE COMPLETO ─────────────────────────────────
 export const sugerirPesosBloque = (exercises, exsDB, testsCliente, fasePlan) => {
   return exercises.map(be => {
     const ex = exsDB.find(e => e.id === be.exId);
     if (!ex) return { exId: be.exId, sugerencia: null };
     const reps = be.params?.reps ?? null;   // reps reales del ejercicio en el constructor
-    const sugerencia = sugerirPeso(ex.nombre, testsCliente, fasePlan, reps);
+    const sugerencia = sugerirPeso(ex.nombre, testsCliente, fasePlan, reps, { exId: be.exId });
     return { exId: be.exId, nombre: ex.nombre, sugerencia };
-  }).filter(x => x.sugerencia !== null);
+  }).filter(x => x.sugerencia && x.sugerencia.pesoSugerido);
 };
 
 // ─── PLAZOS DEL PLAN (cronograma de fases con fechas) ────────────────────

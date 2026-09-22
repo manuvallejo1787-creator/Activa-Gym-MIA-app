@@ -145,6 +145,11 @@ ${(() => {
   ).join("\n");
 })()}
 
+CARGAS — NO LAS CALCULES VOS:
+- NO incluyas pesos. La carga de cada ejercicio la calcula el motor determinista del sistema aplicando un coeficiente de transferencia biomecánica sobre el test del patrón.
+- Motivo: un 1RM de press banca con barra NO se traslada a unas aperturas con mancuernas, ni una sentadilla trasera a una búlgara, ni un peso muerto convencional a un rumano. Mismo músculo no es misma carga: cambian el brazo de palanca, la estabilidad requerida y si es uni o bilateral.
+- Tu trabajo es ELEGIR bien los ejercicios y justificar la selección. Usá los 1RM solo para razonar el nivel del cliente, nunca para prescribir kilos.
+
 REGLAS ESTRICTAS:
 - El "type" de cada bloque DEBE ser uno de: movilidad, activacion, zona_media, prev_rehab, potencia, pliometria, fuerza, accesorios, cardio, flex_recovery, propiocepcion, funcional.
 - Cada "exId" dentro de un bloque DEBE pertenecer al grupo de ese bloque (mismo tipo). Si el ejercicio "sentadilla" está listado bajo BLOQUE "fuerza", solo puede ir en un bloque type="fuerza".
@@ -160,7 +165,7 @@ Respondé ÚNICAMENTE con este JSON (sin texto extra):
       "type": "uno de los tipos válidos",
       "params": { "series": "3", "reps": "10-12", "rpe": "7", "tempo": "2-0-1", "descanso": "90s" },
       "exercises": [
-        { "exId": "id_exacto_de_ese_bloque", "pesoSug": "kg si aplica", "anotacion": "indicación técnica breve" }
+        { "exId": "id_exacto_de_ese_bloque", "anotacion": "indicación técnica breve, específica para este cliente" }
       ]
     }
   ],

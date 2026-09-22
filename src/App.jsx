@@ -4,13 +4,15 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
 import { generarPlanBase } from "./generadorPlan.js";
+import { describirEjercicio } from "./descripciones.js";
+import { ETIQUETA_CONFIANZA } from "./transferencia.js";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
 import { POTENCIA_NORMAS, PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
 
@@ -3144,6 +3146,8 @@ export default function App(){
   // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
   const {feedback:activeClientFeedback}=useFeedbackSesiones(activeClient?.id||null);
+  const {historial:activeClientHist}=useEjecucionCliente(activeClient?.id||null);
+
   // Registro de planes del cliente activo + base de conocimiento de la IA
   const {gymPlanes,savePlan:saveGymPlan,deletePlan:deleteGymPlan}=useGymPlanes(activeClient?.id||null);
   // Plan que el cliente está ejecutando (activo más reciente) + sus registros reales
@@ -3187,10 +3191,60 @@ export default function App(){
   const [compilarSel,setCompilarSel]=useState([]);
   const [showEntrenarIA,setShowEntrenarIA]=useState(false);
   // Fase activa del plan de periodización del cliente
-  const activeFasePlan=useMemo(()=>{
-    if(!activeClient?.periodizacion||!PERIODIZACIONES[activeClient.periodizacion])return null;
-    return PERIODIZACIONES[activeClient.periodizacion].fases[0]||null;
-  },[activeClient]);
+  // FASE DEL CICLO que rige las cargas y las reps del constructor.
+  //
+  // FIX: antes devolvía SIEMPRE fases[0]. Un cliente en la semana 9 de un
+  // lineal recibía sugerencias con las reps de adaptación anatómica.
+  // Ahora, en este orden:
+  //   1. la fase que elegiste en el selector del constructor
+  //   2. la que corresponde por fecha (semanas desde el inicio del ciclo)
+  //   3. la primera
+  const [faseManualIdx,setFaseManualIdx]=useState(null);
+  useEffect(()=>{setFaseManualIdx(null);},[activeClient?.id]);   // al cambiar de cliente, vuelve a automático
+  const faseInfo=useMemo(()=>{
+    const per=activeClient?.periodizacion&&PERIODIZACIONES[activeClient.periodizacion];
+    if(!per)return{idx:null,auto:null,total:0,fases:[]};
+    const fases=per.fases||[];
+    let auto=0;
+    const ini=activeClient.periodizacion_inicio||activeClient.periodizacionInicio;
+    if(ini){
+      const sem=Math.floor((Date.now()-new Date(ini+'T12:00').getTime())/(7*864e5))+1;
+      const rango=f=>{const m=String(f.semanas||'').match(/(\d+)\s*[–-]\s*(\d+)/);return m?[+m[1],+m[2]]:null;};
+      const k=fases.findIndex(f=>{const r=rango(f);return r&&sem>=r[0]&&sem<=r[1];});
+      if(k>=0)auto=k;
+      else{const ult=fases.map(rango).filter(Boolean).pop();if(ult&&sem>ult[1])auto=fases.length-1;}
+    }
+    const idx=(faseManualIdx!=null&&faseManualIdx<fases.length)?faseManualIdx:auto;
+    return{idx,auto,total:fases.length,fases,manual:faseManualIdx!=null};
+  },[activeClient,faseManualIdx]);
+  const activeFasePlan=useMemo(()=>
+    faseInfo.idx!=null?(faseInfo.fases[faseInfo.idx]||null):null
+  ,[faseInfo]);
+  // Un único punto de cálculo de carga sugerida para todo el constructor:
+  // test × transferencia → historial → estimación por peso corporal → sin base.
+  const sugerirCarga=useCallback((nombre,reps,exId)=>sugerirPeso(
+    nombre,activeClientTests||[],activeFasePlan,reps,
+    {pesoCorporal:activeClient?.screening?.peso,sexo:activeClient?.screening?.genero,historial:activeClientHist||[],exId}
+  ),[activeClientTests,activeFasePlan,activeClient,activeClientHist]);
+  // Recalcular las cargas "auto" cuando cambia la fase (o llegan tests/historial).
+  // Los ejercicios con carga fijada a mano (pesoSugAuto===false) no se tocan.
+  useEffect(()=>{
+    if(!activeClient)return;
+    setSession(prev=>{
+      if(!prev?.dias)return prev;
+      let cambio=false;
+      const dias=prev.dias.map(d=>({...d,blocks:(d.blocks||[]).map(b=>({...b,exercises:(b.exercises||[]).map(be=>{
+        if(be.pesoSugAuto===false)return be;
+        const exO=exs.find(e=>e.id===be.exId);if(!exO)return be;
+        const ns=sugerirCarga(exO.nombre,(be.params||b.params||{}).reps,exO.id);
+        const v=ns&&ns.pesoSugerido?String(ns.pesoSugerido):'';
+        if(v===(be.pesoSug||''))return be;
+        cambio=true;return{...be,pesoSug:v};
+      })}))}));
+      return cambio?{...prev,dias}:prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[faseInfo.idx,activeClientTests,activeClientHist]);
 
   // ── DÍA ACTIVO + GESTIÓN DE DÍAS DEL PLAN ────────────────────────────────
   const numDias=session.dias?.length||1;
@@ -3321,7 +3375,12 @@ export default function App(){
         exercises:b.exercises.map(e=>({
           exId:e.exId,override:false,note:'',
           params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'},
-          pesoSug:e.pesoSug||'',pesoReal:'',anotacion:e.anotacion||''
+          // La IA elige ejercicios; la CARGA la pone el motor de transferencia.
+          // Antes se aceptaba el pesoSug que devolvía la IA, que lo deducía
+          // de los 1RM crudos y le daba a unas aperturas la carga de un press.
+          pesoSug:(()=>{const exO=exs.find(x=>x.id===e.exId);const ns=exO?sugerirCarga(exO.nombre,(b.params||{}).reps,exO.id):null;return ns&&ns.pesoSugerido?String(ns.pesoSugerido):'';})(),
+          pesoSugAuto:true,pesoReal:'',
+          anotacion:e.anotacion||describirEjercicio(exs.find(x=>x.id===e.exId),b.params||{})
         })),
         params:{series:b.params?.series||'3',reps:b.params?.reps||'10-12',rpe:b.params?.rpe||'7',tempo:b.params?.tempo||'2-0-1',descanso:b.params?.descanso||'90s'}
       }));
@@ -3343,10 +3402,12 @@ export default function App(){
     setDia(d=>({...d,blocks:d.blocks.map(b=>{
       if(b.id!==blockId||b.exercises.length>=5)return b;
       const exObj=exs.find(e=>e.id===exId);
-      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,b.params.reps):null;
-      const exEntry={exId,override,note,
-        params:{series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso},
-        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:''};
+      const ns=exObj?sugerirCarga(exObj.nombre,b.params.reps,exObj.id):null;
+      const params={series:b.params.series,reps:b.params.reps,rpe:b.params.rpe,tempo:b.params.tempo,descanso:b.params.descanso};
+      const exEntry={exId,override,note,params,
+        pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoSugAuto:true,pesoReal:'',
+        // Descripción de ejecución precargada: editable, y nunca pisa una anotación existente.
+        anotacion:describirEjercicio(exObj,params)};
       return{...b,exercises:[...b.exercises,exEntry]};
     })}));
   };
@@ -3362,7 +3423,7 @@ export default function App(){
       // Recalcular peso sugerido al cambiar reps/modo, salvo que se haya fijado a mano
       if(('reps'in params||'modo'in params)&&be.pesoSugAuto!==false){
         const exObj=exs.find(e=>e.id===exId);
-        const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,merged.params.reps):null;
+        const ns=exObj?sugerirCarga(exObj.nombre,merged.params.reps,exObj.id):null;
         merged.pesoSug=(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'';
       }
       return merged;
@@ -3379,7 +3440,7 @@ export default function App(){
     return{...b,exercises:b.exercises.map(be=>{
       if(be.exId!==exId)return be;
       const exObj=exs.find(e=>e.id===exId);
-      const ns=exObj?sugerirPeso(exObj.nombre,activeClientTests,activeFasePlan,(be.params||{}).reps):null;
+      const ns=exObj?sugerirCarga(exObj.nombre,(be.params||{},exObj.id).reps):null;
       return{...be,pesoSugAuto:true,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):''};
     })};
   })}));
@@ -3400,8 +3461,9 @@ export default function App(){
     if(b.id!==blockId)return b;
     const arr=b.exercises.slice();
     if(idx<0||idx>=arr.length)return b;
-    const ns=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,(arr[idx].params||b.params).reps);
-    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',anotacion:'',pesoSugAuto:true};
+    const ns=sugerirCarga(ex.nombre,(arr[idx].params||b.params,ex.id).reps);
+    arr[idx]={...arr[idx],exId:ex.id,override,note,pesoSug:(ns&&ns.pesoSugerido)?String(ns.pesoSugerido):'',pesoReal:'',
+      anotacion:describirEjercicio(ex,arr[idx].params||{}),pesoSugAuto:true};
     return{...b,exercises:arr};
   })}));
   const updateParams=(blockId,key,val)=>setDia(d=>({...d,blocks:d.blocks.map(b=>b.id===blockId?{...b,params:{...b.params,[key]:val}}:b)}));
@@ -3484,7 +3546,8 @@ export default function App(){
           const ex=exs.find(e=>e.id===be.exId);
           const exNombre=ex?ex.nombre:be.exId;
           const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const sugInfo=ex?sugerirCarga(ex.nombre,pr.reps,ex.id):null;
+          const sug=sugInfo&&sugInfo.pesoSugerido?sugInfo:null;
           const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');
           const pctTxt=sug?`${sug.pct}%`:'—';
           const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
@@ -3590,7 +3653,8 @@ export default function App(){
         if((b.exercises||[]).length===0)return[`<tr><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;">${b.position}</td><td style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;">${bd.emoji||''} ${bd.label}</td><td colspan="${3+SEMANAS}" style="padding:5px 8px;color:#999;font-style:italic;">Sin ejercicios</td></tr>`];
         return b.exercises.map((be,idx)=>{
           const ex=exs.find(e=>e.id===be.exId);const exNombre=ex?ex.nombre:be.exId;const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const sugInfo=ex?sugerirCarga(ex.nombre,pr.reps,ex.id):null;
+          const sug=sugInfo&&sugInfo.pesoSugerido?sugInfo:null;
           const cargaSug=be.pesoSug||(sug?sug.pesoSugerido:'');const pctTxt=sug?`${sug.pct}%`:'—';
           const detalle=`${pr.series||'?'}×${pr.reps||'?'}${pr.tempo?` · tempo ${pr.tempo}`:''}${pr.descanso?` · desc ${pr.descanso}`:''}${pr.rpe?` · RPE ${pr.rpe}`:''}`;
           const bloqueCel=idx===0?`<td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;text-align:center;vertical-align:middle;">${b.position}</td><td rowspan="${b.exercises.length}" style="background:${bg};color:#fff;font-weight:700;padding:5px 8px;vertical-align:middle;font-size:10px;">${bd.emoji||''} ${bd.label}</td>`:'';
@@ -3663,7 +3727,8 @@ export default function App(){
         b.exercises.forEach(be=>{
           const ex=exs.find(e=>e.id===be.exId);
           const pr=be.params||b.params;
-          const sug=ex?sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,pr.reps):null;
+          const sugInfo=ex?sugerirCarga(ex.nombre,pr.reps,ex.id):null;
+          const sug=sugInfo&&sugInfo.pesoSugerido?sugInfo:null;
           rows.push([diaLbl,b.position,bd.label,(be.grupo?`[${grupoTagTxt(be.grupo)}] `:'')+(ex?ex.nombre:be.exId),be.override?'SI':'NO',pr.series,pr.reps,pr.rpe,pr.tempo,pr.descanso,sug?`${sug.pct}%`:'',be.pesoSug||(sug?sug.pesoSugerido:''),'','','','','','','','',session.cliente,nivelLabel||objLbl,planNom,session.fecha]);
         });
       });
@@ -4112,6 +4177,38 @@ export default function App(){
           );
         })()}
         {/* PLAZOS DEL PLAN — duración total y fases con fechas (punto 4) */}
+        {/* ── SELECTOR DE FASE DEL CICLO ──────────────────────────────────────
+            Rige las reps de la sugerencia de carga, los parámetros por defecto
+            y la fase que recibe la IA. Por defecto se calcula por fecha; tocar
+            una fase la fija a mano (útil para adelantar trabajo). */}
+        {faseInfo.total>0&&(
+          <div style={{background:BK,border:'1px solid #333',borderRadius:10,padding:'12px 14px',marginBottom:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexWrap:'wrap',gap:6}}>
+              <span style={{fontSize:12,fontWeight:800,color:WH}}>🎚️ Fase del ciclo — {PERIODIZACIONES[activeClient.periodizacion]?.nombre}</span>
+              {faseInfo.manual
+                ? <button onClick={()=>setFaseManualIdx(null)} style={{background:'none',border:'1px solid #1BAA86',color:'#7FE9CE',borderRadius:6,padding:'3px 9px',fontSize:10,fontWeight:700,cursor:'pointer'}}>↻ volver a la fase por fecha (F{faseInfo.auto+1})</button>
+                : <span style={{fontSize:10,color:'#7FE9CE'}}>automática por fecha</span>}
+            </div>
+            <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:2}}>
+              {faseInfo.fases.map((f,i)=>{
+                const on=i===faseInfo.idx, esAuto=i===faseInfo.auto;
+                return(
+                  <button key={i} onClick={()=>setFaseManualIdx(i)}
+                    style={{flex:'0 0 auto',minWidth:118,textAlign:'left',cursor:'pointer',borderRadius:8,padding:'8px 10px',
+                      background:on?brand.colorPrimary:'#1f1f1f',border:`1px solid ${on?brand.colorPrimary:esAuto?'#1BAA86':'#3a3a3a'}`,color:WH}}>
+                    <div style={{fontSize:10,fontWeight:800}}>F{i+1} · {f.nombre}{esAuto?' 📅':''}</div>
+                    <div style={{fontSize:9,opacity:.85,marginTop:2}}>sem {f.semanas} · {f.reps} reps</div>
+                    <div style={{fontSize:9,opacity:.7}}>{f.intensidad}{f.rir?` · RIR ${f.rir}`:''}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{fontSize:9,color:G4,marginTop:7,lineHeight:1.45}}>
+              Las cargas sugeridas se recalculan con las reps de la fase elegida en todos los ejercicios en modo <strong>auto</strong>.
+              Los que fijaste a mano no se tocan. 📅 = la que corresponde hoy por fecha.
+            </div>
+          </div>
+        )}
         {planMeta&&(
           <div style={{background:'#0A3D62',borderRadius:10,padding:'14px 16px',marginBottom:14,borderLeft:'4px solid #1BAA86'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8,marginBottom:8}}>
@@ -4297,7 +4394,7 @@ export default function App(){
               </div>
             );
           })()}
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={session.faseIdx||0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={faseInfo.idx??0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
@@ -4516,7 +4613,10 @@ export default function App(){
                     const ex=exs.find(e=>e.id===be.exId);if(!ex)return null;
                     const rest=checkRestriction(ex,activeClient);
                     const exParams=be.params||block.params;
-                    const sug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,exParams.reps);
+                    // sugInfo explica SIEMPRE de dónde sale la carga (o por qué no hay);
+                    // sug solo existe cuando hay un número, como antes.
+                    const sugInfo=sugerirCarga(ex.nombre,exParams.reps,ex.id);
+                    const sug=sugInfo&&sugInfo.pesoSugerido?sugInfo:null;
                     // Seed peso sugerido the first time
                     if(sug&&be.pesoSug===''&&sug.pesoSugerido){
                       setTimeout(()=>updateExParam(block.id,be.exId,'pesoSug',String(sug.pesoSugerido)),0);
@@ -4601,10 +4701,20 @@ export default function App(){
                               <input value={be.pesoSug||''} onChange={e=>setPesoSugManual(block.id,be.exId,e.target.value)}
                                 placeholder={sug?`${sug.pesoSugerido} kg`:'—'}
                                 style={{width:'100%',border:'1px solid #C4B5FD',borderRadius:4,padding:'3px 5px',fontSize:10,background:'#FAF5FF',color:'#4C1D95',outline:'none'}}/>
-                              {sug&&<div style={{fontSize:8,color:'#9F7AEA',marginTop:1,lineHeight:1.3}}>
-                                <strong style={{color:'#6D28D9'}}>{sug.reps} reps = {sug.pct}% del 1RM</strong> ({sug.rm1}kg)<br/>
-                                rango {sug.pesoRango} · {sug.formulaLabel}{sug.pctFueraRango?' · reps fuera de rango':''}
-                              </div>}
+                              {sugInfo&&(()=>{
+                                const F={test:['🧪 test','#6D28D9'],historial:['📈 su historial','#0E7490'],estimacion:['⚖️ estimación','#B45309'],
+                                  corporal:['🏋️ peso corporal','#166534'],tiempo:['⏱ por tiempo','#166534'],sin_base:['⚠ sin base','#B91C1C']}[sugInfo.fuente]||['',G4];
+                                const cc={alta:'#16A34A',media:'#D97706',baja:'#DC2626'}[sugInfo.confianza];
+                                return(
+                                <div style={{fontSize:8,color:'#7C6BA8',marginTop:2,lineHeight:1.35}}>
+                                  <span style={{fontWeight:800,color:F[1]}}>{F[0]}</span>
+                                  {sugInfo.unidad&&sugInfo.pesoSugerido&&<span> · {sugInfo.unidad}</span>}
+                                  {sugInfo.confianza&&sugInfo.fuente!=='corporal'&&<span title={ETIQUETA_CONFIANZA[sugInfo.confianza]||''} style={{color:cc,fontWeight:700}}> · confianza {sugInfo.confianza}</span>}
+                                  <br/>{sugInfo.explicacion||sugInfo.motivo}
+                                  {sugInfo.pesoRango&&sugInfo.pesoSugerido&&<><br/>rango {sugInfo.pesoRango}</>}
+                                  {sugInfo.testVencido&&<><br/><span style={{color:'#B91C1C',fontWeight:700}}>test de hace {sugInfo.diasDesdeTest} días: conviene repetirlo</span></>}
+                                </div>);
+                              })()}
                             </div>
                           </div>
                           <div>
@@ -4615,9 +4725,11 @@ export default function App(){
                           </div>
                           <div>
                             <div style={{fontSize:8,color:G4,marginBottom:1,textTransform:'uppercase'}}>📝 Anotaciones</div>
-                            <input value={be.anotacion||''} onChange={e=>updateExParam(block.id,be.exId,'anotacion',e.target.value)}
-                              placeholder="Notas de esta serie..."
-                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none'}}/>
+                            <textarea value={be.anotacion||''} onChange={e=>updateExParam(block.id,be.exId,'anotacion',e.target.value)}
+                              placeholder="Notas de esta serie..." rows={3}
+                              style={{width:'100%',border:`1px solid ${G2}`,borderRadius:4,padding:'3px 5px',fontSize:10,background:WH,color:'#111',outline:'none',resize:'vertical',fontFamily:'inherit',lineHeight:1.35}}/>
+                            {!be.anotacion&&<button onClick={()=>updateExParam(block.id,be.exId,'anotacion',describirEjercicio(ex,exParams))}
+                              style={{background:'none',border:'none',color:'#6D28D9',fontSize:8,fontWeight:700,cursor:'pointer',padding:0,marginTop:1}}>+ descripción de ejecución</button>}
                           </div>
                         </div>
                         {sug?.testVencido&&<div style={{fontSize:8,color:'#F59E0B',marginTop:3,fontWeight:700}}>⚠ Test de fuerza vencido ({sug.diasDesdeTest} días) — peso puede estar desactualizado</div>}
@@ -4639,7 +4751,7 @@ export default function App(){
                       <div style={s.lbl}>Ejercicios del bloque</div>
                       <div style={{maxHeight:160,overflowY:'auto',marginBottom:8}}>
                         {exs.filter(e=>e.bloque===block.type&&(!exSearch||e.nombre.toLowerCase().includes(exSearch.toLowerCase()))).map(ex=>{
-                            const pickSug=sugerirPeso(ex.nombre,activeClientTests,activeFasePlan,block.params.reps);
+                            const pickSug=sugerirCarga(ex.nombre,block.params.reps,ex.id);
                           const added=block.exercises.some(be=>be.exId===ex.id);
                           const rest=checkRestriction(ex,activeClient);
                           const bgColor=rest==='block'?'#FEF2F2':rest==='warn'?'#FFFBEB':pickSug?'#FAF5FF':WH;
