@@ -1069,15 +1069,22 @@ export function useSalaDatos(ids = []) {
     if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});return}
     setLoading(true)
     try{
-      const[t,p]=await Promise.all([
+      // Las columnas reales son peso_levantado y reps_realizadas: pedir
+      // 'peso,reps' hacía que PostgREST rechazara TODA la consulta.
+      // Y al ir las dos en un Promise.all que lanzaba, el error de los tests
+      // se llevaba también los planes: en sala no aparecía ninguna de las dos
+      // cosas por un solo nombre de columna mal escrito.
+      // Ahora cada consulta falla por separado y se informa cuál falló.
+      const[t,p]=await Promise.allSettled([
         supabase.from('fuerza_tests')
-          .select('gym_client_id,test_id,fecha,rm1_real,rm1_calculado,peso,reps,formula')
+          .select('gym_client_id,test_id,test_nombre,fecha,rm1_real,rm1_calculado,peso_levantado,reps_realizadas,nivel_resultado,formula')
           .in('gym_client_id',lista).order('fecha',{ascending:false}),
         supabase.from('gym_planes')
           .select('id,gym_client_id,nombre,estado,fecha_inicio,fecha_fin_estimada,periodizacion,num_dias,dias')
           .in('gym_client_id',lista).eq('estado','activo'),
-      ])
-      if(t.error)throw t.error; if(p.error)throw p.error
+      ]).then(rs=>rs.map(r=>r.status==='fulfilled'?r.value:{error:r.reason,data:null}))
+      if(t.error)console.error('sala/tests:',t.error.message||t.error)
+      if(p.error)console.error('sala/planes:',p.error.message||p.error)
       // Un test por patrón, el más reciente
       const porCli={}
       ;(t.data||[]).forEach(r=>{

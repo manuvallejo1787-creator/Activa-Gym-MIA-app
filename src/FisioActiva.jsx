@@ -7,7 +7,7 @@ import { getPrintCSS } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCriteriosAvanceTemplate, usePlanesClinicos, genId } from "./db.js";
 import PlanClinico from "./PlanClinico.jsx";
-import { FASE_A_PROT, prescripcionDeHoy, PROT_SESION } from "./planClinicoMotor.js";
+import { FASE_A_PROT, prescripcionDeHoy, PROT_SESION, generarSesionClinica, tipoItemRehab } from "./planClinicoMotor.js";
 import { AIGeneradorProtocolo, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 
 // ─── PROTOCOLO POR REGIÓN Y FASE (para auto-carga en sesiones) ──────────────
@@ -513,7 +513,7 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
   const removeEx = (id) => setF(f => ({...f, ejercicios_lista: f.ejercicios_lista.filter(e=>e.id!==id)}));
   const addEx = (nombre) => {
     if (!nombre.trim()) return;
-    setF(f => ({...f, ejercicios_lista:[...f.ejercicios_lista,{id:'add_'+Date.now(),nombre:nombre.trim(),activo:true,editado:true}]}));
+    setF(f => ({...f, ejercicios_lista:[...f.ejercicios_lista,{id:'add_'+Date.now(),nombre:nombre.trim(),activo:true,editado:true,tipo:tipoItemRehab(nombre),series:'3',reps:'10-12',tiempo:'',carga:'',notas:''}]}));
     setExEditando('');
   };
   const applyAIProtocolo = (aiResult) => {
@@ -596,15 +596,87 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
               </div>
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:6}}>
-              {form.ejercicios_lista.map(ej=>(
-                <div key={ej.id} style={{display:'flex',gap:6,alignItems:'center',background:ej.activo?WH2:'#F9FAFB',borderRadius:5,padding:'4px 8px',border:`1px solid ${ej.activo?'#86EFAC':G2c}`,opacity:ej.activo?1:0.55}}>
-                  <input type="checkbox" checked={ej.activo} onChange={e=>setEx(ej.id,'activo',e.target.checked)} style={{accentColor:TL2,flexShrink:0}}/>
-                  <input value={ej.nombre} onChange={e=>setEx(ej.id,'nombre',e.target.value)}
-                    style={{flex:1,border:'none',background:'transparent',fontSize:11,outline:'none',color:ej.activo?G4c:G3c}}/>
-                  <button onClick={()=>removeEx(ej.id)} style={{background:'none',border:'none',color:G3c,cursor:'pointer',fontSize:14,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+              {form.ejercicios_lista.map(ej=>{
+                // Cada ítem lleva su dosis. La unidad depende del tipo:
+                // un isométrico y un estiramiento van en SEGUNDOS, un
+                // excéntrico en repeticiones, y una modalidad (crioterapia,
+                // educación) no lleva series ni carga.
+                const T={modalidad:['#6B7280','modalidad'],movilidad:['#7C3AED','movilidad'],ejercicio:['#16A34A','ejercicio']}[ej.tipo]||null;
+                const porTiempo=!!ej.tiempo&&!ej.reps;
+                return(
+                <div key={ej.id} style={{background:ej.activo?WH2:'#F9FAFB',borderRadius:6,padding:'6px 8px',border:`1px solid ${ej.activo?'#86EFAC':G2c}`,opacity:ej.activo?1:0.55}}>
+                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                    <input type="checkbox" checked={ej.activo} onChange={e=>setEx(ej.id,'activo',e.target.checked)} style={{accentColor:TL2,flexShrink:0}}/>
+                    <input value={ej.nombre} onChange={e=>setEx(ej.id,'nombre',e.target.value)}
+                      style={{flex:1,minWidth:0,border:'none',background:'transparent',fontSize:11,fontWeight:600,outline:'none',color:ej.activo?G4c:G3c}}/>
+                    {ej.region&&<span style={{fontSize:8,color:G3c,flexShrink:0}}>{ej.region}</span>}
+                    {T&&<span style={{fontSize:8,color:T[0],border:`1px solid ${T[0]}55`,borderRadius:99,padding:'1px 6px',flexShrink:0}}>{T[1]}</span>}
+                    <button onClick={()=>removeEx(ej.id)} style={{background:'none',border:'none',color:G3c,cursor:'pointer',fontSize:14,lineHeight:1,padding:'0 2px',flexShrink:0}}>×</button>
+                  </div>
+                  {ej.tipo!=='modalidad'?(
+                    <div style={{display:'flex',gap:4,marginTop:4,alignItems:'center',flexWrap:'wrap'}}>
+                      <input value={ej.series||''} onChange={e=>setEx(ej.id,'series',e.target.value)} placeholder="series"
+                        style={{...s2.inp,fontSize:10,width:52,padding:'3px 5px',textAlign:'center'}}/>
+                      <span style={{fontSize:10,color:G3c}}>×</span>
+                      {porTiempo
+                        ? <input value={ej.tiempo||''} onChange={e=>setEx(ej.id,'tiempo',e.target.value)} placeholder="tiempo"
+                            style={{...s2.inp,fontSize:10,width:82,padding:'3px 5px',textAlign:'center'}}/>
+                        : <input value={ej.reps||''} onChange={e=>setEx(ej.id,'reps',e.target.value)} placeholder="reps"
+                            style={{...s2.inp,fontSize:10,width:70,padding:'3px 5px',textAlign:'center'}}/>}
+                      <button onClick={()=>{ if(porTiempo){setEx(ej.id,'reps','8-12');setEx(ej.id,'tiempo','');} else {setEx(ej.id,'tiempo','30-45 seg');setEx(ej.id,'reps','');} }}
+                        title="Cambiar entre repeticiones y tiempo"
+                        style={{background:'none',border:`1px solid ${G2c}`,color:G3c,borderRadius:4,fontSize:9,padding:'3px 6px',cursor:'pointer'}}>
+                        {porTiempo?'→ reps':'→ tiempo'}
+                      </button>
+                      <input value={ej.carga||''} onChange={e=>setEx(ej.id,'carga',e.target.value)} placeholder="carga / intención"
+                        style={{...s2.inp,fontSize:10,flex:1,minWidth:110,padding:'3px 5px'}}/>
+                    </div>
+                  ):(
+                    <div style={{display:'flex',gap:4,marginTop:4,alignItems:'center'}}>
+                      <input value={ej.tiempo||''} onChange={e=>setEx(ej.id,'tiempo',e.target.value)} placeholder="duración"
+                        style={{...s2.inp,fontSize:10,width:92,padding:'3px 5px',textAlign:'center'}}/>
+                      <span style={{fontSize:9,color:G3c,fontStyle:'italic'}}>sin series ni carga: es una indicación, no un ejercicio</span>
+                    </div>
+                  )}
+                  {ej.notas&&<div style={{fontSize:9,color:G3c,marginTop:3}}>{ej.notas}</div>}
                 </div>
-              ))}
+              );})}
             </div>
+            {/* ── CONSTRUCTOR DE SESIÓN CLÍNICA ───────────────────────────
+                Misma lógica que el del gym: no inventa nada, toma lo ya
+                decidido (el plan por horizonte y la fase que corresponde a la
+                fecha de la sesión) y lo baja a ejercicios con dosis concreta. */}
+            {planActivo&&(
+              <div style={{background:'#F5F3FF',border:'1px solid #C4B5FD',borderRadius:7,padding:'9px 11px',marginBottom:7}}>
+                <div style={{fontSize:11,fontWeight:800,color:'#5B21B6'}}>⚡ Armar la sesión desde el plan clínico</div>
+                <div style={{fontSize:9,color:G4c,margin:'3px 0 7px',lineHeight:1.5}}>
+                  Trae los ejercicios de cada región con las series, repeticiones o tiempos
+                  de la fase que corresponde a esta fecha, más sus criterios de avance.
+                </div>
+                <button onClick={()=>{
+                    const r=generarSesionClinica({plan:planActivo,fecha:form.fecha,protSesion:PROT_SESION,custom:[]});
+                    if(r.avisos.length&&!r.ejercicios.length){alert(r.avisos.join('\n\n'));return;}
+                    const msg=`${r.resumen}\n\n${r.ejercicios.length} ejercicios · ${r.criterios.length} criterios`+
+                      (r.avisos.length?`\n\n⚠ ${r.avisos.join('\n⚠ ')}`:'')+
+                      `\n\n¿Agregarlos a la sesión?`;
+                    if(!confirm(msg))return;
+                    setF(p=>{
+                      const yaEstan=p.ejercicios_lista||[];
+                      const nuevos=r.ejercicios.filter(n=>!yaEstan.some(x=>x.nombre===n.nombre));
+                      const yaCrit=p.criterios_lista||[];
+                      return{...p,
+                        plan_clinico_id:planActivo.id,
+                        semana_plan:r.semana,
+                        ejercicios_lista:[...yaEstan,...nuevos],
+                        criterios_lista:yaCrit.length?yaCrit:r.criterios,
+                      };
+                    });
+                  }}
+                  style={{...s2.btnTl,fontSize:11,background:'#7C3AED',width:'100%'}}>
+                  Armar sesión de la semana {(prescripcionDeHoy(planActivo,form.fecha)||{}).semana||'—'}
+                </button>
+              </div>
+            )}
             <div style={{display:'flex',gap:5}}>
               <input value={exEditando} onChange={e=>setExEditando(e.target.value)}
                 onKeyDown={e=>e.key==='Enter'&&addEx(exEditando)}
@@ -670,7 +742,12 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[] }) {
           <button onClick={()=>{
             // Serialize lists to strings for storage
             const toSave={...form,
-              ejercicios_realizados: form.ejercicios_lista.filter(e=>e.activo).map(e=>e.nombre).join(' · '),
+              // Resumen legible con la dosis, para informes y para la IA:
+              // "Excéntrico de muñeca 3×8-15" dice mucho más que el nombre solo.
+              ejercicios_realizados: form.ejercicios_lista.filter(e=>e.activo).map(e=>{
+                const d=e.series&&(e.reps||e.tiempo)?` ${e.series}×${e.reps||e.tiempo}`:(e.tiempo?` ${e.tiempo}`:'');
+                return e.nombre+d;
+              }).join(' · '),
               criterios_avance: form.criterios_lista.map(cr=>`${cr.cumplido?'✓':'○'} ${cr.texto}`).join(' | '),
               ejercicios_lista: JSON.stringify(form.ejercicios_lista),
               criterios_lista: JSON.stringify(form.criterios_lista),

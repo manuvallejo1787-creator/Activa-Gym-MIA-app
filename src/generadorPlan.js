@@ -49,64 +49,260 @@ const EJ_POR_BLOQUE = {
   5: { movilidad: 2, activacion: 2, fuerza: 2, accesorios: 2, cardio: 1, potencia: 2, pliometria: 2, prev_rehab: 2, propiocepcion: 1, flex_recovery: 2, funcional: 2, zona_media: 2 },
 };
 
-// Patrón dominante de cada día, para no repetir el mismo estímulo dos días
-// seguidos. El reparto sigue la lógica de frecuencia 2 por patrón en la semana.
-const ROTACION_DIAS = {
-  2: [['empuje', 'tren inferior'], ['tracción', 'tren inferior']],
-  3: [['empuje', 'tren inferior'], ['tracción', 'zona media'], ['tren inferior', 'empuje']],
-  4: [['empuje'], ['tren inferior'], ['tracción'], ['tren inferior']],
-  5: [['empuje'], ['tren inferior'], ['tracción'], ['tren inferior'], ['zona media', 'funcional']],
+// ═══════════════════════════════════════════════════════════════════════════
+// DIVISIONES DE RUTINA
+//
+// Cada división define una SECUENCIA de días; se cicla hasta cubrir los días
+// por semana elegidos. Cada día es una etiqueta más los TÉRMINOS con los que
+// se buscan ejercicios, y los términos están escritos con el vocabulario real
+// de la base: `patron` ("Empuje horizontal", "Dominante de rodilla") y
+// `musculos` ("Cuadriceps, Gluteo", "Dorsal, Biceps, Romboide").
+//
+// `min` es la cantidad de días por debajo de la cual la división pierde
+// sentido: una PPL en 2 días deja un patrón sin entrenar. No se bloquea —
+// se avisa.
+// ═══════════════════════════════════════════════════════════════════════════
+const D = (label, ...terminos) => ({ label, terminos });
+
+export const DIVISIONES = {
+  auto: {
+    nombre: 'Alternancia de patrones (por defecto)',
+    desc: 'Rota empuje, tracción, rodilla y bisagra. Sirve para cualquier cantidad de días.',
+    min: 2,
+    secuencia: [
+      D('empuje / rodilla', 'empuje', 'rodilla'),
+      D('tracción / bisagra', 'traccion', 'bisagra'),
+      D('rodilla / empuje', 'rodilla', 'empuje'),
+      D('tracción / zona media', 'traccion', 'zona media', 'abdominal'),
+      D('cuerpo completo', 'cuerpo completo', 'funcional'),
+    ],
+  },
+  torso_pierna: {
+    nombre: 'Torso / Pierna',
+    desc: 'Un día de tren superior completo y otro de tren inferior. La más eficiente en 2 y 4 días.',
+    min: 2,
+    secuencia: [
+      D('torso', 'empuje', 'traccion', 'pectoral', 'dorsal', 'deltoide'),
+      D('pierna', 'rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial'),
+    ],
+  },
+  ppl: {
+    nombre: 'Empuje / Tracción / Pierna',
+    desc: 'La clásica push-pull-legs. Necesita 3 o 6 días para cerrar el ciclo completo.',
+    min: 3,
+    secuencia: [
+      D('empuje', 'empuje', 'pectoral', 'deltoide', 'triceps'),
+      D('tracción', 'traccion', 'dorsal', 'romboide', 'biceps'),
+      D('pierna', 'rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial', 'gemelo'),
+    ],
+  },
+  empuje_traccion: {
+    nombre: 'Empuje / Tracción',
+    desc: 'Todo el cuerpo repartido en dos patrones; la pierna se divide entre ambos días.',
+    min: 2,
+    secuencia: [
+      D('empuje', 'empuje', 'pectoral', 'deltoide', 'triceps', 'rodilla', 'cuadriceps'),
+      D('tracción', 'traccion', 'dorsal', 'biceps', 'bisagra', 'isquiotibial', 'gluteo'),
+    ],
+  },
+  fullbody: {
+    nombre: 'Cuerpo completo',
+    desc: 'Cada sesión cubre todos los patrones. Lo mejor con 2 o 3 días y para principiantes.',
+    min: 1,
+    secuencia: [
+      D('cuerpo completo', 'rodilla', 'empuje', 'traccion'),
+      D('cuerpo completo', 'bisagra', 'traccion', 'empuje'),
+      D('cuerpo completo', 'rodilla', 'empuje', 'zona media'),
+    ],
+  },
+  grupo_muscular: {
+    nombre: 'Por grupo muscular',
+    desc: 'Pecho y tríceps, espalda y bíceps, pierna, hombro y core. Necesita 4 días o más.',
+    min: 4,
+    secuencia: [
+      D('pecho y tríceps', 'pectoral', 'empuje horizontal', 'triceps'),
+      D('espalda y bíceps', 'dorsal', 'traccion', 'romboide', 'biceps'),
+      D('pierna', 'rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial', 'gemelo'),
+      D('hombro y core', 'deltoide', 'empuje vertical', 'zona media', 'abdominal'),
+    ],
+  },
+  patron_principal: {
+    nombre: 'Un levantamiento principal por día',
+    desc: 'Cada día gira alrededor de un patrón: sentadilla, banca, peso muerto, press militar.',
+    min: 3,
+    secuencia: [
+      D('sentadilla', 'sentadilla', 'rodilla', 'cuadriceps'),
+      D('press banca', 'press', 'pectoral', 'empuje horizontal'),
+      D('peso muerto', 'peso muerto', 'bisagra', 'isquiotibial'),
+      D('press militar', 'press militar', 'deltoide', 'empuje vertical'),
+    ],
+  },
 };
+
+// Diccionario para el texto libre: cómo dice las cosas el profe → cómo están
+// escritas en la base. Si un término no está acá, se informa como no
+// reconocido en vez de ignorarlo.
+const SINONIMOS = {
+  empuje: ['empuje', 'pectoral', 'press'], push: ['empuje', 'pectoral', 'press'],
+  traccion: ['traccion', 'dorsal', 'remo'], pull: ['traccion', 'dorsal', 'remo'],
+  pecho: ['pectoral', 'empuje horizontal', 'press banca', 'apertura'],
+  espalda: ['dorsal', 'traccion', 'romboide', 'remo', 'jalon'],
+  hombro: ['deltoide', 'empuje vertical', 'press militar', 'elevacion', 'vuelo'],
+  hombros: ['deltoide', 'empuje vertical', 'press militar'],
+  brazo: ['biceps', 'triceps', 'curl'], brazos: ['biceps', 'triceps', 'curl'],
+  biceps: ['biceps', 'curl', 'flexion de codo'],
+  triceps: ['triceps', 'extension de codo', 'frances'],
+  pierna: ['rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial'],
+  piernas: ['rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial'],
+  cuadriceps: ['cuadriceps', 'rodilla', 'sentadilla', 'prensa'],
+  isquios: ['isquiotibial', 'bisagra', 'femoral'], isquiotibiales: ['isquiotibial', 'bisagra', 'femoral'],
+  gluteo: ['gluteo', 'hip thrust', 'bisagra'], gluteos: ['gluteo', 'hip thrust', 'bisagra'],
+  gemelo: ['gemelo', 'gastrocnemio', 'flexion plantar'], gemelos: ['gemelo', 'gastrocnemio', 'flexion plantar'],
+  torso: ['empuje', 'traccion', 'pectoral', 'dorsal', 'deltoide'],
+  superior: ['empuje', 'traccion', 'pectoral', 'dorsal', 'deltoide'],
+  inferior: ['rodilla', 'bisagra', 'cuadriceps', 'gluteo', 'isquiotibial'],
+  core: ['zona media', 'abdominal', 'recto abdominal'],
+  abdominales: ['zona media', 'abdominal', 'recto abdominal'],
+  'zona media': ['zona media', 'abdominal'],
+  'cuerpo completo': ['cuerpo completo', 'rodilla', 'empuje', 'traccion'],
+  fullbody: ['cuerpo completo', 'rodilla', 'empuje', 'traccion'],
+  sentadilla: ['sentadilla', 'rodilla'], 'peso muerto': ['peso muerto', 'bisagra'],
+  bisagra: ['bisagra', 'isquiotibial'], rodilla: ['rodilla', 'cuadriceps'],
+  cardio: ['cardio', 'cardiovascular'], funcional: ['funcional', 'cuerpo completo'],
+  movilidad: ['movilidad'], potencia: ['potencia', 'pliometria'],
+};
+
+// Texto libre → días. Separadores entre días: salto de línea, ";", "/" o "|".
+// Dentro de cada día, los términos se separan con "," "+" o " y ".
+export function parsearDivisionLibre(texto, nDias) {
+  const bruto = String(texto || '').split(/\n|;|\||\//).map(x => x.trim()).filter(Boolean);
+  if (!bruto.length) return null;
+  const noReconocidos = [];
+  const dias = bruto.map(linea => {
+    const partes = linea.split(/,|\+| y /i).map(x => norm(x).trim()).filter(Boolean);
+    const terminos = [];
+    partes.forEach(pz => {
+      const syn = SINONIMOS[pz] || Object.entries(SINONIMOS).find(([k]) => pz.includes(k))?.[1];
+      if (syn) syn.forEach(t => { if (!terminos.includes(t)) terminos.push(t); });
+      else noReconocidos.push(pz);
+    });
+    return { label: linea, terminos };
+  }).filter(d => d.terminos.length);
+  if (!dias.length) return { dias: null, noReconocidos };
+  return { dias, noReconocidos, diasEscritos: bruto.length, nDias };
+}
+
+// Cicla la secuencia hasta cubrir los días pedidos.
+export function armarRotacion({ division = 'auto', libre = '', nDias = 3 }) {
+  const avisos = [];
+  if (libre && libre.trim()) {
+    const p = parsearDivisionLibre(libre, nDias);
+    if (p?.dias?.length) {
+      if (p.noReconocidos.length)
+        avisos.push(`No reconocí: ${[...new Set(p.noReconocidos)].join(', ')}. Esos términos no se usaron para elegir ejercicios — escribilos como grupo muscular (pecho, espalda, pierna) o patrón (empuje, tracción, bisagra).`);
+      if (p.dias.length !== nDias)
+        avisos.push(`Escribiste ${p.dias.length} día(s) y el plan es de ${nDias}: la secuencia se repite en ciclo.`);
+      return { dias: Array.from({ length: nDias }, (_, i) => p.dias[i % p.dias.length]), avisos, origen: 'libre' };
+    }
+    avisos.push('No pude interpretar la división escrita. Se usó la alternancia de patrones por defecto.');
+  }
+  const dv = DIVISIONES[division] || DIVISIONES.auto;
+  if (nDias < dv.min)
+    avisos.push(`"${dv.nombre}" necesita al menos ${dv.min} días por semana; con ${nDias} queda algún patrón sin entrenar en la semana.`);
+  return {
+    dias: Array.from({ length: nDias }, (_, i) => dv.secuencia[i % dv.secuencia.length]),
+    avisos, origen: division,
+  };
+}
 
 // Los déficits del screening se traducen a patrones a priorizar.
 // Verificado contra los 6 patrones que realmente se miden en el gym.
 const DEFICIT_A_PATRON = {
-  'Sentadilla':                  ['tren inferior', 'rodilla', 'sentadilla'],
-  'Bisagra de cadera':           ['bisagra', 'cadera', 'isquio'],
-  'Zancada':                     ['unilateral', 'zancada', 'tren inferior'],
-  'Sentadilla a una pierna':     ['unilateral', 'propioc', 'glúteo'],
-  'Dead bug':                    ['zona media', 'antiextensión', 'core'],
-  'Bird dog':                    ['zona media', 'antirrotación', 'core'],
+  'Sentadilla':                  ['rodilla', 'sentadilla'],
+  'Bisagra de cadera':           ['bisagra', 'isquio'],
+  'Zancada':                     ['zancada', 'estocada', 'unilateral'],
+  'Sentadilla a una pierna':     ['unilateral', 'propioc', 'gluteo'],
+  'Dead bug':                    ['zona media', 'core'],
+  'Bird dog':                    ['zona media', 'core'],
 };
 
-const norm = (s) => (s || '').toLowerCase();
+// Comparación insensible a acentos: la base mezcla "Traccion horizontal" con
+// "Tracción vertical", así que sin esto el patrón del día no matcheaba nunca.
+const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+// ─── Familia de movimiento ──────────────────────────────────────────────────
+// Clave del arreglo del bug de las sesiones de pura sentadilla: sin agrupar
+// por familia no hay forma de exigir variedad.
+const FAMILIAS = [
+  ['rodilla',    /sentadilla|squat|prensa|hack|extensi[oó]n.*cu[aá]dricep|estocada|zancada|lunge|b[uú]lgara|step|goblet/i],
+  ['bisagra',    /peso muerto|deadlift|rumano|rdl|stiff|good ?morning|hip thrust|puente|curl femoral|swing|bisagra/i],
+  ['empuje_h',   /press.*(banca|banco|pecho|plano|inclinad|declinad)|bench|apertura|fly|cruce|flexi[oó]n|push ?up|fondos|dips/i],
+  ['empuje_v',   /press.*(militar|hombro|vertical|overhead)|arnold|push ?press|elevaci[oó]n|vuelo|thruster/i],
+  ['traccion_h', /remo|row|face ?pull/i],
+  ['traccion_v', /jal[oó]n|pulldown|dominada|pull[\s-]?up|chin[\s-]?up/i],
+  ['core',       /plancha|plank|dead ?bug|bird ?dog|pallof|abdominal|core|zona media|rotaci[oó]n|antiextensi|plancha/i],
+  ['brazo',      /curl|tr[ií]ceps|franc[eé]s|pushdown|b[ií]ceps|antebrazo|mu[ñn]eca/i],
+  ['pantorrilla',/gemelo|pantorrilla|calf|s[oó]leo/i],
+];
+function familia(ex) {
+  const t = `${ex.nombre || ''} ${ex.patron || ''}`;
+  const hit = FAMILIAS.find(([, re]) => re.test(t));
+  return hit ? hit[0] : 'otro';
+}
 
 // ─── Selección de ejercicios para un bloque ────────────────────────────────
-// Ordena por: prioridad de déficit → coincidencia con el patrón del día →
-// nivel adecuado a la fase. Excluye lo bloqueado por restricción y degrada
-// a la regresión cuando hay advertencia.
-function elegirEjercicios({ bloque, cantidad, exs, cliente, checkRestriction, patronesDia, patronesDeficit, faseCliente, yaUsados }) {
+// Se elige de a uno, y cada elección PENALIZA a los de la misma familia. Así
+// un déficit en sentadilla consigue UN lugar prioritario en el bloque, no
+// todos: antes el bono por déficit (+100 y acumulable por cada patrón que
+// matcheara) sepultaba el patrón del día y salían tres días idénticos de
+// sentadillas.
+function elegirEjercicios({ bloque, cantidad, exs, cliente, checkRestriction, patronesDia, patronesDeficit, faseCliente, yaUsados, usoEnPlan = {} }) {
   const nivelObjetivo = faseCliente === 'restaura' ? 'Principiante'
                       : faseCliente === 'activa' ? 'Intermedio' : 'Avanzado';
   const ordenNivel = { Principiante: 0, Intermedio: 1, Avanzado: 2 };
 
   const candidatos = exs
-    .filter(e => e.bloque === bloque)
-    .filter(e => !yaUsados.has(e.id))
+    .filter(e => e.bloque === bloque && !yaUsados.has(e.id))
     .map(e => {
       const restr = checkRestriction ? checkRestriction(e, cliente) : null;
       if (restr === 'block') return null;
+      const texto = `${norm(e.nombre)} ${norm(e.patron)} ${norm(e.musculos)}`;
+      let base = 0;
 
-      let score = 0;
-      const texto = norm(e.nombre) + ' ' + norm(e.patron) + ' ' + norm(e.musculos);
+      // 1) Patrón dominante del día: es lo que define la sesión.
+      patronesDia.forEach(p => { if (texto.includes(norm(p))) base += 40; });
+      // 2) Déficit detectado: un empujón, no una sentencia. Se cuenta UNA vez
+      //    aunque el ejercicio matchee varios patrones del mismo déficit.
+      if (patronesDeficit.some(p => texto.includes(norm(p)))) base += 25;
+      // 3) Cercanía al nivel de la fase.
+      base -= Math.abs((ordenNivel[e.nivel] ?? 1) - ordenNivel[nivelObjetivo]) * 12;
+      // 4) Una advertencia no descarta, pero baja mucho la prioridad.
+      if (restr === 'warn') base -= 45;
+      // 5) Repetir el mismo ejercicio en otros días del plan: se evita si hay
+      //    alternativas, pero no se prohíbe.
+      base -= (usoEnPlan[e.id] || 0) * 22;
 
-      // 1) Déficits detectados en la evaluación — el peso más alto
-      patronesDeficit.forEach((p, i) => {
-        if (texto.includes(norm(p))) score += 100 - i * 5;
-      });
-      // 2) Patrón dominante del día
-      patronesDia.forEach(p => { if (texto.includes(norm(p))) score += 30; });
-      // 3) Cercanía al nivel de la fase
-      score -= Math.abs((ordenNivel[e.nivel] ?? 1) - ordenNivel[nivelObjetivo]) * 12;
-      // 4) Una advertencia no descarta, pero baja la prioridad
-      if (restr === 'warn') score -= 45;
-
-      return { ex: e, score, restr };
+      return { ex: e, base, restr, fam: familia(e) };
     })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
+    .filter(Boolean);
 
-  return candidatos.slice(0, cantidad);
+  const elegidos = [];
+  const porFamilia = {};
+  for (let k = 0; k < cantidad; k++) {
+    let mejor = null, mejorScore = -Infinity;
+    for (const c of candidatos) {
+      if (elegidos.includes(c)) continue;
+      // Penalización por familia ya cubierta: la segunda del mismo patrón
+      // pierde 60 puntos, la tercera 120. Con esto, después de una sentadilla
+      // gana un empuje o una tracción antes que otra sentadilla.
+      const score = c.base - (porFamilia[c.fam] || 0) * 60;
+      if (score > mejorScore) { mejorScore = score; mejor = c; }
+    }
+    if (!mejor) break;
+    elegidos.push(mejor);
+    porFamilia[mejor.fam] = (porFamilia[mejor.fam] || 0) + 1;
+  }
+  return elegidos;
 }
 
 // ─── Parámetros del bloque según la fase del ciclo de periodización ────────
@@ -136,6 +332,7 @@ function paramsDeBloque(bloque, fasePer) {
 export function generarPlanBase({
   cliente, exs = [], tests = [], incidencias = [], feedback = [], evaluacion = null,
   diasSemana = 3, periodizacionId = null, faseCicloIndex = 0,
+  division = 'auto', divisionLibre = '',
   checkRestriction = null, genId = (p) => p + '_' + Date.now().toString(36),
 }) {
   const avisos = [], bloqueantes = [], procedencia = [];
@@ -222,19 +419,23 @@ export function generarPlanBase({
   const nDias = Math.max(1, Math.min(5, diasSemana));
   const bloques = BLOQUES_POR_FASE[fase] || BLOQUES_POR_FASE.activa;
   const cupos = EJ_POR_BLOQUE[nDias] || EJ_POR_BLOQUE[3];
-  const rotacion = ROTACION_DIAS[nDias] || ROTACION_DIAS[3];
+  const rot = armarRotacion({ division, libre: divisionLibre, nDias });
+  rot.avisos.forEach(a => avisos.push(a));
+  const rotacion = rot.dias;
 
   const dias = [];
+  const usoEnPlan = {};   // cuántas veces se usó cada ejercicio en todo el plan
   for (let d = 0; d < nDias; d++) {
-    const patronesDia = rotacion[d % rotacion.length] || [];
+    const diaPlan = rotacion[d % rotacion.length] || { label: 'general', terminos: [] };
+    const patronesDia = diaPlan.terminos;
     const yaUsados = new Set();   // sin repetir ejercicio dentro del mismo día
     const blocks = bloques.map((tipo, i) => {
       const params = paramsDeBloque(tipo, fasePer);
       const elegidos = elegirEjercicios({
         bloque: tipo, cantidad: cupos[tipo] ?? 2, exs, cliente, checkRestriction,
-        patronesDia, patronesDeficit, faseCliente: fase, yaUsados,
+        patronesDia, patronesDeficit, faseCliente: fase, yaUsados, usoEnPlan,
       });
-      elegidos.forEach(c => yaUsados.add(c.ex.id));
+      elegidos.forEach(c => { yaUsados.add(c.ex.id); usoEnPlan[c.ex.id] = (usoEnPlan[c.ex.id] || 0) + 1; });
 
       return {
         id: `${Date.now()}_${d}_${i}`,
@@ -260,7 +461,7 @@ export function generarPlanBase({
     dias.push({
       id: genId('dia'),
       obj: fase,
-      name: `Día ${d + 1} — ${patronesDia.join(' / ') || 'general'}`,
+      name: `Día ${d + 1} — ${diaPlan.label || 'general'}`,
       blocks,
       notas: '',
     });
@@ -294,6 +495,7 @@ export function generarPlanBase({
       fecha_inicio: inicio.toISOString().slice(0, 10),
       fecha_fin_estimada: fin ? fin.toISOString().slice(0, 10) : '',
       evaluacion_origen: evaluacion?.id || cliente.screening?.fechaEvaluacion || '',
+      division: rot.origen,
       resumen: [
         `Generado desde la evaluación de ${cliente.nombre} ${cliente.apellido}.`,
         ...procedencia.map(p => '· ' + p),
@@ -306,6 +508,7 @@ export function generarPlanBase({
       procedencia, avisos, bloqueantes,
       patronesDeficit,
       periodizacion: per ? { id: perId, nombre: per.nombre, fase: fasePer?.nombre, semanas } : null,
+      division: { id: rot.origen, nombre: DIVISIONES[rot.origen]?.nombre || 'Escrita a mano', dias: rotacion.map(d => d.label) },
       cobertura: {
         totalEj, conPeso, conAviso,
         pctConPeso: totalEj ? Math.round(conPeso / totalEj * 100) : 0,

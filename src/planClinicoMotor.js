@@ -358,3 +358,92 @@ export function prescripcionDeHoy(plan, fecha = new Date()) {
 
   return { semana, fueraDePlan: false, totalSemanas: plan.semanas, regiones };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6) CONSTRUCTOR DE SESIÓN CLÍNICA
+// Misma lógica que el del gym: toma lo ya decidido (el plan por horizonte y
+// la fase que corresponde a la fecha) y arma la sesión con dosis concretas.
+//
+// La diferencia con el gym es la unidad de trabajo: en fase de protección la
+// isometría se prescribe en SEGUNDOS, no en repeticiones. El generador elige
+// la unidad según la dosis de la fase en lugar de forzar reps a todo.
+// ═══════════════════════════════════════════════════════════════════════════
+// Clasificación del ítem del catálogo. Sin esto, la dosis de la fase se
+// aplicaba a TODO: "Crioterapia post-actividad → 3×30-45 seg · isométrica
+// submáxima al 40-70% MVC" es un sinsentido clínico, y un estiramiento no se
+// prescribe con RIR ni con carga progresiva.
+export function tipoItemRehab(nombre) {
+  const n = (nombre || '').toLowerCase();
+  // Los acrónimos y palabras cortas van anclados: sin \b, "tens" matcheaba
+  // dentro de "ex-tens-ores" y un excéntrico de muñeca se clasificaba como
+  // modalidad pasiva.
+  if (/crioterapia|termoterapia|\btens\b|\bcalor\b|\bfrio\b|\bfr[ií]o\b|ultrasonido|vendaje|kinesiotap|masaje|liberaci[oó]n miofascial|punci[oó]n|educaci[oó]n|higiene postural|reposo relativo|reposo absoluto|\brice\b|control de carga/.test(n))
+    return 'modalidad';
+  if (/estiramiento|elongaci[oó]n|movilidad|deslizamiento neural|neurodin|p[eé]ndulo/.test(n))
+    return 'movilidad';
+  return 'ejercicio';
+}
+
+// Dosis propia de lo que no es ejercicio de fuerza.
+const DOSIS_NO_EJERCICIO = {
+  modalidad:  { series: '', reps: '', tiempo: '10-15 min', carga: 'Sin carga', descanso: '' },
+  movilidad:  { series: '2-3', reps: '', tiempo: '30-45 seg', carga: 'Sin carga · hasta tensión, sin dolor', descanso: '20 seg' },
+};
+
+export function generarSesionClinica({
+  plan, fecha = new Date().toISOString().slice(0, 10),
+  protSesion = {}, custom = [], regionesSel = null,
+  genId = (p) => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+}) {
+  const avisos = [];
+  const pres = prescripcionDeHoy(plan, fecha);
+  if (!pres) return { ejercicios: [], criterios: [], avisos: ['El paciente no tiene plan clínico activo. Armá el plan por horizonte primero.'], pres: null };
+  if (pres.fueraDePlan) return { ejercicios: [], criterios: [], avisos: [pres.motivo], pres };
+
+  const regiones = (pres.regiones || []).filter(r => !regionesSel || !regionesSel.length || regionesSel.includes(r.region));
+  if (!regiones.length) avisos.push('Ninguna región del plan cae en esta semana.');
+
+  const ejercicios = [], criterios = [];
+  regiones.forEach(r => {
+    const d = r.dosis || {};
+    // ¿La fase se prescribe por tiempo o por repeticiones?
+    const porTiempo = /seg|min/i.test(String(d.reps || ''));
+    const lista = r.ejercicios && r.ejercicios.length
+      ? r.ejercicios
+      : prescribirEjercicios({ region: r.region, fase: r.fase, protSesion, custom }).ejercicios;
+
+    if (!lista.length) avisos.push(`Sin ejercicios de catálogo para ${r.region} en fase ${r.label}. Cargalos en Rehab o agregalos a mano.`);
+
+    lista.forEach(e => {
+      const tipo = tipoItemRehab(e.nombre);
+      const alt = DOSIS_NO_EJERCICIO[tipo];
+      ejercicios.push({
+        id: genId('ej'),
+        nombre: e.nombre,
+        region: r.region,
+        fase: r.fase,
+        faseLabel: r.label,
+        tipo,
+        series: alt ? alt.series : String(d.series ?? 3),
+        reps:   alt ? alt.reps   : (porTiempo ? '' : String(d.reps ?? '10-12')),
+        tiempo: alt ? alt.tiempo : (porTiempo ? String(d.reps ?? '30-45 seg') : ''),
+        carga:  alt ? alt.carga  : (d.carga || ''),
+        descanso: alt ? alt.descanso : (d.descanso || ''),
+        notas: '',
+        activo: true,
+        editado: false,
+        origen: e.origen || 'catálogo',
+      });
+    });
+
+    (r.criterios || []).forEach(c => {
+      if (!criterios.some(x => x.texto === c)) criterios.push({ id: genId('cr'), texto: c, cumplido: false, region: r.region });
+    });
+  });
+
+  return {
+    ejercicios, criterios, avisos, pres,
+    resumen: regiones.map(r => `${r.region}: ${r.label} (sem ${r.semanaDeFase}/${r.totalFase}) · ${r.dosis?.series}×${r.dosis?.reps}`).join(' · '),
+    semana: pres.semana, totalSemanas: pres.totalSemanas,
+  };
+}

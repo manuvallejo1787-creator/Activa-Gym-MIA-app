@@ -10,7 +10,7 @@ import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
-import { generarPlanBase } from "./generadorPlan.js";
+import { generarPlanBase, DIVISIONES } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
 import Hoy from "./Hoy.jsx";
 import SalaDashboard from "./SalaDashboard.jsx";
@@ -3130,6 +3130,8 @@ export default function App(){
   const [rielCliente,setRielCliente]=useState(null);
   const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes]);
   const [gpDias,setGpDias]=useState(3);
+  const [gpDiv,setGpDiv]=useState('auto');
+  const [gpLibre,setGpLibre]=useState('');
   const [gpResultado,setGpResultado]=useState(null);
   const usuario = useUsuarioActual();
   // El badge cuenta solo lo que requiere acción HOY: incidencias sin conducta
@@ -4280,10 +4282,45 @@ export default function App(){
                     border:`1px solid #1BAA86`,borderRadius:6,padding:'5px 12px',fontSize:12,fontWeight:800,cursor:'pointer'}}>{d}</button>
               ))}
             </div>
+            {/* ── DIVISIÓN DE LA RUTINA ────────────────────────────────────
+                Antes la distribución era una sola: alternancia fija de
+                patrones. Acá se elige el formato, o se escribe a mano cuando
+                ninguno encaja. */}
+            <div style={{marginBottom:10}}>
+              <span style={{fontSize:11,color:'#9FD9EC'}}>División de la rutina:</span>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:5,marginTop:5}}>
+                {Object.entries(DIVISIONES).map(([k,d])=>{
+                  const on=gpDiv===k&&!gpLibre.trim();
+                  const corta=gpDias<d.min;
+                  return(
+                    <button key={k} onClick={()=>{setGpDiv(k);setGpLibre('');setGpResultado(null);}}
+                      title={d.desc}
+                      style={{textAlign:'left',cursor:'pointer',borderRadius:7,padding:'7px 9px',
+                        background:on?'#1BAA86':'transparent',color:on?'#04231C':'#7FE9CE',
+                        border:`1px solid ${on?'#1BAA86':'#1BAA8655'}`,opacity:corta?.6:1}}>
+                      <div style={{fontSize:10,fontWeight:800}}>{d.nombre}</div>
+                      <div style={{fontSize:9,opacity:.85,marginTop:1,lineHeight:1.3}}>
+                        {corta?`necesita ${d.min}+ días`:d.secuencia.slice(0,gpDias).map(x=>x.label).join(' · ')}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{marginTop:7}}>
+                <span style={{fontSize:10,color:'#9FD9EC'}}>…o escribila a mano (un día por renglón o separados con “;”):</span>
+                <input value={gpLibre} onChange={e=>{setGpLibre(e.target.value);setGpResultado(null);}}
+                  placeholder="pecho y tríceps; espalda y bíceps; pierna"
+                  style={{width:'100%',marginTop:4,background:'#04231C',border:'1px solid #1BAA8655',color:'#7FE9CE',borderRadius:6,padding:'7px 9px',fontSize:12,outline:'none'}}/>
+                {gpLibre.trim()&&<div style={{fontSize:9,color:'#FCD34D',marginTop:3,lineHeight:1.4}}>
+                  Se usa el texto escrito en lugar del formato elegido. Si algún término no se reconoce, el resultado lo va a avisar.
+                </div>}
+              </div>
+            </div>
             <button onClick={()=>{
                 try{
                   const r=generarPlanBase({cliente:activeClient,exs,tests:activeClientTests||[],
-                    incidencias,feedback:activeClientFeedback||[],diasSemana:gpDias,checkRestriction,genId});
+                    incidencias,feedback:activeClientFeedback||[],diasSemana:gpDias,
+                    division:gpDiv,divisionLibre:gpLibre,checkRestriction,genId});
                   setGpResultado(r);
                 }catch(e){alert('No se pudo generar: '+e.message);}
               }}
@@ -4313,6 +4350,9 @@ export default function App(){
                       <strong style={{color:'#7FE9CE'}}>Prioridades detectadas:</strong> {d.patronesDeficit.slice(0,8).join(' · ')}
                     </div>
                   )}
+                  {d.division&&<div style={{fontSize:10,color:'#7FE9CE',marginTop:6}}>
+                    <strong>División:</strong> {d.division.nombre} → {d.division.dias.join(' · ')}
+                  </div>}
                   <div style={{fontSize:10,color:'#9FD9EC',marginTop:6}}>
                     {d.cobertura.totalEj} ejercicios · {d.cobertura.pctConPeso}% con peso sugerido
                     {d.cobertura.conAviso>0&&` · ${d.cobertura.conAviso} marcados por restricción`}
