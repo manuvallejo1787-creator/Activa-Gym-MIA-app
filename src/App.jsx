@@ -4,7 +4,7 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -13,6 +13,8 @@ import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } fr
 import { generarPlanBase } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
 import Hoy from "./Hoy.jsx";
+import SalaDashboard from "./SalaDashboard.jsx";
+import RutinaOverlay from "./RutinaOverlay.jsx";
 import { construirHoy } from "./hoy.js";
 import { ETIQUETA_CONFIANZA } from "./transferencia.js";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
@@ -3120,6 +3122,12 @@ export default function App(){
   const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, loading:hoyLoading, postergar:hoyPostergar, refetch:hoyRefetch } = useHoy();
   // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
   // mantenimiento de datos se vuelve permanente y deja de significar algo.
+  // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
+  // en dos consultas, no una por tarjeta.
+  const [salaIds,setSalaIds]=useState(()=>{ try{return JSON.parse(localStorage.getItem('sala_clientes')||'[]')}catch{return[]} });
+  const { tests:salaTests, planes:salaPlanes } = useSalaDatos(salaIds);
+  const [rutinaVer,setRutinaVer]=useState(null);
+  const [rielCliente,setRielCliente]=useState(null);
   const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes]);
   const [gpDias,setGpDias]=useState(3);
   const [gpResultado,setGpResultado]=useState(null);
@@ -4968,10 +4976,20 @@ export default function App(){
             }}/>
         )}
         {tab==='clientes'&&ClientesTab()}
-        {tab==='riel'&&<RielIncidencia clients={clients} exs={exs} config={brand} saveConfig={setBrand}
-          saveIncidencia={saveIncidencia} incidencias={incidencias} marcarResuelta={marcarResuelta}
-          setEstadoIncidencia={setEstadoIncidencia}
-          usuarioEmail={usuario?.email||''}/>}
+        {tab==='riel'&&<>
+          {/* El panel de sala va ARRIBA del riel de molestias: es la razón para
+              abrir esta pestaña. El riel queda abajo, a un toque. */}
+          <SalaDashboard clients={clients} hoyGym={hoyGym} tests={salaTests} planes={salaPlanes}
+            config={brand||{}} incidencias={incidencias}
+            onCambioSeleccion={setSalaIds}
+            onVerRutina={(c,plan)=>setRutinaVer({cliente:c,plan})}
+            onNuevaIncidencia={(c)=>setRielCliente(c)}/>
+          <RielIncidencia clients={clients} exs={exs} config={brand} saveConfig={setBrand}
+            saveIncidencia={saveIncidencia} incidencias={incidencias} marcarResuelta={marcarResuelta}
+            setEstadoIncidencia={setEstadoIncidencia}
+            clientePrecargado={rielCliente} onConsumirPrecargado={()=>setRielCliente(null)}
+            usuarioEmail={usuario?.email||''}/>
+        </>}
         {tab==='session'&&SessionTab()}
         {tab==='fuerza'&&<FuerzaTab brand={brand} clients={clients} s={s} saveClientFn={saveClientFn}/>}
         {tab==='nutricion'&&<Nutricion clients={clients} brand={brand} reglas={iaReglas}/>}
@@ -4989,6 +5007,7 @@ export default function App(){
         {tab==='db'&&<DBTab exs={exs} dbSaveEjercicio={dbSaveEjercicio} dbDeleteEjercicio={dbDeleteEjercicio} brand={brand} s={s}/>}
         {tab==='brand'&&<BrandingTab brand={brand} setBrand={setBrand} s={s}/>}
       </div>
+      {rutinaVer&&<RutinaOverlay cliente={rutinaVer.cliente} plan={rutinaVer.plan} exs={exs} onCerrar={()=>setRutinaVer(null)}/>}
     </div>
   );
 }

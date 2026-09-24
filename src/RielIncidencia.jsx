@@ -24,7 +24,7 @@
 //   severo    → frena el patrón, deriva a fisio, WhatsApp inmediato.
 //   bandera   → igual que severo, salteando la escala.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 const RJ = "#DC2626", AM = "#D97706", GN = "#16A34A", MO = "#7C3AED";
 const G1 = "#F4F4F4", G2 = "#E0E0E0", G3 = "#999", G4 = "#555", WH = "#fff";
@@ -46,6 +46,7 @@ const BANDAS = [
 export default function RielIncidencia({
   clients = [], exs = [], config = {}, saveConfig,
   saveIncidencia, incidencias = [], marcarResuelta, setEstadoIncidencia, usuarioEmail = "",
+  clientePrecargado = null, onConsumirPrecargado,
 }) {
   const [abierto, setAbierto] = useState(false);
   const [paso, setPaso]       = useState(0);
@@ -58,6 +59,17 @@ export default function RielIncidencia({
   const [sust, setSust]       = useState(null);
   const [nota, setNota]       = useState("");
   const [guardando, setGuard] = useState(false);
+
+  // El panel de sala manda acá al cliente con el botón "Le duele": el riel se
+  // abre ya en el paso de banderas, sin que haya que buscarlo de nuevo.
+  useEffect(() => {
+    if (!clientePrecargado) return;
+    setCli(clientePrecargado);
+    setFlags({});
+    setPaso(1);
+    setAbierto(true);
+    onConsumirPrecargado?.();
+  }, [clientePrecargado]);
   const [editTel, setEditTel] = useState(false);
   const [telTmp, setTelTmp]   = useState(config.telAviso || "");
 

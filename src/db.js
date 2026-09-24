@@ -1055,3 +1055,49 @@ export function useHoy(){
   },[fetch])
   return{gym,fisio,descartes,loading,refetch:fetch,postergar}
 }
+
+// ─── HOOK: datos de sala para VARIOS clientes a la vez ───────────────────
+// Los hooks de tests y planes son por cliente; en sala hay 5 o 6 en paralelo.
+// Esto trae todo en dos consultas con `in`, no una por tarjeta.
+export function useSalaDatos(ids = []) {
+  const [tests,setTests]=useState({})
+  const [planes,setPlanes]=useState({})
+  const [loading,setLoading]=useState(false)
+  const clave=(ids||[]).slice().sort().join(',')
+  const fetch=useCallback(async()=>{
+    const lista=clave?clave.split(','):[]
+    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});return}
+    setLoading(true)
+    try{
+      const[t,p]=await Promise.all([
+        supabase.from('fuerza_tests')
+          .select('gym_client_id,test_id,fecha,rm1_real,rm1_calculado,peso,reps,formula')
+          .in('gym_client_id',lista).order('fecha',{ascending:false}),
+        supabase.from('gym_planes')
+          .select('id,gym_client_id,nombre,estado,fecha_inicio,fecha_fin_estimada,periodizacion,num_dias,dias')
+          .in('gym_client_id',lista).eq('estado','activo'),
+      ])
+      if(t.error)throw t.error; if(p.error)throw p.error
+      // Un test por patrón, el más reciente
+      const porCli={}
+      ;(t.data||[]).forEach(r=>{
+        const m=porCli[r.gym_client_id]=porCli[r.gym_client_id]||{}
+        if(!m[r.test_id])m[r.test_id]=r
+      })
+      const pl={}
+      ;(p.data||[]).forEach(r=>{
+        const act=pl[r.gym_client_id]
+        const fi=x=>x.fecha_inicio||''
+        // El mismo criterio determinista que el resto de la app: el vigente
+        // es el de inicio más reciente que ya empezó.
+        const hoy=new Date().toISOString().slice(0,10)
+        if(!act) pl[r.gym_client_id]=r
+        else if(fi(r)<=hoy && (fi(act)>hoy || fi(r)>fi(act))) pl[r.gym_client_id]=r
+      })
+      setTests(porCli);setPlanes(pl)
+    }catch(e){console.error('useSalaDatos:',e.message)}
+    finally{setLoading(false)}
+  },[clave])
+  useEffect(()=>{fetch()},[fetch])
+  return{tests,planes,loading,refetch:fetch}
+}
