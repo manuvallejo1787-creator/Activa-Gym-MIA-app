@@ -1023,3 +1023,35 @@ export function useEjecucionCliente(clienteId){
   useEffect(()=>{fetch()},[fetch])
   return{historial,refetch:fetch}
 }
+
+// ─── HOOK: Pantalla HOY ───────────────────────────────────────────────────
+// Dos vistas agregadas + los avisos postergados. Tres consultas en total, en
+// lugar de las ~70 que haría recorrer cliente por cliente.
+export function useHoy(){
+  const [gym,setGym]=useState([])
+  const [fisio,setFisio]=useState([])
+  const [descartes,setDescartes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady){setLoading(false);return}
+    try{
+      const[g,f,d]=await Promise.all([
+        supabase.from('hoy_gym').select('*'),
+        supabase.from('hoy_fisio').select('*'),
+        supabase.from('hoy_descartes').select('*'),
+      ])
+      if(g.error)throw g.error; if(f.error)throw f.error
+      setGym(g.data||[]);setFisio(f.data||[]);setDescartes(d.data||[])
+    }catch(e){console.error('useHoy:',e.message)}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{fetch()},[fetch])
+  const postergar=useCallback(async(item_key,dias=7,motivo='')=>{
+    const hasta=new Date(Date.now()+dias*864e5).toISOString().slice(0,10)
+    setDescartes(p=>[...p.filter(x=>x.item_key!==item_key),{item_key,hasta,motivo}])
+    if(!isSupabaseReady)return
+    const{error}=await supabase.from('hoy_descartes').upsert({item_key,hasta,motivo},{onConflict:'item_key'})
+    if(error){console.error('postergar:',error.message);fetch()}
+  },[fetch])
+  return{gym,fisio,descartes,loading,refetch:fetch,postergar}
+}

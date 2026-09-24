@@ -4,7 +4,7 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useCriteriosAvanceTemplate, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -12,6 +12,8 @@ import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
 import { generarPlanBase } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
+import Hoy from "./Hoy.jsx";
+import { construirHoy } from "./hoy.js";
 import { ETIQUETA_CONFIANZA } from "./transferencia.js";
 import { BotonSalir, useUsuarioActual } from "./AuthGate.jsx";
 import { POTENCIA_NORMAS, PERIODIZACIONES, TESTS_FUERZA, calcular1RM, FORMULAS_1RM, nivelFuerza, calcularDuracionSesion, colorDuracion, sugerirPeso, sugerirPesosBloque, getTestIdForExercise, pctFromReps, planTimeline, nivelCMJ, nivelSJ, nivelBroadJump, calcularRSI, nivelRSI, calcularLSI, nivelLSI, periodizacionesPorFase, MACRO_PLAN_METODO, getMacroPlanSugerido, parseDuracionSemanas, calcularCronogramaPeriodizacion, calcularAlertaPeriodizacion } from "./planificacion.js";
@@ -3064,7 +3066,8 @@ const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
-    try { return localStorage.getItem('activa_tab')||'clientes'; } catch { return 'clientes'; }
+    // HOY es la entrada: si no hay nada urgente, se ve en 3 segundos y se sigue.
+    try { return localStorage.getItem('activa_tab')||'hoy'; } catch { return 'hoy'; }
   });
   useEffect(()=>{
     try { localStorage.setItem('activa_tab',tab); } catch {}
@@ -3114,6 +3117,10 @@ export default function App(){
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
   const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia } = useIncidencias();
+  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, loading:hoyLoading, postergar:hoyPostergar, refetch:hoyRefetch } = useHoy();
+  // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
+  // mantenimiento de datos se vuelve permanente y deja de significar algo.
+  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes]);
   const [gpDias,setGpDias]=useState(3);
   const [gpResultado,setGpResultado]=useState(null);
   const usuario = useUsuarioActual();
@@ -4931,11 +4938,35 @@ export default function App(){
         </div>
       </div>
       <div style={{...s.tabBar,background:'#141414',borderBottomColor:brand.colorPrimary}}>
-        {[['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['riel',`⚠️ Sala${incPendientes>0?` (${incPendientes})`:''}`],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
+        {[['hoy',`📍 Hoy${hoyCriticos>0?` (${hoyCriticos})`:''}`],['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['riel',`⚠️ Sala${incPendientes>0?` (${incPendientes})`:''}`],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
           <button key={k} onClick={()=>setTab(k)} style={s.tb(tab===k,brand.colorPrimary)}>{lbl}</button>
         ))}
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
+        {tab==='hoy'&&(
+          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} loading={hoyLoading} config={brand||{}}
+            postergar={hoyPostergar} brand={brand}
+            onIr={(destino,id)=>{
+              // Cada ítem se resuelve en un toque: la navegación deja a la
+              // persona en pantalla, no solo cambia de pestaña.
+              const c=clients.find(x=>x.id===id);
+              const nombreCompleto=c?`${c.nombre} ${c.apellido}`.trim():'';
+              if(destino==='clientes'){
+                if(nombreCompleto)setClienteSearch(nombreCompleto);   // el directorio queda filtrado en esa persona
+                setTab('clientes');
+              } else if(destino==='constructor'){
+                if(c)setSession(p=>({...p,clienteId:c.id,cliente:nombreCompleto}));
+                setTab('session');
+              } else if(destino==='sala'){
+                setTab('riel');
+              } else if(destino==='fisio'){
+                // FisioActiva elige su paciente por su cuenta: se le deja el id
+                // y lo levanta al montar.
+                try{ localStorage.setItem('fisio_abrir_paciente', id||''); }catch{}
+                setTab('fisio');
+              } else setTab(destino);
+            }}/>
+        )}
         {tab==='clientes'&&ClientesTab()}
         {tab==='riel'&&<RielIncidencia clients={clients} exs={exs} config={brand} saveConfig={setBrand}
           saveIncidencia={saveIncidencia} incidencias={incidencias} marcarResuelta={marcarResuelta}

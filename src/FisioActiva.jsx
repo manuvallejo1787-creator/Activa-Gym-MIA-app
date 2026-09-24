@@ -900,6 +900,16 @@ export default function FisioActiva({ brand, gymClients=[], onUpdateGymClient, r
   const [showPacForm,setShowPacForm]=useState(false);
   const [viewingEval,setViewingEval]=useState(null);
   const [sesionPacId,setSesionPacId]=useState('');
+  // La pantalla HOY deja acá el paciente a abrir: se levanta una sola vez.
+  useEffect(()=>{
+    try{
+      const id=localStorage.getItem('fisio_abrir_paciente');
+      if(id){ localStorage.removeItem('fisio_abrir_paciente');
+        const p=(dbPacientes||[]).find(x=>x.id===id);
+        if(p){ setCurrentPac(p); setView('ver-paciente'); }
+      }
+    }catch{}
+  },[dbPacientes]);
   // Planes clínicos del paciente abierto en la ficha (para la pantalla de plan)
   // y del paciente seleccionado en el registro de sesiones (para la prescripción
   // de hoy). Son dos pacientes distintos: la ficha y el registro no se mueven
