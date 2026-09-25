@@ -70,16 +70,19 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
     const plan = planes[id] || null;
     const per = h.periodizacion || c.periodizacion;
     const f = faseActual(per, h.ciclo_inicio, hoy);
-    const dScr = h.screening_fecha ? diasDesde(h.screening_fecha, hoy) : null;
     const dTest = h.test_ultimo ? diasDesde(h.test_ultimo, hoy) : null;
     const vencScr = config.venc_screening_dias ?? PLAZOS.screening;
     const vencTest = config.venc_test_dias ?? PLAZOS.test;
+    // Misma fuente que la pantalla HOY: manda la fecha de la ficha.
+    const fReeval = h.reeval_prevista
+      || (h.screening_fecha ? new Date(new Date(h.screening_fecha + 'T12:00').getTime() + vencScr * 864e5).toISOString().slice(0, 10) : null);
+    const restanScr = fReeval ? diasDesde(hoy, fReeval) : null;
     const abiertas = incidencias.filter(i => i.gym_client_id === id && ['abierta', 'seguimiento'].includes(i.estado || 'abierta'));
     return {
       c, h, m, plan, f, per,
       vencimientos: [
         chipVenc('Plan', h.plan_vence ? -diasDesde(h.plan_vence, hoy) : null, h.plan_vence),
-        chipVenc('Evaluación', dScr == null ? null : vencScr - dScr, h.screening_fecha),
+        chipVenc('Reevaluación', restanScr, fReeval),
         chipVenc('Test', dTest == null ? null : vencTest - dTest, h.test_ultimo),
       ],
       tests: tests[id] || {},

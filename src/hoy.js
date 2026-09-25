@@ -22,7 +22,11 @@ import { PERIODIZACIONES, parseDuracionSemanas } from "./planificacion.js";
 
 // ─── VENCIMIENTOS ─────────────────────────────────────────────────────────
 // Plazos por defecto; se pueden cambiar en centro_config sin tocar código.
-export const PLAZOS = { screening: 90, test: 120, aviso: 7 };
+// 4 meses calendario para las dos cosas. Es la estructura de los planes de
+// mensualidad del centro, no un criterio fisiológico: los plazos cortos son
+// operativamente inviables acá. El plazo de screening es solo RESPALDO —
+// cuando la ficha del cliente tiene "Próxima evaluación", esa fecha manda.
+export const PLAZOS = { screening: 120, test: 120, aviso: 7 };
 
 // Fase del ciclo en la que está el cliente HOY, y cuándo termina.
 // Las fases traen sus semanas como '1–4' / '5-9': se parsean los dos bordes.
@@ -246,22 +250,28 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
 
   // 1) EVALUACIÓN / SCREENING — por calendario.
   conPlan.forEach(c => {
-    const d = dias(c.screening_fecha);              // antigüedad en días
-    if (d == null) return;                          // sin fecha o corrupta: lo toma el grupo
-    const restan = PZ.screening - d;
-    if (restan > PZ.aviso) return;
+    // La fecha de la ficha ("Próxima evaluación") tiene PRIORIDAD sobre
+    // cualquier plazo calculado: la fija el profesional según el plan de
+    // mensualidad del cliente y puede ser a 4 meses o al año.
+    const fechaFicha = c.reeval_prevista || null;
+    const fecha = fechaFicha || (c.screening_fecha ? sumarDias(c.screening_fecha, PZ.screening) : null);
+    if (!fecha || fecha === '—') return;             // sin base: lo toma el grupo
+    const restan = dias(hoy, fecha);
+    if (restan == null || restan > PZ.aviso) return;
     const vencido = restan < 0;
     add({
       key: `venc_screening:${c.id}`, sev: vencido ? 'atencion' : 'manten', icono: '📋',
       titulo: vencido
-        ? `La evaluación de ${nom(c)} venció hace ${plural(-restan, 'día', 'días')}`
-        : `La evaluación de ${nom(c)} vence en ${plural(restan, 'día', 'días')}`,
-      detalle: `Última el ${c.screening_fecha} · vigencia ${PZ.screening} días · vence el ${sumarDias(c.screening_fecha, PZ.screening)}`,
+        ? `La reevaluación de ${nom(c)} venció hace ${plural(-restan, 'día', 'días')}`
+        : `Reevaluar a ${nom(c)} en ${plural(restan, 'día', 'días')}`,
+      detalle: `Prevista para el ${fecha}` +
+        (fechaFicha ? ' · fecha puesta en la ficha' : ` · estimada (última el ${c.screening_fecha} + ${PZ.screening} días)`) +
+        (c.screening_fecha ? '' : ' · sin evaluación previa registrada'),
       rank: 300 - restan,
       accion: { label: 'Abrir ficha', tab: 'clientes', clienteId: c.id },
       porQue: vencido
-        ? 'Con el screening vencido el motor no puede decidir avance de fase: el cliente queda trabado en "faltan datos".'
-        : 'Agendala ahora y no se corta la continuidad del seguimiento.',
+        ? 'Es la reevaluación pactada con el cliente. Además, con el screening vencido el motor no puede decidir avance de fase.'
+        : 'Agendala ahora: llega con la mensualidad y conviene tener el turno reservado.',
     });
   });
 
@@ -285,26 +295,33 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
       return;
     }
     const porPlazo = PZ.test - dTest;
-    const porFase = (f && !f.rotativa && !f.cicloTerminado && f.diasParaFinFase != null) ? f.diasParaFinFase : null;
-    // Si el test se hizo DENTRO de la fase actual, no hace falta retestear al
-    // cerrarla por antigüedad: el disparador es el cambio de fase.
-    const candidatos = [porPlazo, porFase].filter(v => v != null);
-    if (!candidatos.length) return;
-    const restan = Math.min(...candidatos);
+    // El disparador es el CALENDARIO: 4 meses. Retestear en cada cambio de
+    // fase sería lo correcto desde la planificación, pero es inviable de
+    // operar con 36 clientes activos. El cambio de fase se menciona como
+    // contexto para poder juntar las dos cosas en una sola sesión.
+    const restan = porPlazo;
     if (restan > PZ.aviso) return;
     const vencido = restan < 0;
-    const motivo = porFase != null && porFase === restan
-      ? (f.siguiente ? `cambia a "${f.siguiente}"` : 'termina el ciclo')
-      : `${PZ.test} días desde el último test`;
+    const cambioCerca = (f && !f.rotativa && !f.cicloTerminado && f.diasParaFinFase != null && f.diasParaFinFase <= 21)
+      ? f.diasParaFinFase : null;
+    // Si la reevaluación cae cerca, se hacen en la misma visita. Con 4 meses
+    // de por medio, juntar las dos cosas ahorra un turno por cliente.
+    const fReeval = c.reeval_prevista || (c.screening_fecha ? sumarDias(c.screening_fecha, PZ.screening) : null);
+    const dReeval = fReeval && fReeval !== '—' ? dias(hoy, fReeval) : null;
+    const juntarConReeval = dReeval != null && Math.abs(dReeval - restan) <= 14 ? dReeval : null;
+    const motivo = `${PZ.test} días (4 meses) desde el último test`;
     add({
       key: `venc_test:${c.id}`, sev: vencido ? 'atencion' : 'manten', icono: '🏋️',
       titulo: vencido
         ? `Retestear a ${nom(c)} — vencido hace ${plural(-restan, 'día', 'días')}`
         : `Retestear a ${nom(c)} en ${plural(restan, 'día', 'días')}`,
-      detalle: `Último test ${c.test_ultimo} · motivo: ${motivo}`,
+      detalle: `Último test ${c.test_ultimo} · ${motivo}` +
+        (juntarConReeval != null
+          ? ` · la reevaluación cae ${juntarConReeval < 0 ? `hace ${-juntarConReeval}d` : `en ${juntarConReeval}d`}: hacelas en la misma visita`
+          : cambioCerca != null ? ` · además cambia de fase en ${cambioCerca}d` : ''),
       rank: 320 - restan,
       accion: { label: 'Ir a Fuerza', tab: 'fuerza', clienteId: c.id },
-      porQue: 'Las cargas sugeridas salen del 1RM. Con un test de otra fase, todo el plan sale calibrado sobre un dato que ya no aplica.',
+      porQue: 'Las cargas sugeridas salen del 1RM. Mientras el test esté vencido, el motor las calcula desde lo que el cliente levantó en el portal, que es menos preciso pero está al día.',
     });
   });
 
