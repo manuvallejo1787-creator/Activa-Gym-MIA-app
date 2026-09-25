@@ -1062,11 +1062,12 @@ export function useHoy(){
 export function useSalaDatos(ids = []) {
   const [tests,setTests]=useState({})
   const [planes,setPlanes]=useState({})
+  const [feedback,setFeedback]=useState({})
   const [loading,setLoading]=useState(false)
   const clave=(ids||[]).slice().sort().join(',')
   const fetch=useCallback(async()=>{
     const lista=clave?clave.split(','):[]
-    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});return}
+    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});setFeedback({});return}
     setLoading(true)
     try{
       // Las columnas reales son peso_levantado y reps_realizadas: pedir
@@ -1075,16 +1076,23 @@ export function useSalaDatos(ids = []) {
       // se llevaba también los planes: en sala no aparecía ninguna de las dos
       // cosas por un solo nombre de columna mal escrito.
       // Ahora cada consulta falla por separado y se informa cuál falló.
-      const[t,p]=await Promise.allSettled([
+      const[t,p,fb]=await Promise.allSettled([
         supabase.from('fuerza_tests')
           .select('gym_client_id,test_id,test_nombre,fecha,rm1_real,rm1_calculado,peso_levantado,reps_realizadas,nivel_resultado,formula')
           .in('gym_client_id',lista).order('fecha',{ascending:false}),
         supabase.from('gym_planes')
           .select('id,gym_client_id,nombre,estado,fecha_inicio,fecha_fin_estimada,periodizacion,num_dias,dias')
           .in('gym_client_id',lista).eq('estado','activo'),
+        // Percepción del cliente: es el dato más fresco que tiene el centro
+        // (lo carga él mismo al terminar de entrenar) y hasta ahora no se veía
+        // en ninguna pantalla.
+        supabase.from('gym_sesion_feedback')
+          .select('gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,nota')
+          .in('gym_client_id',lista).order('fecha',{ascending:false}).limit(200),
       ]).then(rs=>rs.map(r=>r.status==='fulfilled'?r.value:{error:r.reason,data:null}))
       if(t.error)console.error('sala/tests:',t.error.message||t.error)
       if(p.error)console.error('sala/planes:',p.error.message||p.error)
+      if(fb.error)console.error('sala/feedback:',fb.error.message||fb.error)
       // Un test por patrón, el más reciente
       const porCli={}
       ;(t.data||[]).forEach(r=>{
@@ -1101,10 +1109,12 @@ export function useSalaDatos(ids = []) {
         if(!act) pl[r.gym_client_id]=r
         else if(fi(r)<=hoy && (fi(act)>hoy || fi(r)>fi(act))) pl[r.gym_client_id]=r
       })
-      setTests(porCli);setPlanes(pl)
+      const fbCli={}
+      ;(fb.data||[]).forEach(r=>{(fbCli[r.gym_client_id]=fbCli[r.gym_client_id]||[]).push(r)})
+      setTests(porCli);setPlanes(pl);setFeedback(fbCli)
     }catch(e){console.error('useSalaDatos:',e.message)}
     finally{setLoading(false)}
   },[clave])
   useEffect(()=>{fetch()},[fetch])
-  return{tests,planes,loading,refetch:fetch}
+  return{tests,planes,feedback,loading,refetch:fetch}
 }

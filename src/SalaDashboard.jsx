@@ -42,7 +42,7 @@ function chipVenc(label, restan, fecha) {
   return { label, c, txt, fecha };
 }
 
-export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, incidencias = [] }) {
+export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, feedback = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, onEstadoIncidencia, incidencias = [] }) {
   const [sel, setSel] = useState(() => {
     try { return JSON.parse(localStorage.getItem('sala_clientes') || '[]'); } catch { return []; }
   });
@@ -87,8 +87,9 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
       ],
       tests: tests[id] || {},
       abiertas,
+      fb: (feedback[id] || []).slice().sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '')),
     };
-  }).filter(Boolean), [sel, clients, hoyGym, planes, tests, incidencias, config, hoy]);
+  }).filter(Boolean), [sel, clients, hoyGym, planes, tests, feedback, incidencias, config, hoy]);
 
   return (
     <div style={{ padding: '10px 12px' }}>
@@ -134,13 +135,13 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
 
       {/* ── Tarjetas: 2 columnas en pantalla ancha, 1 en celular ─────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 10 }}>
-        {filas.map(f => <Tarjeta key={f.c.id} f={f} onVerRutina={onVerRutina} onNuevaIncidencia={onNuevaIncidencia} />)}
+        {filas.map(f => <Tarjeta key={f.c.id} f={f} onVerRutina={onVerRutina} onNuevaIncidencia={onNuevaIncidencia} onEstadoIncidencia={onEstadoIncidencia} />)}
       </div>
     </div>
   );
 }
 
-function Tarjeta({ f, onVerRutina, onNuevaIncidencia }) {
+function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
   const { c, h, m, plan, per } = f;
   const sem = SEMAFORO[c.semaforo] || SEMAFORO.pendiente;
   const r = c.restricciones_flags || {};
@@ -157,11 +158,21 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia }) {
             {NIVELES[c.nivel] || c.nivel} · {sem.t}
           </div>
         </div>
-        {f.abiertas.length > 0 && (
-          <span style={{ background: '#3A1215', border: `1px solid ${ROJO}`, color: '#FCA5A5', borderRadius: 99, padding: '2px 8px', fontSize: 9, fontWeight: 800, flexShrink: 0 }}>
-            ⚠ {f.abiertas.length} molestia{f.abiertas.length > 1 ? 's' : ''}
-          </span>
-        )}
+        {/* El badge decía solo "N molestias" sin distinguir de dónde salía.
+            Son DOS fuentes distintas: el riel de sala (lo carga el profe) y
+            el RPE del portal (lo carga el cliente). Ahora se separan. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-end', flexShrink: 0 }}>
+          {f.abiertas.length > 0 && (
+            <span style={{ background: '#3A1215', border: `1px solid ${ROJO}`, color: '#FCA5A5', borderRadius: 99, padding: '2px 8px', fontSize: 9, fontWeight: 800 }}>
+              ⚠ {f.abiertas.length} en el riel
+            </span>
+          )}
+          {f.fb[0] && f.fb[0].dolor >= 4 && (
+            <span style={{ background: '#3A2A0B', border: `1px solid ${AMBAR}`, color: '#FCD34D', borderRadius: 99, padding: '2px 8px', fontSize: 9, fontWeight: 800 }}>
+              🩹 dolor {f.fb[0].dolor}/10 en el portal
+            </span>
+          )}
+        </div>
       </div>
 
       {c.objetivo && <div style={{ fontSize: 10, color: G4, marginTop: 5 }}>🎯 {c.objetivo}</div>}
@@ -258,6 +269,81 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia }) {
           </div>
         )}
       </div>
+
+      {/* ── PERCEPCIÓN DEL CLIENTE (encuesta del portal) ─────────────────
+          Es el dato más fresco del centro: lo carga el cliente al terminar de
+          entrenar. Hasta ahora se guardaba, alimentaba al generador de planes
+          y a la IA, pero no se veía en ninguna pantalla. */}
+      {f.fb.length > 0 && (() => {
+        const u = f.fb[0];
+        const d = diasDesde(u.fecha, new Date().toISOString().slice(0, 10));
+        const cRPE = u.rpe_sesion >= 8 ? ROJO : u.rpe_sesion >= 7 ? AMBAR : VERDE;
+        const cDol = !u.dolor ? VERDE : u.dolor >= 4 ? ROJO : AMBAR;
+        const prom = (k) => { const v = f.fb.slice(0, 6).map(x => x[k]).filter(x => x != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null; };
+        return (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 9, color: G4, fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5, marginBottom: 4 }}>
+              Lo que reportó el cliente · {d === 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${d} días`}
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              <Dato k="Esfuerzo" v={`${u.rpe_sesion}/10`} c={cRPE} />
+              {u.energia != null && <Dato k="Energía" v={`${u.energia}/5`} c={u.energia >= 4 ? VERDE : u.energia >= 3 ? AMBAR : ROJO} />}
+              <Dato k="Molestia" v={u.dolor ? `${u.dolor}/10` : 'no'} c={cDol} />
+              {prom('rpe_sesion') != null && <Dato k="RPE 6 sesiones" v={`${prom('rpe_sesion')}`} c={prom('rpe_sesion') >= 8 ? ROJO : prom('rpe_sesion') >= 7 ? AMBAR : VERDE} />}
+            </div>
+            {u.dia_nombre && <div style={{ fontSize: 9, color: G4, marginTop: 4 }}>En {u.dia_nombre} · semana {u.semana}</div>}
+            {u.nota && (
+              <div style={{ fontSize: 10, color: '#E5E5E5', background: '#0e0e0e', borderLeft: `3px solid ${AZUL}`, borderRadius: 5, padding: '6px 8px', marginTop: 5, lineHeight: 1.45 }}>
+                “{u.nota}”
+              </div>
+            )}
+            {u.dolor >= 4 && (
+              <button onClick={() => onNuevaIncidencia?.(f.c)}
+                style={{ marginTop: 6, width: '100%', background: '#3A2A0B', border: `1px solid ${AMBAR}`, color: '#FCD34D', borderRadius: 6, padding: '7px', fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>
+                Reportó {u.dolor}/10 y no hay incidencia abierta → abrir el riel
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Incidencias abiertas: qué duele y resolverlas acá mismo ─────── */}
+      {f.abiertas.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 9, color: G4, fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5, marginBottom: 4 }}>Molestias abiertas en el riel</div>
+          {f.abiertas.map(i => {
+            const cBanda = i.banda === 'severo' ? ROJO : i.banda === 'moderado' ? AMBAR : VERDE;
+            return (
+              <div key={i.id} style={{ background: '#0e0e0e', borderLeft: `3px solid ${cBanda}`, borderRadius: 6, padding: '7px 9px', marginBottom: 5 }}>
+                <div style={{ fontSize: 11, color: WH, fontWeight: 700, lineHeight: 1.35 }}>
+                  {i.ejercicio_nombre || 'sin ejercicio registrado'}
+                  {i.eva != null && <span style={{ color: cBanda }}> · EVA {i.eva}/10</span>}
+                  {i.banda && <span style={{ color: cBanda }}> · {i.banda}</span>}
+                </div>
+                <div style={{ fontSize: 9, color: G4, marginTop: 2 }}>
+                  {String(i.fecha || '').slice(0, 10)}
+                  {i.sustituto_nombre ? ` · sustituido por ${i.sustituto_nombre}` : ''}
+                  {i.bandera_activa ? ' · 🚩 bandera clínica' : ''}
+                  {i.estado === 'seguimiento' && i.fecha_revision ? ` · revisar el ${i.fecha_revision}` : ''}
+                </div>
+                {i.nota && <div style={{ fontSize: 9, color: '#bbb', marginTop: 3, lineHeight: 1.4 }}>{i.nota}</div>}
+                {/* Resolver desde sala: antes había que ir al riel, buscarla y
+                    recién ahí cambiar el estado. */}
+                <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+                  {[['resuelta', '✓ Resuelta', VERDE], ['seguimiento', '👁 Seguir', AMBAR], ['derivada', '🏥 Derivar a clínica', AZUL]]
+                    .filter(([k]) => k !== (i.estado || 'abierta'))
+                    .map(([k, lbl, col]) => (
+                      <button key={k} onClick={() => onEstadoIncidencia?.(i, k)}
+                        style={{ background: 'none', border: `1px solid ${col}66`, color: col, borderRadius: 5, padding: '4px 8px', fontSize: 9, fontWeight: 700, cursor: 'pointer' }}>
+                        {lbl}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Acciones ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>

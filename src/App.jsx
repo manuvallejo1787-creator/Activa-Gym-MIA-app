@@ -3065,6 +3065,65 @@ const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
   </>)});
 };
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PanelPercepcion — el historial de la encuesta del portal
+//
+// La encuesta de RPE se venía guardando y usando (motor, generador de planes,
+// prompt de la IA) pero no tenía NINGUNA pantalla: el dato entraba al sistema
+// y no se podía leer en ningún lado. Este panel lo muestra en la ficha.
+//
+// Es un componente propio, no un bloque dentro del listado, porque necesita su
+// propio hook: en una lista de 68 clientes no se puede llamar un hook por
+// tarjeta. Se monta solo cuando la ficha está abierta.
+// ═══════════════════════════════════════════════════════════════════════════
+function PanelPercepcion({ clienteId }) {
+  const { feedback } = useFeedbackSesiones(clienteId || null);
+  if (!feedback || !feedback.length) return null;
+  const fb = [...feedback].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+  const ult = fb.slice(0, 12);
+  const prom = (k, n = 6) => { const v = fb.slice(0, n).map(x => x[k]).filter(x => x != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 10) / 10 : null; };
+  const col = (r) => r >= 8.5 ? '#DC2626' : r >= 7.5 ? '#D97706' : r <= 5 ? '#0E7490' : '#16A34A';
+  const rp = prom('rpe_sesion'), dolorN = fb.filter(x => (x.dolor || 0) >= 4).length;
+  const gris = '#888';
+  return (
+    <div style={{ background: '#FAF5FF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '11px 13px', marginTop: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#5B21B6' }}>🫀 Lo que reporta el cliente desde el portal</span>
+        <span style={{ fontSize: 10, color: gris }}>{fb.length} sesiones · última {fb[0].fecha}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+        {rp != null && <Caja k="RPE últimas 6" v={`${rp}/10`} c={col(rp)} />}
+        {prom('energia') != null && <Caja k="Energía" v={`${prom('energia')}/5`} c="#111" />}
+        {prom('dolor') != null && <Caja k="Molestia" v={`${prom('dolor')}/10`} c={prom('dolor') >= 4 ? '#DC2626' : '#111'} />}
+        {dolorN > 0 && <Caja k="Sesiones con dolor ≥4" v={String(dolorN)} c="#B91C1C" />}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 46, marginBottom: 4 }}>
+        {[...ult].reverse().map((x, i) => (
+          <div key={i} title={`${x.fecha} · RPE ${x.rpe_sesion}/10${x.dolor ? ` · dolor ${x.dolor}/10` : ''}${x.nota ? ` · "${x.nota}"` : ''}`}
+            style={{ flex: 1, minWidth: 6, height: `${(x.rpe_sesion || 0) * 10}%`, background: col(x.rpe_sesion), borderRadius: '3px 3px 0 0', border: (x.dolor || 0) >= 4 ? '2px solid #DC2626' : 'none' }} />
+        ))}
+      </div>
+      <div style={{ fontSize: 8, color: gris, marginBottom: 6 }}>
+        Cada barra es una sesión, de la más vieja a la más nueva. Borde rojo = reportó molestia ≥4/10.
+      </div>
+      {fb.filter(x => (x.nota || '').trim()).slice(0, 4).map((x, i) => (
+        <div key={i} style={{ fontSize: 10, color: '#444', borderLeft: '3px solid #C4B5FD', paddingLeft: 8, marginBottom: 5, lineHeight: 1.45 }}>
+          <strong style={{ color: '#5B21B6' }}>{x.fecha}</strong>{x.dia_nombre ? ` · ${x.dia_nombre}` : ''} — “{x.nota}”
+        </div>
+      ))}
+    </div>
+  );
+}
+function Caja({ k, v, c }) {
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${c}55`, borderRadius: 6, padding: '5px 9px' }}>
+      <div style={{ fontSize: 8, color: '#888' }}>{k}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: c }}>{v}</div>
+    </div>
+  );
+}
+
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -3125,7 +3184,7 @@ export default function App(){
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
   // en dos consultas, no una por tarjeta.
   const [salaIds,setSalaIds]=useState(()=>{ try{return JSON.parse(localStorage.getItem('sala_clientes')||'[]')}catch{return[]} });
-  const { tests:salaTests, planes:salaPlanes } = useSalaDatos(salaIds);
+  const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback } = useSalaDatos(salaIds);
   const [rutinaVer,setRutinaVer]=useState(null);
   const [rielCliente,setRielCliente]=useState(null);
   const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes]);
@@ -3983,6 +4042,7 @@ export default function App(){
                   })}
                 </div>
               )}
+              <PanelPercepcion clienteId={c.id}/>
               {avanceAbierto===c.id&&(
                 <PanelVeredicto
                   cliente={c}
@@ -5020,7 +5080,24 @@ export default function App(){
           {/* El panel de sala va ARRIBA del riel de molestias: es la razón para
               abrir esta pestaña. El riel queda abajo, a un toque. */}
           <SalaDashboard clients={clients} hoyGym={hoyGym} tests={salaTests} planes={salaPlanes}
-            config={brand||{}} incidencias={incidencias}
+            feedback={salaFeedback} config={brand||{}} incidencias={incidencias}
+            onEstadoIncidencia={async(inc,estado)=>{
+              // Resolver la incidencia sin salir de sala. Para "seguimiento"
+              // se pide la fecha de revisión: sin fecha, el seguimiento no
+              // existe — nadie vuelve a mirarlo.
+              try{
+                if(estado==='seguimiento'){
+                  const f=prompt('¿Qué día la revisás? (AAAA-MM-DD)',new Date(Date.now()+7*864e5).toISOString().slice(0,10));
+                  if(!f)return;
+                  await setEstadoIncidencia(inc,'seguimiento',{fecha_revision:f});
+                } else if(estado==='derivada'){
+                  await setEstadoIncidencia(inc,'derivada',{derivado_fisio:true});
+                } else {
+                  const n=prompt('¿Cómo se resolvió? (opcional)','')||'';
+                  await setEstadoIncidencia(inc,'resuelta',{resuelto:true,resuelto_nota:n});
+                }
+              }catch(e){alert('No se pudo actualizar: '+e.message);}
+            }}
             onCambioSeleccion={setSalaIds}
             onVerRutina={(c,plan)=>setRutinaVer({cliente:c,plan})}
             onNuevaIncidencia={(c)=>setRielCliente(c)}/>
