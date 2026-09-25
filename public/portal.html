@@ -125,6 +125,9 @@
   .chips button{flex:1;background:#1A1A1A;border:1px solid #3a3a3a;color:#999;border-radius:6px;padding:7px 0;font-size:13px;cursor:pointer}
   .chips button.on{background:#7C3AED;border-color:#7C3AED;color:#fff}
   .rpecard textarea{width:100%;background:#141414;border:1px solid #333;border-radius:7px;color:#fff;padding:8px;font-size:12px;outline:none;resize:vertical;font-family:inherit}
+  .zonas{display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:4px}
+  .zonas button{background:#1A1A1A;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:7px 4px;font-size:10px;font-weight:700;cursor:pointer}
+  .zonas button.on{background:#DC2626;border-color:#DC2626;color:#fff}
   .rpesend{width:100%;background:#7C3AED;color:#fff;border:none;border-radius:8px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;margin-top:9px}
   .rpesend:disabled{opacity:.45}
   .rpedone{background:#14211a;border:1px solid #16A34A55;border-radius:10px;padding:11px;margin:14px 0;font-size:12px;color:#86EFAC;text-align:center;font-weight:700}
@@ -541,7 +544,10 @@ function kgTotalesMovidos(){
 // ═══════════════════════════════════════════════════════════════════════
 const RPE_TXT={1:'Muy suave',2:'Suave',3:'Cómodo',4:'Moderado',5:'Algo exigente',6:'Exigente',7:'Duro',8:'Muy duro',9:'Casi al límite',10:'Al límite'};
 const RPE_COL={1:'#22C55E',2:'#22C55E',3:'#4ADE80',4:'#A3E635',5:'#FACC15',6:'#FB923C',7:'#F97316',8:'#EF4444',9:'#DC2626',10:'#991B1B'};
-let RPE_BORRADOR={rpe:null,energia:null,dolor:null,nota:''};
+let RPE_BORRADOR={rpe:null,energia:null,dolor:null,zona:'',nota:''};
+// Zonas del cuerpo. Sin esto, un "dolor 4/10" no le dice nada al entrenador:
+// no sabe si es lumbar, hombro o rodilla, y tiene que adivinar o preguntar.
+const ZONAS=['Cuello','Hombro','Codo','Muñeca','Espalda alta','Lumbares','Cadera','Rodilla','Tobillo','Otra'];
 
 function fbKey(diaId,sem){ return diaId+'|'+sem; }
 function feedbackDe(diaId,sem){ return (DATA.feedback||[]).find(f=>f.dia_id===diaId&&f.semana===sem)||null; }
@@ -559,7 +565,7 @@ function renderRPE(dia){
   if(ya){
     return `<div class="rpedone">✓ Ya registraste cómo te fue en la semana ${sem}:
       <strong style="color:${RPE_COL[ya.rpe_sesion]||'#86EFAC'}">RPE ${ya.rpe_sesion}/10 · ${RPE_TXT[ya.rpe_sesion]||''}</strong>
-      ${ya.dolor>=4?`<br><span style="color:#FCA5A5">Molestia reportada: ${ya.dolor}/10 — tu entrenador lo ve</span>`:''}
+      ${ya.dolor>0?`<br><span style="color:#FCA5A5">Molestia: ${ya.dolor}/10${ya.dolor_zona?' en '+esc(ya.dolor_zona):''} — tu entrenador lo ve</span>`:''}
       <br><span style="font-size:10px;color:#6b8f7a;font-weight:400">Se renueva solo la próxima semana.</span></div>`;
   }
   const b=RPE_BORRADOR;
@@ -577,15 +583,22 @@ function renderRPE(dia){
       <div><div class="ml">¿Molestia o dolor?</div><div class="chips">${[0,2,4,6,8].map(n=>
         `<button onclick="setDolor(${n})" class="${b.dolor===n?'on':''}" style="font-size:11px;font-weight:800">${n===0?'No':n}</button>`).join('')}</div></div>
     </div>
+    ${b.dolor>0?`<div class="minirow"><div>
+      <div class="ml">¿Dónde te molesta?</div>
+      <div class="zonas">${ZONAS.map(z=>
+        `<button onclick="setZona('${z}')" class="${b.zona===z?'on':''}">${z}</button>`).join('')}</div>
+      ${!b.zona?'<div style="font-size:9px;color:#FCA5A5;margin-top:5px">Elegí la zona: sin eso tu entrenador no sabe qué revisar.</div>':''}
+    </div></div>`:''}
     <textarea rows="2" placeholder="Algo para contarle a tu entrenador (opcional)" oninput="RPE_BORRADOR.nota=this.value">${esc(b.nota)}</textarea>
-    <button class="rpesend" ${b.rpe?'':'disabled'} onclick="enviarRPE('${esc(dia._planId||(DATA.plan&&DATA.plan.id)||'')}','${dia.id}','${escAttr(dia.name||'')}',${sem})">
-      ${b.rpe?'Enviar':'Elegí un número del 1 al 10'}</button>
+    <button class="rpesend" ${(b.rpe&&(!b.dolor||b.zona))?'':'disabled'} onclick="enviarRPE('${esc(dia._planId||(DATA.plan&&DATA.plan.id)||'')}','${dia.id}','${escAttr(dia.name||'')}',${sem})">
+      ${!b.rpe?'Elegí un número del 1 al 10':(b.dolor&&!b.zona)?'Falta indicar dónde te molesta':'Enviar'}</button>
   </div>`;
 }
 
 window.setRPE=(n)=>{RPE_BORRADOR.rpe=n;render();};
 window.setEnergia=(n)=>{RPE_BORRADOR.energia=n;render();};
-window.setDolor=(n)=>{RPE_BORRADOR.dolor=n;render();};
+window.setDolor=(n)=>{RPE_BORRADOR.dolor=n;if(!n)RPE_BORRADOR.zona='';render();};
+window.setZona=(z)=>{RPE_BORRADOR.zona=RPE_BORRADOR.zona===z?'':z;render();};
 
 window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
   const b=RPE_BORRADOR;
@@ -593,10 +606,10 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
   try{
     const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,
-        rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,nota:b.nota})});
+        rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota})});
     if(!r.ok) throw new Error();
-    (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,nota:b.nota,fecha:new Date().toISOString().slice(0,10)});
-    RPE_BORRADOR={rpe:null,energia:null,dolor:null,nota:''};
+    (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota,fecha:new Date().toISOString().slice(0,10)});
+    RPE_BORRADOR={rpe:null,energia:null,dolor:null,zona:'',nota:''};
     toast(b.dolor>=4?'Enviado — tu entrenador va a ver la molestia':'¡Gracias! Enviado ✓',true);
     render();
   }catch(e){ toast('No se pudo enviar',false); }

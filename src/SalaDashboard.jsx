@@ -59,7 +59,7 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
 
   const q = busca.trim().toLowerCase();
   const sugerencias = q
-    ? clients.filter(c => !sel.includes(c.id) && nom(c).toLowerCase().includes(q)).slice(0, 6)
+    ? clients.filter(c => c.activo !== false && !sel.includes(c.id) && nom(c).toLowerCase().includes(q)).slice(0, 6)
     : [];
 
   const filas = useMemo(() => sel.map(id => {

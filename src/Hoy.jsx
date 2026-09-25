@@ -16,10 +16,10 @@ import { construirHoy, SEV } from "./hoy.js";
 
 const BK = '#111', WH = '#fff', G4 = '#888', G2 = '#e5e5e5';
 
-export default function Hoy({ gym, fisio, descartes, loading, postergar, onIr, brand, config = {} }) {
+export default function Hoy({ gym, fisio, descartes, reportes = [], loading, postergar, marcarItem, quitarMarca, onIr, brand, config = {} }) {
   const [verTodo, setVerTodo] = useState(false);
   const [abierto, setAbierto] = useState(null);
-  const H = useMemo(() => construirHoy({ gym, fisio, descartes, config }), [gym, fisio, descartes, config]);
+  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, config }), [gym, fisio, descartes, reportes, config]);
 
   const hoyTxt = new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -62,10 +62,44 @@ export default function Hoy({ gym, fisio, descartes, loading, postergar, onIr, b
                 style={{ background: 'none', border: `1px solid ${G2}`, color: '#666', borderRadius: 6, padding: '6px 11px', fontSize: 11, cursor: 'pointer' }}>
                 {ab ? 'Cerrar' : it.agrupado ? 'Ver quiénes' : '¿Por qué?'}
               </button>
-              <button onClick={() => postergar(it.key, 7)} title="No aparece por 7 días"
-                style={{ background: 'none', border: 'none', color: G4, fontSize: 11, cursor: 'pointer' }}>
-                Postergar 7 días
-              </button>
+            </div>
+            {/* ── ESTADO DEL AVISO ──────────────────────────────────────────
+                Antes lo único posible era postergar 7 días. "En proceso" y
+                "atendido" lo dejan visible con su marca: algo que se está
+                atendiendo y no cerró no tiene que desaparecer de la vista. */}
+            <div style={{ display: 'flex', gap: 5, marginTop: 7, flexWrap: 'wrap', alignItems: 'center', borderTop: `1px solid ${G2}`, paddingTop: 7 }}>
+              {it.estadoGuardado ? (
+                <>
+                  <span style={{ background: it.estadoGuardado === 'atendido' ? '#ECFDF5' : '#FFFBEB',
+                    border: `1px solid ${it.estadoGuardado === 'atendido' ? '#16A34A' : '#D97706'}`,
+                    color: it.estadoGuardado === 'atendido' ? '#166534' : '#92400E',
+                    borderRadius: 99, padding: '3px 10px', fontSize: 10, fontWeight: 800 }}>
+                    {it.estadoGuardado === 'atendido' ? '✓ Atendido' : '⏳ En proceso'}
+                    {it.estadoNota ? ` — ${it.estadoNota}` : ''}
+                  </span>
+                  <button onClick={() => marcarItem?.(it.key, 'resuelto')}
+                    style={{ background: '#16A34A', color: WH, border: 'none', borderRadius: 6, padding: '5px 11px', fontSize: 10, fontWeight: 800, cursor: 'pointer' }}>
+                    Cerrar como resuelto
+                  </button>
+                  <button onClick={() => quitarMarca?.(it.key)}
+                    style={{ background: 'none', border: 'none', color: G4, fontSize: 10, cursor: 'pointer' }}>quitar marca</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 10, color: G4 }}>Marcar:</span>
+                  {[['en_proceso', '⏳ En proceso', '#D97706'], ['atendido', '✓ Atendido', '#16A34A'],
+                    ['resuelto', '✅ Resuelto', '#16A34A'], ['descartado', '✕ Descartar', G4]].map(([k, lbl, col]) => (
+                    <button key={k} onClick={() => {
+                        const nota = (k === 'atendido' || k === 'en_proceso')
+                          ? (prompt('¿Qué hiciste? (opcional, queda a la vista)', '') || '') : '';
+                        marcarItem?.(it.key, k, nota);
+                      }}
+                      style={{ background: 'none', border: `1px solid ${col}55`, color: col, borderRadius: 6, padding: '5px 9px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           </div>
         </div>

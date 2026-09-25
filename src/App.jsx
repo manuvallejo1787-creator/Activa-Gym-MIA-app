@@ -1085,13 +1085,43 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
       }};
       upd._informeIA=composeInformeIA(ai)+(faseBloqueada?`<br><br><strong style="color:#DC2626">⚠ La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero el avance de fase se confirma desde el checklist "📈 Avance de fase" en el directorio de clientes — no se aplicó automáticamente.</strong>`:'');
       // mapear metodología sugerida a key de periodización
-      const metaMap={'Lineal Clásica':'lineal','Ondulante Diaria':'dup','Bloques':'bloque','Sistema ATR':'atr','Conjugado':'conjugado','HST':'hst','Trifásico':'triphasic','Fitness General':'fitness_general','Pérdida de Grasa':'perdida_grasa'};
-      const found=Object.entries(metaMap).find(([k])=>ai.metodologia_sugerida?.includes(k));
-      // Guarda defensiva: si por algún motivo la IA sugiere una metodología
-      // incompatible con la fase que está aplicando, no la asignamos —
-      // mejor dejarla vacía que guardar una combinación inválida.
-      if(found&&PERIODIZACIONES[found[1]]?.compatible_fases?.includes(upd.nivel))upd.periodizacion=found[1];
+      // ── ASIGNACIÓN DE PERIODIZACIÓN ───────────────────────────────────
+      // Antes fallaba en silencio por dos motivos:
+      //   1. El matcheo era por texto exacto con includes(): si la IA escribía
+      //      "Ondulante diaria" en minúscula, no encontraba nada.
+      //   2. Cuando la IA sugería AVANZAR de fase, el avance se bloqueaba
+      //      (bien) pero la periodización elegida para la fase NUEVA se
+      //      comparaba contra el nivel VIEJO. "Bloques" no es compatible con
+      //      "activa", así que se descartaba sin avisar.
+      // Ahora: se resuelve por id, después por nombre y después por texto; si
+      // la periodización solo es incompatible por el avance bloqueado, queda
+      // PENDIENTE y se aplica sola al confirmar el avance. Y en todos los
+      // casos el informe dice qué pasó: nunca se descarta en silencio.
+      const perId=resolverPeriodizacion(ai.periodizacion_id||ai.metodologia_sugerida);
+      const nivelDestino=ai.fase_sugerida||upd.nivel;
+      let notaPer='';
+      if(!perId){
+        if(ai.metodologia_sugerida)notaPer=`⚠ No pude interpretar la metodología sugerida ("${ai.metodologia_sugerida}"). Asignala a mano en la ficha.`;
+        else if(upd.nivel==='restaura')notaPer='En fase RESTAURA no se asigna periodización: primero el trabajo correctivo.';
+      } else if(PERIODIZACIONES[perId]?.compatible_fases?.includes(upd.nivel)){
+        if(upd.periodizacion!==perId){
+          upd.periodizacion=perId;
+          // Si cambia la periodización, arranca un ciclo nuevo HOY. Sin esta
+          // fecha no se puede calcular en qué fase está el cliente: era la
+          // causa de que 28 de 36 clientes con plan quedaran sin fase.
+          upd.periodizacion_inicio=new Date().toISOString().split('T')[0];
+          notaPer=`✅ Periodización asignada: ${PERIODIZACIONES[perId].nombre}. Ciclo iniciado hoy.`;
+        } else notaPer=`La periodización ya era ${PERIODIZACIONES[perId].nombre}: se mantiene y el ciclo sigue corriendo.`;
+      } else if(PERIODIZACIONES[perId]?.compatible_fases?.includes(nivelDestino)){
+        // Compatible con la fase sugerida, no con la actual: queda pendiente.
+        upd.screening={...upd.screening,_periodizacionPendiente:{id:perId,nombre:PERIODIZACIONES[perId].nombre,paraNivel:nivelDestino,fecha:new Date().toISOString().split('T')[0]}};
+        notaPer=`⏳ ${PERIODIZACIONES[perId].nombre} queda PENDIENTE: solo aplica en fase ${NIVEL[nivelDestino]?.label||nivelDestino}. Se asigna sola cuando confirmes el avance desde "📈 Avance de fase".`;
+      } else {
+        notaPer=`⚠ ${PERIODIZACIONES[perId].nombre} no es compatible con ${NIVEL[upd.nivel]?.label||upd.nivel} ni con ${NIVEL[nivelDestino]?.label||nivelDestino}. No se asignó.`;
+      }
+      if(notaPer)upd._informeIA=(upd._informeIA||'')+`<br><br><strong>Periodización:</strong> ${notaPer}`;
       saveClient(upd);
+      if(notaPer.startsWith('⚠'))alert(notaPer);
       if(faseBloqueada)alert(`La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero eso se confirma desde "📈 Avance de fase" en el directorio — ahí vas a ver qué requisitos faltan.`);
       // Llevar al constructor de sesión con el cliente vinculado y la fase aplicada
       const faseObj=upd.nivel||'activa';
@@ -1112,7 +1142,10 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
       });
       onClose();
       setTab('session');
-      setTimeout(()=>alert('✅ Sugerencias aplicadas: fase '+faseObj.toUpperCase()+(found?' · '+ai.metodologia_sugerida:'')+'.\nTe llevé al Constructor con el cliente vinculado. Podés generar la sesión con IA o armarla a mano.'),150);
+      // El aviso dice exactamente qué pasó con la periodización: antes usaba una
+      // variable del matcheo viejo y podía afirmar que se había aplicado algo
+      // que en realidad se había descartado.
+      setTimeout(()=>alert('✅ Sugerencias aplicadas: fase '+faseObj.toUpperCase()+'.\n\n'+(notaPer||'Sin cambios de periodización.')+'\n\nTe llevé al Constructor con el cliente vinculado.'),150);
     };
 
     const exportInformePDF=()=>{
@@ -3124,6 +3157,26 @@ function Caja({ k, v, c }) {
   );
 }
 
+
+// Resuelve la periodización desde lo que devuelve la IA: primero por id
+// exacto, después por nombre y por último por coincidencia de texto sin
+// acentos. Antes era un includes() sobre texto libre y cualquier variación
+// de mayúsculas dejaba al cliente sin periodización, sin avisar.
+const SIN_ACENTOS=(x)=>(x||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+function resolverPeriodizacion(texto){
+  if(!texto) return null;
+  const t=SIN_ACENTOS(texto);
+  if(PERIODIZACIONES[t]) return t;                                  // id exacto
+  const porNombre=Object.entries(PERIODIZACIONES).find(([,v])=>SIN_ACENTOS(v.nombre)===t);
+  if(porNombre) return porNombre[0];
+  const alias={lineal:['lineal','bompa'],dup:['ondulante diaria','dup'],bloque:['bloque','verkhoshansky','issurin'],
+    atr:['atr','acumulacion'],conjugado:['conjugado','westside'],hst:['hst','hypertrophy specific'],
+    triphasic:['trifasico','triphasic'],fitness_general:['fitness general','ondulante semanal'],
+    perdida_grasa:['perdida de grasa','phat']};
+  const porAlias=Object.entries(alias).find(([,ks])=>ks.some(k=>t.includes(k)));
+  return porAlias?porAlias[0]:null;
+}
+
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -3178,7 +3231,7 @@ export default function App(){
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
   const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia } = useIncidencias();
-  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, loading:hoyLoading, postergar:hoyPostergar, refetch:hoyRefetch } = useHoy();
+  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
   // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
   // mantenimiento de datos se vuelve permanente y deja de significar algo.
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
@@ -3187,7 +3240,7 @@ export default function App(){
   const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback } = useSalaDatos(salaIds);
   const [rutinaVer,setRutinaVer]=useState(null);
   const [rielCliente,setRielCliente]=useState(null);
-  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes]);
+  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes]);
   const [gpDias,setGpDias]=useState(3);
   const [gpDiv,setGpDiv]=useState('auto');
   const [gpLibre,setGpLibre]=useState('');
@@ -3208,6 +3261,7 @@ export default function App(){
   },[incidencias]);
   const [clientWizard,setClientWizard]=useState(null);
   const [clienteSearch,setClienteSearch]=useState('');
+  const [verBajas,setVerBajas]=useState(false);
   const [avanceAbierto,setAvanceAbierto]=useState(null); // id del cliente con el panel de avance de fase abierto
   const [miniEvalCliente,setMiniEvalCliente]=useState(null); // cliente con el modal de mini evaluación de cierre abierto
   const [checkpointCliente,setCheckpointCliente]=useState(null); // id del cliente con el panel de checkpoint comparativo abierto
@@ -3875,16 +3929,29 @@ export default function App(){
 
   const ClientesTab=()=>{
     const q=clienteSearch.trim().toLowerCase();
-    const clientesFiltrados=q?clients.filter(c=>{
+    // Los dados de baja se ocultan pero NO se borran: conservan planes, tests,
+    // evaluaciones y todo el historial del portal, y se pueden reactivar.
+    const dadosDeBaja=clients.filter(c=>c.activo===false);
+    const base=verBajas?clients:clients.filter(c=>c.activo!==false);
+    const clientesFiltrados=q?base.filter(c=>{
       const hay=[c.nombre,c.apellido,c.documento,c.celular,c.objetivo].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
-    }):clients;
+    }):base;
     return(
     <div style={{padding:'12px 14px'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
         <div>
           <div style={{fontSize:14,fontWeight:700}}>Directorio de clientes</div>
-          <div style={{fontSize:11,color:G4}}>{clients.length} clientes · Método Activa Integra v4.0</div>
+          <div style={{fontSize:11,color:G4}}>
+            {clients.filter(c=>c.activo!==false).length} activos
+            {dadosDeBaja.length>0&&<> · {dadosDeBaja.length} de baja</>} · Método Activa Integra v4.0
+          </div>
+          {dadosDeBaja.length>0&&(
+            <button onClick={()=>setVerBajas(v=>!v)}
+              style={{marginTop:4,background:'none',border:`1px solid ${G2}`,color:verBajas?'#B45309':G4,borderRadius:6,padding:'3px 9px',fontSize:10,fontWeight:700,cursor:'pointer'}}>
+              {verBajas?`Ocultar los ${dadosDeBaja.length} dados de baja`:`Ver los ${dadosDeBaja.length} dados de baja`}
+            </button>
+          )}
         </div>
         <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
       </div>
@@ -3956,9 +4023,32 @@ export default function App(){
                   <button onClick={()=>copiarPortalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FEF2F2',color:R,borderColor:R}}>📲 Portal</button>
                   {c.portal_token&&<button onClick={()=>regenerarPortalCliente(c)} title="Regenerar link (invalida el anterior)" style={{...s.btnG,fontSize:10,padding:'4px 7px'}}>🔄</button>}
                   <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Editar</button>
-                  <button onClick={()=>deleteClient(c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
+                  {/* Dar de baja en lugar de borrar. Borrar se lleva planes,
+                      tests, evaluaciones y los registros del portal, y eso no
+                      se recupera. La baja oculta al cliente y conserva todo. */}
+                  {c.activo===false?(
+                    <button onClick={()=>{
+                        if(!confirm(`¿Reactivar a ${c.nombre} ${c.apellido}? Vuelve al listado con todo su historial.`))return;
+                        saveClient({...c,activo:true,baja_fecha:null,baja_motivo:''})?.catch?.(e=>alert('No se pudo: '+e.message));
+                      }} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:'#16A34A',borderColor:'#16A34A'}}>↩ Reactivar</button>
+                  ):(
+                    <button onClick={()=>{
+                        const motivo=prompt(`Dar de baja a ${c.nombre} ${c.apellido}.\n\nNo se borra nada: planes, tests, evaluaciones y registros del portal quedan guardados y podés reactivarlo cuando quieras.\n\n¿Motivo? (opcional)`,'');
+                        if(motivo===null)return;
+                        saveClient({...c,activo:false,baja_fecha:new Date().toISOString().split('T')[0],baja_motivo:motivo})?.catch?.(e=>alert('No se pudo: '+e.message));
+                      }} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:'#B45309',borderColor:'#B45309'}}>Dar de baja</button>
+                  )}
+                  <button onClick={()=>{
+                      if(!confirm(`⚠ ELIMINAR a ${c.nombre} ${c.apellido} definitivamente.\n\nSe borran también sus planes, tests, evaluaciones y todo lo que cargó en el portal. NO se puede recuperar.\n\nSi solo dejó de venir, usá "Dar de baja".\n\n¿Eliminar de todas formas?`))return;
+                      deleteClient(c.id);
+                    }} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:R,borderColor:R}}>Del</button>
                 </div>
               </div>
+              {c.activo===false&&(
+                <div style={{background:'#FFFBEB',border:'1px solid #FCD34D',borderRadius:6,padding:'6px 9px',marginTop:6,fontSize:10,color:'#92400E'}}>
+                  Dado de baja{c.baja_fecha?` el ${c.baja_fecha}`:''}{c.baja_motivo?` · ${c.baja_motivo}`:''} — su historial está intacto
+                </div>
+              )}
               {checkpointCliente===c.id&&(()=>{
                 const hist=c.screeningHistorial||[];
                 const idA=ckGymA||hist[0]?.id;
@@ -4048,7 +4138,20 @@ export default function App(){
                   cliente={c}
                   incidencias={incidencias}
                   siguienteFase={siguienteFase}
-                  onAvanzar={(sig)=>{saveClient({...c,nivel:sig,criterios_avance_estado:{}})?.catch?.(e=>alert("No se pudo guardar: "+e.message));setAvanceAbierto(null);}}
+                  onAvanzar={(sig)=>{
+                    // Si la IA había dejado una periodización pendiente para
+                    // esta fase, se aplica ahora: era el punto exacto donde se
+                    // perdía la asignación.
+                    const pend=c.screening?._periodizacionPendiente;
+                    const upd={...c,nivel:sig,criterios_avance_estado:{}};
+                    if(pend&&PERIODIZACIONES[pend.id]?.compatible_fases?.includes(sig)){
+                      upd.periodizacion=pend.id;
+                      upd.periodizacion_inicio=new Date().toISOString().split('T')[0];
+                      const sc={...(upd.screening||{})};delete sc._periodizacionPendiente;upd.screening=sc;
+                    }
+                    saveClient(upd)?.catch?.(e=>alert("No se pudo guardar: "+e.message));
+                    if(upd.periodizacion===pend?.id)alert(`Avance confirmado y periodización aplicada: ${pend.nombre}. El ciclo arranca hoy.`);
+                    setAvanceAbierto(null);}}
                 />
               )}
               {avanceAbierto===c.id&&(()=>{
@@ -5052,8 +5155,8 @@ export default function App(){
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='hoy'&&(
-          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} loading={hoyLoading} config={brand||{}}
-            postergar={hoyPostergar} brand={brand}
+          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} loading={hoyLoading} config={brand||{}}
+            postergar={hoyPostergar} marcarItem={hoyMarcar} quitarMarca={hoyQuitarMarca} brand={brand}
             onIr={(destino,id)=>{
               // Cada ítem se resuelve en un toque: la navegación deja a la
               // persona en pantalla, no solo cambia de pestaña.

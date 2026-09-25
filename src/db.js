@@ -1031,29 +1031,48 @@ export function useHoy(){
   const [gym,setGym]=useState([])
   const [fisio,setFisio]=useState([])
   const [descartes,setDescartes]=useState([])
+  const [reportes,setReportes]=useState([])
   const [loading,setLoading]=useState(true)
   const fetch=useCallback(async()=>{
     if(!isSupabaseReady){setLoading(false);return}
     try{
-      const[g,f,d]=await Promise.all([
+      const[g,f,d,r]=await Promise.all([
         supabase.from('hoy_gym').select('*'),
         supabase.from('hoy_fisio').select('*'),
         supabase.from('hoy_descartes').select('*'),
+        // Cada reporte de dolor del portal por separado: la vista agregada
+        // solo daba el conteo, y con un conteo no se puede hacer nada.
+        supabase.from('gym_sesion_feedback')
+          .select('id,gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota')
+          .gt('dolor',0).order('fecha',{ascending:false}).limit(120),
       ])
       if(g.error)throw g.error; if(f.error)throw f.error
-      setGym(g.data||[]);setFisio(f.data||[]);setDescartes(d.data||[])
+      if(r.error)console.error('hoy/reportes:',r.error.message)
+      setGym(g.data||[]);setFisio(f.data||[]);setDescartes(d.data||[]);setReportes(r.data||[])
     }catch(e){console.error('useHoy:',e.message)}
     finally{setLoading(false)}
   },[])
   useEffect(()=>{fetch()},[fetch])
-  const postergar=useCallback(async(item_key,dias=7,motivo='')=>{
-    const hasta=new Date(Date.now()+dias*864e5).toISOString().slice(0,10)
-    setDescartes(p=>[...p.filter(x=>x.item_key!==item_key),{item_key,hasta,motivo}])
+  // Estado de un aviso. `resuelto` y `descartado` lo ocultan por un plazo;
+  // `atendido` y `en_proceso` lo dejan a la vista con su marca, porque algo
+  // que se está atendiendo y sigue abierto no tiene que desaparecer.
+  const marcarItem=useCallback(async(item_key,estado,motivo='')=>{
+    const dias={resuelto:30,descartado:90,atendido:0,en_proceso:0}[estado]??7
+    const hasta=dias?new Date(Date.now()+dias*864e5).toISOString().slice(0,10):null
+    const fila={item_key,estado,hasta,motivo,actualizado_at:new Date().toISOString()}
+    setDescartes(p=>[...p.filter(x=>x.item_key!==item_key),fila])
     if(!isSupabaseReady)return
-    const{error}=await supabase.from('hoy_descartes').upsert({item_key,hasta,motivo},{onConflict:'item_key'})
-    if(error){console.error('postergar:',error.message);fetch()}
+    const{error}=await supabase.from('hoy_descartes').upsert(fila,{onConflict:'item_key'})
+    if(error){console.error('marcarItem:',error.message);fetch()}
   },[fetch])
-  return{gym,fisio,descartes,loading,refetch:fetch,postergar}
+  const quitarMarca=useCallback(async(item_key)=>{
+    setDescartes(p=>p.filter(x=>x.item_key!==item_key))
+    if(!isSupabaseReady)return
+    const{error}=await supabase.from('hoy_descartes').delete().eq('item_key',item_key)
+    if(error){console.error('quitarMarca:',error.message);fetch()}
+  },[fetch])
+  const postergar=useCallback((item_key,dias=7,motivo='')=>marcarItem(item_key,'descartado',motivo),[marcarItem])
+  return{gym,fisio,descartes,reportes,loading,refetch:fetch,postergar,marcarItem,quitarMarca}
 }
 
 // ─── HOOK: datos de sala para VARIOS clientes a la vez ───────────────────

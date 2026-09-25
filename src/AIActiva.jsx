@@ -592,6 +592,7 @@ Respondé ÚNICAMENTE con este JSON:
   "fase_sugerida": "restaura|activa|potencia|rinde",
   "fase_justificacion": "por qué esta fase, citando los datos que la fundamentan (2 líneas)",
   "metodologia_sugerida": "nombre exacto de una metodología de la lista correspondiente a fase_sugerida (si fase_sugerida es restaura, dejá este campo vacío)",
+  "periodizacion_id": "el ID de esa metodología, EXACTO, uno de: lineal | dup | bloque | atr | conjugado | hst | triphasic | fitness_general | perdida_grasa. Vacío si fase_sugerida es restaura. Este campo es el que el sistema usa para asignarla: si no lo mandás, la asignación depende de interpretar el nombre.",
   "metodologia_justificacion": "por qué este sistema para este caso (2 líneas)",
   "prioridades": ["en orden, qué atacar primero según lo que más limita hoy"],
   "ejercicios_base": [

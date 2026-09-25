@@ -139,7 +139,7 @@ export default async function handler(req, res) {
       // lado, el motor y la IA cuando se arma el plan siguiente.
       let feedback = [];
       try {
-        feedback = await sb(`gym_sesion_feedback?gym_client_id=eq.${cli.id}&select=dia_id,semana,fecha,rpe_sesion,energia,dolor,nota&order=fecha.desc&limit=60`) || [];
+        feedback = await sb(`gym_sesion_feedback?gym_client_id=eq.${cli.id}&select=dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota&order=fecha.desc&limit=60`) || [];
       } catch {}
 
       return res.status(200).json({
@@ -177,6 +177,8 @@ export default async function handler(req, res) {
           rpe_sesion: n(b.rpe_sesion, 1, 10),
           energia: n(b.energia, 1, 5),
           dolor: n(b.dolor, 0, 10),
+          // La zona solo tiene sentido si hay dolor.
+          dolor_zona: n(b.dolor, 0, 10) ? (b.dolor_zona || "").toString().slice(0, 40) : "",
           nota: (b.nota || "").toString().slice(0, 500),
           updated_at: new Date().toISOString(),
         };

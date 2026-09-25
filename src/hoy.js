@@ -123,25 +123,59 @@ const sumarDias = (fecha, n) => {
 const nom = (x) => `${x.nombre || ''} ${x.apellido || ''}`.trim();
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
-export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
+export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
   const PZ = { ...PLAZOS, screening: config.venc_screening_dias ?? PLAZOS.screening,
     test: config.venc_test_dias ?? PLAZOS.test, aviso: config.aviso_previo_dias ?? PLAZOS.aviso };
   const items = [];
-  const silenciado = (key) => descartes.some(d => d.item_key === key && (!d.hasta || d.hasta >= hoy));
-  const add = (it) => { if (!silenciado(it.key)) items.push(it); };
+  // Estado guardado de cada aviso. `resuelto` y `descartado` lo ocultan hasta
+  // la fecha `hasta`; `atendido` y `en_proceso` lo dejan visible CON su marca,
+  // porque algo atendido que sigue pendiente no debe desaparecer de la vista.
+  const estadoDe = (key) => descartes.find(d => d.item_key === key) || null;
+  const oculto = (key) => {
+    const e = estadoDe(key);
+    if (!e) return false;
+    if (e.estado === 'atendido' || e.estado === 'en_proceso') return false;
+    return !e.hasta || e.hasta >= hoy;
+  };
+  const add = (it) => {
+    if (oculto(it.key)) return;
+    const e = estadoDe(it.key);
+    items.push(e && (e.estado === 'atendido' || e.estado === 'en_proceso')
+      ? { ...it, estadoGuardado: e.estado, estadoNota: e.motivo || '' } : it);
+  };
 
   // ── CRÍTICO ────────────────────────────────────────────────────────────
 
-  // Molestia que el propio cliente reportó desde el portal. Es el único aviso
-  // que nace del cliente y no de una medición nuestra: no puede esperar.
-  gym.filter(c => (c.sesiones_con_dolor || 0) > 0).forEach(c => add({
-    key: `dolor_portal:${c.id}`, sev: 'critico', icono: '🩹',
-    titulo: `${nom(c)} reportó molestia entrenando`,
-    detalle: `${plural(c.sesiones_con_dolor, 'sesión', 'sesiones')} con molestia ≥4/10 desde el portal` +
-             (c.dolor_promedio ? ` · promedio ${c.dolor_promedio}/10` : ''),
-    accion: { label: 'Abrir ficha', tab: 'clientes', clienteId: c.id },
-    porQue: 'El cliente avisó que le duele. Si no se revisa qué ejercicio lo genera, sigue entrenando con eso.',
-  }));
+  // ── REPORTES DE DOLOR DEL PORTAL, UNO POR UNO ─────────────────────────
+  // Antes era un solo aviso por cliente con el CONTEO de sesiones: "2 sesiones
+  // con molestia ≥4/10". No decía dónde dolía, cuánto, qué día ni en qué
+  // sesión — y con eso no se puede hacer nada. Ahora cada reporte es su propio
+  // aviso, con su zona, su intensidad y su sesión, y se puede cerrar por
+  // separado: atender el lumbar del martes no debe tapar la rodilla del jueves.
+  // Aparecen TODOS los que manifiesten dolor, no solo los de 4 o más.
+  const deBaja = new Set(gym.filter(c => c.activo === false).map(c => c.id));
+  reportes.filter(r => (r.dolor || 0) > 0 && !deBaja.has(r.gym_client_id)).forEach(r => {
+    const c = gym.find(x => x.id === r.gym_client_id) || { nombre: r.cliente_nombre || 'Cliente', apellido: '' };
+    const d = dias(r.fecha, hoy);
+    const cuando = d === 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${plural(d, 'día', 'días')}`;
+    const fuerte = r.dolor >= 4;
+    add({
+      key: `dolor_reporte:${r.id}`,          // por reporte: uno nuevo no queda tapado por uno viejo cerrado
+      sev: fuerte ? 'critico' : 'atencion', icono: '🩹',
+      titulo: `${nom(c)}: ${r.dolor_zona || 'zona sin especificar'} ${r.dolor}/10 — ${cuando}`,
+      detalle: `${r.fecha}${r.dia_nombre ? ` · ${r.dia_nombre}` : ''}${r.semana ? ` · semana ${r.semana}` : ''}` +
+               ` · esfuerzo percibido ${r.rpe_sesion}/10` +
+               (r.energia != null ? ` · energía ${r.energia}/5` : '') +
+               (r.nota ? ` · “${r.nota}”` : '') +
+               (r.dolor_zona ? '' : ' · reportado antes de que la encuesta pidiera la zona'),
+      rank: r.dolor * 10 - (d || 0),          // más dolor y más reciente, más arriba
+      clienteId: r.gym_client_id,
+      accion: { label: 'Abrir el riel de sala', tab: 'sala', clienteId: r.gym_client_id },
+      porQue: fuerte
+        ? 'Lo reportó el propio cliente. Mientras no se decida qué hacer con ese ejercicio, sigue entrenando con dolor.'
+        : 'Molestia leve: puede ser normal del entrenamiento o el principio de algo. Si se repite en la misma zona, deja de ser leve.',
+    });
+  });
 
   // Revisión de incidencia de sala pasada de fecha.
   gym.filter(c => dias(c.incidencia_revision) > 0).forEach(c => add({
@@ -246,7 +280,8 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
   // Todo aparece con AVISO PREVIO (7 días por defecto) y vuelve a aparecer,
   // con más peso, una vez vencido. Un vencimiento que solo se ve el día
   // después ya llegó tarde.
-  const conPlan = gym.filter(c => c.planes_activos > 0);
+  // Un cliente dado de baja no genera avisos: no está entrenando.
+  const conPlan = gym.filter(c => c.planes_activos > 0 && c.activo !== false);
 
   // 1) EVALUACIÓN / SCREENING — por calendario.
   conPlan.forEach(c => {
@@ -339,8 +374,8 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
         titulo: `${nom(c)} terminó el ciclo completo hace ${plural(f.diasDesdeFin, 'día', 'días')}`,
         detalle: `${f.per} · semana ${f.semana}${inferido}`,
         rank: 500 + f.diasDesdeFin,
-        accion: { label: 'Armar nuevo ciclo', tab: 'constructor', clienteId: c.id },
-        porQue: 'Sigue entrenando con los parámetros de la última fase de un ciclo que ya cerró. Corresponde retestear y elegir la periodización siguiente.',
+        accion: { label: 'Revisar criterios de avance', tab: 'clientes', clienteId: c.id },
+        porQue: 'Cerrar un ciclo es el momento de decidir si avanza de fase: revisá los criterios de avance antes de armar el plan siguiente. Después, retestear y elegir la periodización.',
       });
       return;
     }
@@ -358,6 +393,19 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
         porQue: 'En una periodización ondulante no hay cambio de fase que avisar: lo que se renueva es el ciclo entero.',
       });
       return;
+    }
+    // Última fase por terminar: es cuando hay que revisar los criterios de
+    // avance, no después. Si el ciclo cierra sin revisarlos, el cliente
+    // arranca el ciclo siguiente en la misma fase por omisión.
+    if (f.esUltima && f.diasParaFinFase != null && f.diasParaFinFase >= 0 && f.diasParaFinFase <= PZ.aviso) {
+      add({
+        key: `criterios_fin_ciclo:${c.id}`, sev: 'atencion', icono: '✅',
+        titulo: `${nom(c)} cierra el ciclo en ${plural(f.diasParaFinFase, 'día', 'días')}: revisá los criterios de avance`,
+        detalle: `${f.per} · última fase "${f.fase}" · nivel actual ${c.nivel || '—'}`,
+        rank: 480 - f.diasParaFinFase,
+        accion: { label: 'Ver criterios de avance', tab: 'clientes', clienteId: c.id },
+        porQue: 'El cambio de nivel se decide con los criterios cumplidos. Si el ciclo cierra sin revisarlos, el cliente sigue en la misma fase por omisión, no por decisión.',
+      });
     }
     const r = f.diasParaFinFase;
     if (r == null || r > PZ.aviso) return;
@@ -380,7 +428,7 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], config = {}
   // ── MANTENIMIENTO (agrupado) ───────────────────────────────────────────
   const grupos = [];
   const grupo = (key, icono, titulo, lista, accionLabel, tab, porQue) => {
-    if (!lista.length || silenciado(key)) return;
+    if (!lista.length || oculto(key)) return;
     grupos.push({
       key, sev: 'manten', icono, titulo: titulo(lista.length), agrupado: true,
       detalle: lista.slice(0, 5).map(nom).join(' · ') + (lista.length > 5 ? ` y ${lista.length - 5} más` : ''),
