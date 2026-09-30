@@ -4,7 +4,7 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -2431,7 +2431,10 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
                         const per=PERIODIZACIONES[val];
                         const semanas=per?parseDuracionSemanas(per.duracion):null;
                         let finCalc='';
-                        if(semanas){const d=new Date(hoy+'T00:00:00');d.setDate(d.getDate()+semanas*7);finCalc=d.toISOString().split('T')[0];}
+                        if(semanas&&/^\d{4}-\d{2}-\d{2}$/.test(String(hoy))){
+                          const d=new Date(hoy+'T00:00:00');
+                          if(!isNaN(d.getTime())){d.setDate(d.getDate()+semanas*7);finCalc=d.toISOString().split('T')[0];}
+                        }
                         set('periodizacionInicio',hoy);
                         set('periodizacionFin',finCalc);
                         // Snapshot de métricas al momento de asignar — es el "inicio" contra
@@ -3100,6 +3103,249 @@ const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PanelMetas — objetivos MEDIBLES del cliente.
+//
+// Es lo que hace que el portal pueda mostrar una barra que se mueva sola.
+// La categoría del screening ("hipertrofia") y el checklist de fase
+// ("EVA <= 2/10") no sirven para eso: no tienen número de llegada. Acá se
+// carga metrica + arranque + meta, y el valor de hoy lo pone el sistema:
+//   carga  -> el máximo entre lo que carga el cliente en el portal y tus tests
+//   test   -> el 1RM del test de fuerza
+//   manual -> el número que pongas vos en la evaluación
+function PanelMetas({ clienteId, cliente, exercises, criterios, s }) {
+  const { metas, guardar, borrar } = useMetas(clienteId || null);
+  const [edit, setEdit] = useState(null);
+  const [genIA, setGenIA] = useState(false);
+  const [errIA, setErrIA] = useState('');
+  if (!clienteId) return null;
+
+  const analisis = (cliente?.screening || {})._ultimoAnalisisIA || null;
+  const deficits = analisis ? [
+    ...(analisis.deficiencias_funcionales || []).map(t => ({ texto: t, tipo: 'funcional' })),
+    ...(analisis.deficiencias_fuerza || []).map(t => ({ texto: t, tipo: 'fuerza' })),
+  ] : [];
+
+  const delCliente = metas.filter(m => (m.origen || 'cliente') === 'cliente' && m.estado !== 'propuesta');
+  const deIA       = metas.filter(m => m.origen === 'ia' && m.estado !== 'propuesta');
+  const propuestas = metas.filter(m => m.estado === 'propuesta');
+
+  const vacia = (origen) => ({ titulo:'', tipo:'carga', ejercicio_id:'', test_id:'', unidad:'kg',
+    valor_inicial:'', valor_objetivo:'', valor_manual:'', direccion:'subir',
+    principal: origen === 'cliente' && delCliente.length === 0,
+    criterio_id:'', estado:'activa', origen, fecha_objetivo:'' });
+
+  const commit = async () => {
+    if (!edit.titulo.trim()) return alert('Poné un título: es lo que ve el cliente.');
+    if (edit.valor_objetivo === '' || isNaN(parseFloat(edit.valor_objetivo)))
+      return alert('Falta el valor objetivo. Sin número de llegada no hay barra posible.');
+    if (edit.tipo === 'carga' && !edit.ejercicio_id)
+      return alert('Elegí el ejercicio: es de donde se lee lo que el cliente carga.');
+    const num = v => (v === '' || v == null ? null : parseFloat(v));
+    try {
+      await guardar({ ...edit, estado: edit.estado === 'propuesta' ? 'activa' : edit.estado,
+        valor_inicial:num(edit.valor_inicial), valor_objetivo:num(edit.valor_objetivo),
+        valor_manual:num(edit.valor_manual),
+        ejercicio_id:edit.ejercicio_id||null, test_id:edit.test_id||null,
+        criterio_id:edit.criterio_id||null, fecha_objetivo:edit.fecha_objetivo||null });
+      setEdit(null);
+    } catch (e) { alert('No se pudo guardar: ' + e.message); }
+  };
+
+  // Convierte los párrafos de diagnóstico del análisis en metas con número.
+  // La IA ya compara contra referencias normativas dentro de su propio texto
+  // ("plancha 36 seg vs. referencia 45-75 seg"), así que el valor de llegada
+  // sale de ahí. Queda como PROPUESTA: no se le muestra al cliente hasta que
+  // vos la apruebes, porque un objetivo mal calibrado desmotiva más que no
+  // tener ninguno.
+  const proponerConIA = async () => {
+    if (!deficits.length) return;
+    setGenIA(true); setErrIA('');
+    try {
+      const nombresEj = (exercises || []).map(e => `${e.id}|${e.nombre}`).join('\n');
+      const prompt = `Cliente: ${cliente.nombre} ${cliente.apellido||''} — fase ${cliente.nivel||'activa'}.
+
+DÉFICITS DETECTADOS EN EL ANÁLISIS:
+${deficits.map((d,i)=>`${i+1}. [${d.tipo}] ${d.texto}`).join('\n')}
+
+EJERCICIOS DISPONIBLES (id|nombre):
+${nombresEj}
+
+Convertí cada déficit que tenga un valor medible en UNA meta de corto/mediano plazo.
+Reglas:
+- Si el déficit no trae ningún número medible, NO inventes uno: descartá ese déficit.
+- valor_inicial = el valor actual que aparece en el texto del déficit.
+- valor_objetivo = el piso del rango normativo que el propio texto menciona. Si no menciona rango, usá una progresión realista de 8-12 semanas.
+- tipo "carga" solo si podés mapear un ejercicio_id EXACTO de la lista. Si no, tipo "manual".
+- unidad: kg, seg, reps, cm o grados según corresponda.
+- direccion "bajar" solo si mejorar significa que el número baje.
+- titulo: corto, en segunda persona, entendible por el cliente. Sin jerga.
+
+Respondé SOLO un array JSON, sin texto alrededor:
+[{"titulo":"","tipo":"carga|manual","ejercicio_id":"","unidad":"","valor_inicial":0,"valor_objetivo":0,"direccion":"subir|bajar","deficit_i":1}]`;
+
+      const r = await fetch('/api/claude', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ system:'Sos un preparador físico. Devolvés solo JSON válido, sin markdown.', prompt, max_tokens:2000 }) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+      let arr;
+      try { arr = JSON.parse((data.text||'').replace(/```json|```/g,'').trim()); }
+      catch { throw new Error('La IA devolvió una respuesta que no se pudo leer. Probá de nuevo.'); }
+      if (!Array.isArray(arr) || !arr.length) throw new Error('El análisis no tiene déficits con números medibles: no hay meta que proponer.');
+
+      for (const m of arr) {
+        const d = deficits[(m.deficit_i || 1) - 1];
+        await guardar({ titulo:m.titulo||'Meta sin título', tipo:m.tipo==='carga'?'carga':'manual',
+          ejercicio_id:m.tipo==='carga'?(m.ejercicio_id||null):null, test_id:null,
+          unidad:m.unidad||'kg', valor_inicial:m.valor_inicial??null, valor_objetivo:m.valor_objetivo,
+          direccion:m.direccion==='bajar'?'bajar':'subir', principal:false,
+          origen:'ia', estado:'propuesta', deficit_texto:d?d.texto:null,
+          analisis_fecha:analisis?.fecha||null });
+      }
+    } catch (e) { setErrIA(e.message); }
+    finally { setGenIA(false); }
+  };
+
+  const lbl = { carga:'Se lee del portal + tests', test:'Se lee del test de fuerza', manual:'La actualizás vos' };
+
+  const filaMeta = (m, propuesta) => (
+    <div key={m.id} style={{ border:`1px solid ${propuesta?'#C4B5FD':'#E5E7EB'}`, background:propuesta?'#F5F3FF':'#fff',
+      borderRadius:8, padding:8, marginBottom:6 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', gap:8 }}>
+        <div style={{ fontSize:12, fontWeight:700 }}>{m.principal ? '⭐ ' : ''}{m.titulo}</div>
+        <div style={{ display:'flex', gap:4 }}>
+          {propuesta && <button style={s.btnGreen} onClick={() =>
+            guardar({ ...m, estado:'activa' }).catch(e=>alert(e.message))}>Aprobar</button>}
+          <button style={s.btnG} onClick={() => setEdit({ ...m,
+            valor_inicial:m.valor_inicial??'', valor_objetivo:m.valor_objetivo??'',
+            valor_manual:m.valor_manual??'', ejercicio_id:m.ejercicio_id||'',
+            test_id:m.test_id||'', criterio_id:m.criterio_id||'', fecha_objetivo:m.fecha_objetivo||'' })}>✎</button>
+          <button style={s.btnG} onClick={() => { if (confirm(propuesta?'¿Descartar esta propuesta?':'¿Borrar este objetivo?')) borrar(m.id).catch(e=>alert(e.message)); }}>🗑</button>
+        </div>
+      </div>
+      <div style={{ fontSize:10, color:'#6B7280', marginTop:3 }}>
+        {lbl[m.tipo]} · arranque {m.valor_inicial ?? '—'} → meta {m.valor_objetivo} {m.unidad}
+      </div>
+      {m.deficit_texto && (
+        <div style={{ fontSize:9, color:'#7C3AED', marginTop:4, fontStyle:'italic' }}>
+          Del análisis: “{String(m.deficit_texto).slice(0,150)}{String(m.deficit_texto).length>150?'…':''}”
+        </div>
+      )}
+      {m.tipo === 'manual' && !propuesta && (
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:5 }}>
+          <span style={{ fontSize:10, color:'#6B7280' }}>Valor de hoy:</span>
+          <input defaultValue={m.valor_manual ?? ''} placeholder="—"
+            style={{ ...s.inp, width:80, fontSize:11, padding:'3px 6px' }}
+            onBlur={e => { const v = e.target.value === '' ? null : parseFloat(e.target.value);
+              if (v !== (m.valor_manual == null ? null : parseFloat(m.valor_manual)))
+                guardar({ ...m, valor_manual:v }).catch(er=>alert(er.message)); }} />
+          <span style={{ fontSize:10, color:'#6B7280' }}>{m.unidad}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ ...s.card, marginTop: 8 }}>
+      {/* ── OBJETIVO DEL CLIENTE ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <div style={{ fontSize:12, fontWeight:700 }}>🎯 Objetivo del cliente</div>
+        <button style={s.btnG} onClick={() => setEdit(vacia('cliente'))}>+ Objetivo</button>
+      </div>
+      {delCliente.length === 0 && !edit && (
+        <div style={{ fontSize:11, color:'#6B7280', marginBottom:8 }}>
+          Sin objetivo cargado. El portal sigue mostrando el volumen total como encabezado hasta que haya uno.
+        </div>
+      )}
+      {delCliente.map(m => filaMeta(m, false))}
+
+      {/* ── METAS DEL ANÁLISIS ── */}
+      <div style={{ borderTop:'1px dashed #E5E7EB', marginTop:10, paddingTop:9 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#6D28D9' }}>🧠 Metas del análisis</div>
+          {deficits.length > 0 && (
+            <button style={s.btnG} disabled={genIA} onClick={proponerConIA}>
+              {genIA ? 'Calculando…' : '⚡ Proponer desde el análisis'}
+            </button>
+          )}
+        </div>
+        <div style={{ fontSize:10, color:'#6B7280', marginBottom:7 }}>
+          Derivadas de los déficits detectados. Orientan el ciclo — <strong>no bloquean el avance de fase</strong>,
+          que lo decide el checklist del método.
+        </div>
+        {!analisis && <div style={{ fontSize:11, color:'#6B7280' }}>Este cliente todavía no tiene análisis de IA cargado.</div>}
+        {errIA && <div style={{ fontSize:11, color:'#DC2626', marginBottom:6 }}>{errIA}</div>}
+        {propuestas.length > 0 && (
+          <div style={{ fontSize:10, fontWeight:700, color:'#6D28D9', margin:'4px 0' }}>
+            Propuestas sin aprobar — el cliente todavía no las ve
+          </div>
+        )}
+        {propuestas.map(m => filaMeta(m, true))}
+        {deIA.map(m => filaMeta(m, false))}
+        {analisis && !propuestas.length && !deIA.length && !genIA && (
+          <div style={{ fontSize:11, color:'#6B7280' }}>
+            {deficits.length} déficit{deficits.length===1?'':'s'} en el análisis del {analisis.fecha||'—'}. Todavía sin metas propuestas.
+          </div>
+        )}
+      </div>
+
+      {/* ── EDITOR ── */}
+      {edit && (
+        <div style={{ border:'1px solid #16A34A', borderRadius:8, padding:9, marginTop:8, background:'#F0FDF4' }}>
+          <input value={edit.titulo} onChange={e => setEdit({ ...edit, titulo:e.target.value })}
+            placeholder="Lo que ve el cliente — ej: Llevar el peso muerto a 90 kg"
+            style={{ ...s.inp, width:'100%', marginBottom:6 }} />
+          <div style={{ display:'flex', gap:6, marginBottom:6, flexWrap:'wrap' }}>
+            <select value={edit.tipo} onChange={e => setEdit({ ...edit, tipo:e.target.value })} style={{ ...s.sel, flex:1, minWidth:150 }}>
+              <option value="carga">Carga en un ejercicio (automática)</option>
+              <option value="test">Test de fuerza / 1RM (automática)</option>
+              <option value="manual">Medida de evaluación (la cargás vos)</option>
+            </select>
+            <input value={edit.unidad} onChange={e => setEdit({ ...edit, unidad:e.target.value })}
+              placeholder="kg" style={{ ...s.inp, width:70 }} />
+          </div>
+          {edit.tipo === 'carga' && (
+            <select value={edit.ejercicio_id} onChange={e => setEdit({ ...edit, ejercicio_id:e.target.value })}
+              style={{ ...s.sel, width:'100%', marginBottom:6 }}>
+              <option value="">— Ejercicio del que se lee la carga —</option>
+              {(exercises || []).map(ex => <option key={ex.id} value={ex.id}>{ex.nombre}</option>)}
+            </select>
+          )}
+          {(edit.tipo === 'test' || edit.tipo === 'carga') && (
+            <select value={edit.test_id} onChange={e => setEdit({ ...edit, test_id:e.target.value })}
+              style={{ ...s.sel, width:'100%', marginBottom:6 }}>
+              <option value="">{edit.tipo === 'carga' ? '— Test que también cuenta (opcional) —' : '— Test de fuerza —'}</option>
+              {Object.entries(TESTS_FUERZA || {}).map(([id, t]) => <option key={id} value={id}>{t.nombre || id}</option>)}
+            </select>
+          )}
+          <div style={{ display:'flex', gap:6, marginBottom:6 }}>
+            <input value={edit.valor_inicial} onChange={e => setEdit({ ...edit, valor_inicial:e.target.value })}
+              placeholder="Arranque" inputMode="decimal" style={{ ...s.inp, flex:1 }} />
+            <input value={edit.valor_objetivo} onChange={e => setEdit({ ...edit, valor_objetivo:e.target.value })}
+              placeholder="Meta *" inputMode="decimal" style={{ ...s.inp, flex:1 }} />
+            <select value={edit.direccion} onChange={e => setEdit({ ...edit, direccion:e.target.value })} style={{ ...s.sel, flex:1 }}>
+              <option value="subir">Subir</option>
+              <option value="bajar">Bajar</option>
+            </select>
+          </div>
+          <div style={{ fontSize:10, color:'#6B7280', marginBottom:6 }}>
+            Si dejás el arranque vacío se toma el primer test registrado; si tampoco hay, el portal avisa “todavía sin medición” en vez de dibujar una barra en cero.
+          </div>
+          {(edit.origen || 'cliente') === 'cliente' && (
+            <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, marginBottom:8 }}>
+              <input type="checkbox" checked={!!edit.principal} onChange={e => setEdit({ ...edit, principal:e.target.checked })} />
+              Mostrar como objetivo principal en el encabezado del portal
+            </label>
+          )}
+          <div style={{ display:'flex', gap:6 }}>
+            <button style={s.btnGreen} onClick={commit}>{edit.estado === 'propuesta' ? 'Aprobar y guardar' : 'Guardar'}</button>
+            <button style={s.btnG} onClick={() => setEdit(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // PanelPercepcion — el historial de la encuesta del portal
 //
 // La encuesta de RPE se venía guardando y usando (motor, generador de planes,
@@ -3430,9 +3676,15 @@ export default function App(){
     const id=session.planId||genId('plan');
     const registro={
       id,
-      nombre:session.planNombre||`Plan ${activeClient.nombre} ${new Date(session.fecha).toLocaleDateString('es-UY')}`,
+      nombre:session.planNombre||`Plan ${activeClient.nombre} ${isNaN(new Date(session.fecha).getTime())?'':new Date(session.fecha).toLocaleDateString('es-UY')}`,
       fecha_inicio:session.fecha,
-      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{const d=new Date(session.fecha+'T00:00:00');d.setDate(d.getDate()+planMeta.totalSemanas*7-1);return d.toISOString().split('T')[0];})():null,
+      fecha_fin_estimada:planMeta?.secuencial&&planMeta?.totalSemanas?(()=>{
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(String(session.fecha)))return null;
+        const d=new Date(session.fecha+'T00:00:00');
+        if(isNaN(d.getTime()))return null;
+        d.setDate(d.getDate()+planMeta.totalSemanas*7-1);
+        return d.toISOString().split('T')[0];
+      })():null,
       periodizacion:activeClient.periodizacion||'',
       nivel_metodo:activeClient.nivel||'',
       num_dias:diasArmados.length,
@@ -4132,6 +4384,8 @@ export default function App(){
                   })}
                 </div>
               )}
+              <PanelMetas clienteId={c.id} cliente={c} exercises={exercises}
+                criterios={criteriosAvanceTemplate[c.nivel]||[]} s={s}/>
               <PanelPercepcion clienteId={c.id}/>
               {avanceAbierto===c.id&&(
                 <PanelVeredicto
@@ -4159,7 +4413,7 @@ export default function App(){
                 const sc=c.screening||{};
                 const ultimoAnalisis=sc._ultimoAnalisisIA||{};
                 const banderaActiva=sc.banderaRoja==='si'||sc.banderaNaranja==='si';
-                const {criticos,secundarios}=generarCriteriosAvancePersonalizados({
+                const {criticos,secundarios,deficits}=generarCriteriosAvancePersonalizados({
                   objetivo:c.objetivo, fase:c.nivel,
                   criteriosBase:criteriosAvanceTemplate[c.nivel]||[],
                   deficienciasFuncionales:ultimoAnalisis.deficiencias_funcionales||[],
@@ -4167,6 +4421,7 @@ export default function App(){
                   banderaActiva,
                 });
                 const estado=c.criterios_avance_estado||{};
+                const criteriosFase=[...criticos,...(secundarios||[])];
                 const cumplidos=criticos.filter(it=>estado[it.id]).length;
                 const todosCumplidos=criticos.length>0&&cumplidos===criticos.length;
                 const toggleItem=(itId)=>{

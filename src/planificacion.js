@@ -872,10 +872,15 @@ const semanasDeFase=(fase)=>{
   return un?parseInt(un[1],10):null;
 };
 
+// Una fecha mal cargada en la ficha de UN cliente no puede tumbar la app.
+// `new Date('262026-12-06T00:00:00')` es inválida y toISOString() tira
+// RangeError: Invalid time value, que es exactamente lo que rompía la carga.
 const sumarDias=(iso,dias)=>{
+  if(!iso||!/^\d{4}-\d{2}-\d{2}$/.test(String(iso)))return null;
   const d=new Date(iso+'T00:00:00');
+  if(isNaN(d.getTime()))return null;
   d.setDate(d.getDate()+dias);
-  return d.toISOString().split('T')[0];
+  return isNaN(d.getTime())?null:d.toISOString().split('T')[0];
 };
 
 // Devuelve {tipo, fechaFin, faseActual, faseActualFin} usando la fecha de
@@ -888,6 +893,9 @@ export const calcularCronogramaPeriodizacion=(inicioISO,periodizacionId)=>{
   const tipo=CICLO_TIPO[periodizacionId]||'fases';
   const semanasTotal=parseDuracionSemanas(per.duracion);
   const fechaFinTotal=semanasTotal?sumarDias(inicioISO,semanasTotal*7):null;
+  // Si la fecha de inicio no es válida no hay cronograma posible: se devuelve
+  // null en vez de propagar el error.
+  if(semanasTotal&&fechaFinTotal===null)return null;
 
   if(tipo==='semanal'){
     return{tipo,fechaFin:fechaFinTotal,faseActual:null,faseActualFin:null};
@@ -899,6 +907,7 @@ export const calcularCronogramaPeriodizacion=(inicioISO,periodizacionId)=>{
     if(sem==null){faseActual=null;faseActualFin=null;break;}
     acumSemanas+=sem;
     const finFaseISO=sumarDias(inicioISO,acumSemanas*7);
+    if(!finFaseISO){faseActual=null;faseActualFin=null;break;}
     if(new Date(finFaseISO+'T23:59:59')>=new Date()){
       faseActual=f.nombre;faseActualFin=finFaseISO;
       break;

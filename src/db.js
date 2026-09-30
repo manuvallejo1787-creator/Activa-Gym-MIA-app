@@ -1004,6 +1004,50 @@ export function useFeedbackSesiones(clienteId){
   return{feedback,loading,refetch:fetch}
 }
 
+// ─── HOOK: Metas medibles de UN cliente ──────────────────────────────────
+// Una meta sin número de llegada no sirve: no hay barra que se pueda mover.
+// Por eso valor_objetivo es obligatorio y el resto se calcula solo.
+export function useMetas(clienteId){
+  const [metas,setMetas]=useState([])
+  const [loading,setLoading]=useState(true)
+  const fetch=useCallback(async()=>{
+    if(!isSupabaseReady||!clienteId){setMetas([]);setLoading(false);return}
+    try{
+      const{data,error}=await supabase.from('gym_metas').select('*')
+        .eq('gym_client_id',clienteId).neq('estado','archivada')
+        .order('principal',{ascending:false}).order('created_at',{ascending:true})
+      if(error)throw error
+      setMetas(data||[])
+    }catch(e){console.error('gym_metas:',e.message);setMetas([])}
+    finally{setLoading(false)}
+  },[clienteId])
+  useEffect(()=>{fetch()},[fetch])
+
+  const guardar=useCallback(async(meta)=>{
+    if(!isSupabaseReady)throw new Error('Sin conexión a la base')
+    const row={...meta,gym_client_id:clienteId,updated_at:new Date().toISOString()}
+    if(!row.id)row.id='meta_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)
+    // El índice único deja una sola principal activa: si esta lo es, se bajan
+    // las demás ANTES de escribir, si no la base rechaza el insert.
+    if(row.principal){
+      await supabase.from('gym_metas').update({principal:false})
+        .eq('gym_client_id',clienteId).neq('id',row.id)
+    }
+    const{error}=await supabase.from('gym_metas').upsert(row)
+    if(error)throw error
+    await fetch()
+    return row
+  },[clienteId,fetch])
+
+  const borrar=useCallback(async(id)=>{
+    const{error}=await supabase.from('gym_metas').delete().eq('id',id)
+    if(error)throw error
+    await fetch()
+  },[fetch])
+
+  return{metas,loading,guardar,borrar,refetch:fetch}
+}
+
 // ─── HOOK: Historial de ejecución de UN cliente (todos sus planes) ────────
 // Alimenta la carga sugerida desde lo que el cliente realmente levantó en
 // cada ejercicio, cuando no hay test del patrón.

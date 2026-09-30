@@ -74,8 +74,17 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
     const vencScr = config.venc_screening_dias ?? PLAZOS.screening;
     const vencTest = config.venc_test_dias ?? PLAZOS.test;
     // Misma fuente que la pantalla HOY: manda la fecha de la ficha.
-    const fReeval = h.reeval_prevista
-      || (h.screening_fecha ? new Date(new Date(h.screening_fecha + 'T12:00').getTime() + vencScr * 864e5).toISOString().slice(0, 10) : null);
+    // CAUSA DEL "Invalid time value" QUE TUMBABA LA APP EN LA TABLET:
+    // con una fecha mal cargada (por ejemplo "262026-12-06"), getTime() da NaN
+    // y toISOString() lanza RangeError. Bastaba UN cliente así abierto en sala
+    // para que no cargara nada. Ahora se valida el formato y se descarta.
+    const sumarSeguro = (iso, n) => {
+      if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(String(iso))) return null;
+      const base = new Date(iso + 'T12:00').getTime();
+      if (isNaN(base)) return null;
+      return new Date(base + n * 864e5).toISOString().slice(0, 10);
+    };
+    const fReeval = h.reeval_prevista || sumarSeguro(h.screening_fecha, vencScr);
     const restanScr = fReeval ? diasDesde(hoy, fReeval) : null;
     const abiertas = incidencias.filter(i => i.gym_client_id === id && ['abierta', 'seguimiento'].includes(i.estado || 'abierta'));
     return {

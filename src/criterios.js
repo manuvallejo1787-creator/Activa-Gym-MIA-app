@@ -216,16 +216,29 @@ export const generarCriteriosAvancePersonalizados=({
   // 2) Bandera clínica activa: siempre crítico, siempre primero
   if(banderaActiva)criticos.unshift({id:'bandera',texto:'Bandera clínica activa descartada / resuelta',origen:'bandera'});
 
-  // 3) Déficits detectados en la evaluación/IA — específicos de este cliente
-  deficienciasFuncionales.forEach((d,i)=>criticos.push({id:'deffunc_'+i,texto:`Resolver déficit funcional detectado: ${d}`,origen:'evaluacion'}));
-  deficienciasFuerza.forEach((d,i)=>criticos.push({id:'deffza_'+i,texto:`Resolver déficit de fuerza detectado: ${d}`,origen:'evaluacion'}));
+  // 3) Déficits del análisis de IA — YA NO VAN ACÁ.
+  //
+  // Antes se empujaban a `criticos`, o sea que bloqueaban el avance de fase.
+  // Dos problemas: (a) rompían la premisa de que el criterio de fase es igual
+  // para todos —cada cliente terminaba con una puerta distinta—, y (b) un
+  // párrafo de diagnóstico ("pierde la presión lumbar en dead bug") no tiene
+  // condición de cierre medible, así que no se tildaba nunca. Resultado real:
+  // 22 clientes con déficits inyectados, 3 tildes en total, 66 de 70
+  // checklists vacíos. La puerta no filtraba a nadie porque nadie la usaba.
+  //
+  // Ahora se devuelven aparte, como MATERIA PRIMA de metas individuales
+  // (gym_metas, origen='ia'): orientan el ciclo, no bloquean la fase.
+  const deficits=[
+    ...deficienciasFuncionales.map((d,i)=>({id:'deffunc_'+i,texto:d,tipo:'funcional'})),
+    ...deficienciasFuerza.map((d,i)=>({id:'deffza_'+i,texto:d,tipo:'fuerza'})),
+  ];
 
   // 4) Señales derivadas del objetivo declarado — contextuales, no bloquean
   const extrasObjetivo=generarCriteriosPersonalizados(objetivo,fase,eva_inicial,rom_inicial_pct)
     .filter(txt=>!criteriosBase.some(c=>c.texto===txt)); // no duplicar lo que ya está en la base
   extrasObjetivo.forEach((txt,i)=>secundarios.push({id:'obj_'+i,texto:txt,origen:'objetivo'}));
 
-  return{criticos,secundarios};
+  return{criticos,secundarios,deficits};
 };
 // Dado un set de métricas, determina cuántos criterios se cumplen
 export const checkCriteriosAvance=(fase, metricas={})=>{
