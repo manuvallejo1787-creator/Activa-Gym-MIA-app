@@ -4384,7 +4384,7 @@ export default function App(){
                   })}
                 </div>
               )}
-              <PanelMetas clienteId={c.id} cliente={c} exercises={exercises}
+              <PanelMetas clienteId={c.id} cliente={c} exercises={exs}
                 criterios={criteriosAvanceTemplate[c.nivel]||[]} s={s}/>
               <PanelPercepcion clienteId={c.id}/>
               {avanceAbierto===c.id&&(
