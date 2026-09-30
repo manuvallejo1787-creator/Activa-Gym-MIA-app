@@ -135,6 +135,80 @@ export default async function handler(req, res) {
         } catch {}
       }
 
+      // ── METAS MEDIBLES ──
+      // El valor de HOY no se guarda: se calcula en cada lectura a partir de
+      // las dos fuentes reales, la del cliente y la del profesional. Guardarlo
+      // obligaría a recalcularlo en cada carga del portal y en cada test, y
+      // cualquier olvido dejaría la barra mintiendo.
+      let metas = [];
+      try {
+        // Solo metas APROBADAS. Una propuesta de la IA sin revisar puede tener
+        // un objetivo mal calibrado; mostrársela al cliente antes de que el
+        // profesional la valide es peor que no mostrarle nada.
+        const rows = await sb(`gym_metas?gym_client_id=eq.${cli.id}&estado=in.(activa,lograda)&select=*&order=principal.desc,created_at.asc`) || [];
+        if (rows.length) {
+          // Mejor carga del cliente por ejercicio (portal). Contempla las dos
+          // formas de registro: peso único de la fila y detalle por serie.
+          const mejorPorEjercicio = {};
+          (logs || []).forEach(l => {
+            if (!l.ejercicio_id) return;
+            const cand = [];
+            if (l.peso_real != null) cand.push(parseFloat(l.peso_real));
+            if (Array.isArray(l.series_detalle)) l.series_detalle.forEach(x => cand.push(parseFloat(x && x.peso)));
+            cand.forEach(v => {
+              if (isNaN(v)) return;
+              if (mejorPorEjercicio[l.ejercicio_id] == null || v > mejorPorEjercicio[l.ejercicio_id])
+                mejorPorEjercicio[l.ejercicio_id] = v;
+            });
+          });
+
+          // Tests de fuerza cargados por el profesional.
+          let tests = [];
+          try {
+            tests = await sb(`fuerza_tests?gym_client_id=eq.${cli.id}&select=test_id,fecha,peso_levantado,rm1_calculado,rm1_real&order=fecha.asc`) || [];
+          } catch {}
+          const mejorTest = {}, primerTest = {};
+          tests.forEach(t => {
+            const v = parseFloat(t.rm1_real != null ? t.rm1_real : (t.rm1_calculado != null ? t.rm1_calculado : t.peso_levantado));
+            if (isNaN(v) || !t.test_id) return;
+            if (primerTest[t.test_id] == null) primerTest[t.test_id] = v;
+            if (mejorTest[t.test_id] == null || v > mejorTest[t.test_id]) mejorTest[t.test_id] = v;
+          });
+
+          metas = rows.map(m => {
+            let actual = null, fuente = null;
+            if (m.tipo === 'carga' && m.ejercicio_id) {
+              const delPortal = mejorPorEjercicio[m.ejercicio_id];
+              const delTest = m.test_id ? mejorTest[m.test_id] : null;
+              if (delPortal != null && (delTest == null || delPortal >= delTest)) { actual = delPortal; fuente = 'portal'; }
+              else if (delTest != null) { actual = delTest; fuente = 'test'; }
+            } else if (m.tipo === 'test' && m.test_id) {
+              if (mejorTest[m.test_id] != null) { actual = mejorTest[m.test_id]; fuente = 'test'; }
+            } else if (m.tipo === 'manual') {
+              if (m.valor_manual != null) { actual = parseFloat(m.valor_manual); fuente = 'evaluacion'; }
+            }
+            // Sin punto de arranque explícito se usa el primer test registrado;
+            // si tampoco hay, el valor de hoy (progreso 0, no una barra falsa).
+            let inicial = m.valor_inicial != null ? parseFloat(m.valor_inicial)
+              : (m.test_id && primerTest[m.test_id] != null ? primerTest[m.test_id] : actual);
+            const obj = parseFloat(m.valor_objetivo);
+            let pct = null;
+            if (actual != null && inicial != null && !isNaN(obj)) {
+              const span = obj - inicial;
+              pct = span === 0 ? (actual >= obj ? 100 : 0)
+                : Math.max(0, Math.min(100, Math.round(((actual - inicial) / span) * 100)));
+            }
+            const lograda = actual != null && !isNaN(obj) &&
+              (m.direccion === 'bajar' ? actual <= obj : actual >= obj);
+            return { id: m.id, titulo: m.titulo, tipo: m.tipo, unidad: m.unidad || 'kg',
+              ejercicioId: m.ejercicio_id, criterioId: m.criterio_id, principal: !!m.principal,
+              inicial, actual, objetivo: isNaN(obj) ? null : obj, pct, fuente, lograda,
+              origen: m.origen || 'cliente',
+              direccion: m.direccion || 'subir', fechaObjetivo: m.fecha_objetivo };
+          });
+        }
+      } catch {}
+
       // Feedback de sesión (RPE) del cliente — alimenta el portal y, del otro
       // lado, el motor y la IA cuando se arma el plan siguiente.
       let feedback = [];
@@ -147,7 +221,7 @@ export default async function handler(req, res) {
         cliente: { nombre: cli.nombre, apellido: cli.apellido, nivel: cli.nivel, objetivo: cli.objetivo,
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
-        criterios, brand, plan, logs: logs || [], nombres, media, clinico,
+        criterios, metas, brand, plan, logs: logs || [], nombres, media, clinico,
       });
     }
 
