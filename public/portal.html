@@ -93,6 +93,19 @@
   .hero .big{font-size:32px;font-weight:900;color:#4ADE80;line-height:1}
   .hero .cap{font-size:10px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
   .hero .sub2{font-size:11px;color:#bbb;margin-top:7px}
+  /* ── META PRINCIPAL EN EL ENCABEZADO ──────────────────────────────── */
+  .meta-obj{font-size:15px;font-weight:800;color:#fff;line-height:1.25}
+  .meta-cap{font-size:9px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
+  .meta-bar{height:9px;background:#2a2a2a;border-radius:99px;overflow:hidden;margin:9px 0 5px}
+  .meta-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#16A34A,#4ADE80);transition:width .5s}
+  .meta-fill.logr{background:linear-gradient(90deg,#CA8A04,#FBBF24)}
+  .meta-ends{display:flex;justify-content:space-between;font-size:10px;color:#9CA3AF}
+  .meta-ends b{color:#4ADE80}
+  .meta-pct{font-size:26px;font-weight:900;color:#4ADE80;line-height:1}
+  .meta-kg{font-size:11px;color:#9CA3AF;margin-top:6px}
+  .meta-fte{font-size:9px;color:#6B7280;margin-top:4px}
+  .meta-mini{margin:7px 0 0}
+  .meta-mini .meta-bar{height:6px;margin:5px 0 3px}
   .racha{display:inline-flex;align-items:center;gap:5px;background:#2a2005;color:#FBBF24;border-radius:99px;padding:3px 11px;font-size:11px;font-weight:800;margin-top:8px}
 
   /* ── SERIES ───────────────────────────────────────────────────────── */
@@ -291,12 +304,31 @@ function renderDashboard(){
         mejorProg = {pr, nombre:(DATA.nombres&&DATA.nombres[be.exId])||be.exId};
     })));
   }
-  const heroHtml = kg>0 ? `<div class="hero">
+  // El encabezado lo encabeza el OBJETIVO, no el volumen. El volumen mide
+  // cuánto trabajó; el objetivo mide si está llegando, que es lo que el
+  // cliente vino a saber. Si no hay meta cargada, se cae al volumen de antes.
+  // El encabezado muestra el objetivo DEL CLIENTE, no una meta derivada del
+  // análisis. Son cosas distintas: una es a dónde quiere llegar él, la otra es
+  // qué déficit estamos corrigiendo para que pueda llegar.
+  const delCliente = (DATA.metas||[]).filter(m=>(m.origen||'cliente')==='cliente');
+  const metaPpal = delCliente.find(m=>m.principal) || delCliente[0] || null;
+  const heroHtml = metaPpal ? `<div class="hero" style="text-align:left">
+    <div class="meta-cap">Tu objetivo</div>
+    <div class="meta-obj">${esc(metaPpal.titulo)}</div>
+    ${barraMeta(metaPpal)}
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px">
+      <div>
+        ${kg>0?`<div class="meta-kg">${kg.toLocaleString('es-UY')} kg levantados en total</div>`:''}
+        ${mejorProg?`<div class="meta-kg">Tu mayor salto: <strong style="color:#4ADE80">${esc(mejorProg.nombre)} +${mejorProg.pr.delta} kg</strong></div>`:''}
+      </div>
+      ${racha>1?`<div class="racha" style="margin:0">🔥 ${racha} semanas</div>`:''}
+    </div>
+  </div>` : (kg>0 ? `<div class="hero">
     <div class="big">${kg.toLocaleString('es-UY')}</div>
     <div class="cap">kg totales levantados</div>
     ${mejorProg?`<div class="sub2">Tu mayor salto: <strong style="color:#4ADE80">${esc(mejorProg.nombre)} +${mejorProg.pr.delta} kg</strong></div>`:''}
     ${racha>1?`<div class="racha">🔥 ${racha} semanas seguidas</div>`:''}
-  </div>` : '';
+  </div>` : '');
   const primerDiaSemana = new Date(hoy.getFullYear(), hoy.getMonth(), 1).getDay();
   const diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 0).getDate();
   const estadoDias = diasEntrenadosMesConEstado();
@@ -351,14 +383,32 @@ function renderDashboard(){
     html += `</div>`;
   }
 
+  const otrasCliente = delCliente.filter(m=>m!==metaPpal);
+  if(otrasCliente.length){
+    html += `<div class="card"><h3>🎯 Tus otros objetivos</h3>`;
+    otrasCliente.forEach(m=>{ html += `<div class="meta-mini"><div class="meta-obj" style="font-size:12px">${esc(m.titulo)}</div>${barraMeta(m,true)}</div>`; });
+    html += `</div>`;
+  }
+  const deIA = (DATA.metas||[]).filter(m=>m.origen==='ia');
+  if(deIA.length){
+    html += `<div class="card"><h3>🔧 En qué estamos trabajando</h3>`+
+      `<div style="font-size:10px;color:#777;margin-bottom:8px">Puntos que salieron de tu evaluación. Son el camino hacia tu objetivo, no requisitos de fase.</div>`;
+    deIA.forEach(m=>{ html += `<div class="meta-mini"><div class="meta-obj" style="font-size:12px">${esc(m.titulo)}</div>${barraMeta(m,true)}</div>`; });
+    html += `</div>`;
+  }
+
   if(DATA.criterios && DATA.criterios.length){
     const estado = DATA.cliente.criteriosEstado||{};
     html += `<div class="card"><h3>🎯 Requisitos para tu próxima fase</h3>`;
     DATA.criterios.forEach(c=>{
-      const on = !!estado[c.id];
+      // Un criterio con meta atada se marca solo cuando el número llega:
+      // el tilde del entrenador deja de ser la única forma de cumplirlo.
+      const meta = (DATA.metas||[]).find(m=>m.criterioId===c.id);
+      const on = !!estado[c.id] || (meta && meta.lograda);
       html += `<div class="crit ${on?'done':''}"><span class="chk ${on?'on':'off'}">${on?'✓':''}</span><span class="txt">${esc(c.texto)}</span></div>`;
+      if(meta) html += `<div class="meta-mini">${barraMeta(meta,true)}</div>`;
     });
-    html += `<div style="font-size:10px;color:#777;margin-top:8px">Esto lo marca tu entrenador cuando lo evalúa — no se edita desde acá.</div></div>`;
+    html += `<div style="font-size:10px;color:#777;margin-top:8px">Lo que no tiene barra lo marca tu entrenador cuando lo evalúa. Lo que tiene barra se actualiza solo con lo que cargás.</div></div>`;
   }
 
   return heroHtml + html;
@@ -461,10 +511,10 @@ function render(){
       }
       html += `<div class="ex">`+
         `<div class="exhead" onclick="toggleEx('${uid}')">`+
-          `<div class="exhead-l">${thumb}<span class="arrow" id="arr_${uid}">▸</span><span class="nm">${gtag}${esc(nombre)}</span></div>`+
+          `<div class="exhead-l">${thumb}<span class="arrow" id="arr_${uid}">${EX_ABIERTOS[uid]?'▾':'▸'}</span><span class="nm">${gtag}${esc(nombre)}</span></div>`+
           `<div class="exhead-r">${estado}</div>`+
         `</div>`+
-        `<div class="exbody" id="body_${uid}" style="display:none;">${body}</div>`+
+        `<div class="exbody" id="body_${uid}" style="display:${EX_ABIERTOS[uid]?'block':'none'};">${body}</div>`+
       `</div>`;
     });
   });
@@ -515,6 +565,24 @@ function barraProgreso(pr,nombre){
     </div>
     <div class="ends"><span>arranque <b>${pr.inicio} kg</b></span><span>hoy <b>${pr.actual} kg</b></span></div>
   </div>`;
+}
+
+// Barra de una meta. Si todavía no hay ningún valor medido se dice
+// explícitamente en vez de dibujar una barra en cero, que se lee como
+// "no avanzaste nada" cuando en realidad es "todavía no se midió".
+function barraMeta(m, mini){
+  if(!m) return '';
+  const u = m.unidad||'kg';
+  if(m.actual==null || m.pct==null)
+    return `<div class="meta-fte">Todavía sin medición — se actualiza sola cuando cargues este ejercicio o cuando tu entrenador te evalúe.</div>`;
+  const fte = m.fuente==='portal' ? 'según lo que cargaste vos'
+            : m.fuente==='test'   ? 'según tu último test de fuerza'
+            : m.fuente==='evaluacion' ? 'según tu última evaluación' : '';
+  return `<div class="meta-bar"><div class="meta-fill ${m.lograda?'logr':''}" style="width:${m.pct}%"></div></div>`+
+    `<div class="meta-ends"><span>arranque <b>${m.inicial??'—'} ${u}</b></span>`+
+    `<span>${m.lograda?'🏆 logrado':m.pct+'%'}</span>`+
+    `<span>meta <b>${m.objetivo} ${u}</b></span></div>`+
+    (mini?'':`<div class="meta-fte">Hoy: <strong style="color:#4ADE80">${m.actual} ${u}</strong>${fte?' · '+fte:''}</div>`);
 }
 
 // Racha: semanas consecutivas (hacia atrás) con al menos una carga.
@@ -624,6 +692,8 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
 // ═══════════════════════════════════════════════════════════════════════
 const SERIES_ABIERTAS = {};
 window.toggleSeries=(k)=>{SERIES_ABIERTAS[k]=!SERIES_ABIERTAS[k];render();};
+// Qué ejercicios dejó abiertos el cliente. Sobrevive a cada render().
+const EX_ABIERTOS={};
 
 function nSeries(p){
   const n=parseInt(p&&p.series);
@@ -663,12 +733,16 @@ window.addEventListener('beforeunload', e => {
   if(Object.values(PENDIENTES).some(n=>n>0)){ e.preventDefault(); e.returnValue=''; }
 });
 
+// EL BUG: toggleEx abría el ejercicio tocando el DOM directo, sin guardar
+// nada. Apretar "series distintas" llama a render(), que reconstruye la lista
+// entera desde cero con display:none — el ejercicio se cerraba y había que
+// volver a buscarlo. Ahora qué está abierto vive en EX_ABIERTOS y render()
+// lo respeta, así que cualquier redibujo deja todo donde estaba.
 window.toggleEx = (uid) => {
+  EX_ABIERTOS[uid] = !EX_ABIERTOS[uid];
   const b = document.getElementById('body_'+uid), a = document.getElementById('arr_'+uid);
-  if(!b) return;
-  const willOpen = (b.style.display === 'none');
-  b.style.display = willOpen ? 'block' : 'none';
-  if(a) a.textContent = willOpen ? '▾' : '▸';
+  if(b) b.style.display = EX_ABIERTOS[uid] ? 'block' : 'none';
+  if(a) a.textContent = EX_ABIERTOS[uid] ? '▾' : '▸';
 };
 
 // ═══════════════════════════════════════════════════════════════════════
