@@ -140,7 +140,10 @@ export default async function handler(req, res) {
       // las dos fuentes reales, la del cliente y la del profesional. Guardarlo
       // obligaría a recalcularlo en cada carga del portal y en cada test, y
       // cualquier olvido dejaría la barra mintiendo.
-      let metas = [];
+      let metas = [], medidas = [];
+      try {
+        medidas = await sb(`gym_medidas?gym_client_id=eq.${cli.id}&select=id,fecha,fuente,peso,pct_grasa,nota&order=fecha.asc`) || [];
+      } catch {}
       try {
         // Solo metas APROBADAS. Una propuesta de la IA sin revisar puede tener
         // un objetivo mal calibrado; mostrársela al cliente antes de que el
@@ -161,6 +164,27 @@ export default async function handler(req, res) {
                 mejorPorEjercicio[l.ejercicio_id] = v;
             });
           });
+
+          // ── MEDICIONES CORPORALES ──
+          // Para una meta de recomposición el valor de hoy sale de la serie de
+          // gym_medidas, no del screening: el screening es un solo punto.
+          // Prioridad: la última medición del PROFESIONAL. La del cliente se
+          // usa solo si es posterior, y se marca como tal, porque báscula de
+          // casa y medición en ayunas con el mismo equipo no son comparables.
+          const comp = (m) => {
+            const p = m && m.peso != null ? parseFloat(m.peso) : null;
+            const g = m && m.pct_grasa != null ? parseFloat(m.pct_grasa) : null;
+            if (p == null || isNaN(p)) return null;
+            if (g == null || isNaN(g)) return { peso: p, grasa: null, magra: null, fino: false };
+            return { peso: p, grasa: Math.round(p * g / 100 * 10) / 10,
+                     magra: Math.round(p * (100 - g) / 100 * 10) / 10, fino: true };
+          };
+          const primeraMed = medidas[0] || null;
+          const ultProf = [...medidas].reverse().find(m => m.fuente === 'profesional') || null;
+          const ultCual = medidas[medidas.length - 1] || null;
+          // Si la del cliente es más reciente que la tuya, se usa esa pero se
+          // avisa en el portal de dónde salió.
+          const ultMed = (ultProf && ultCual && ultCual.fecha > ultProf.fecha) ? ultCual : (ultProf || ultCual);
 
           // Tests de fuerza cargados por el profesional.
           let tests = [];
@@ -184,6 +208,21 @@ export default async function handler(req, res) {
               else if (delTest != null) { actual = delTest; fuente = 'test'; }
             } else if (m.tipo === 'test' && m.test_id) {
               if (mejorTest[m.test_id] != null) { actual = mejorTest[m.test_id]; fuente = 'test'; }
+            } else if (m.tipo === 'recomposicion') {
+              // subtipo: masa_grasa | masa_magra | peso.
+              // 'peso' es el respaldo para quien no tiene % de grasa medido:
+              // menos fino, pero preferible a no mostrar nada.
+              const ini = comp(primeraMed), act = comp(ultMed);
+              const leer = (c) => !c ? null
+                : m.subtipo === 'masa_grasa' ? c.grasa
+                : m.subtipo === 'masa_magra' ? c.magra
+                : c.peso;
+              actual = leer(act);
+              if (actual == null && act) { actual = act.peso; }   // cae al peso
+              if (m.valor_inicial == null && ini) {
+                const vi = leer(ini); m = { ...m, valor_inicial: vi != null ? vi : ini.peso };
+              }
+              fuente = ultMed ? (ultMed.fuente === 'cliente' ? 'portal' : 'evaluacion') : null;
             } else if (m.tipo === 'manual') {
               if (m.valor_manual != null) { actual = parseFloat(m.valor_manual); fuente = 'evaluacion'; }
             }
@@ -203,7 +242,9 @@ export default async function handler(req, res) {
             return { id: m.id, titulo: m.titulo, tipo: m.tipo, unidad: m.unidad || 'kg',
               ejercicioId: m.ejercicio_id, criterioId: m.criterio_id, principal: !!m.principal,
               inicial, actual, objetivo: isNaN(obj) ? null : obj, pct, fuente, lograda,
-              origen: m.origen || 'cliente',
+              origen: m.origen || 'cliente', subtipo: m.subtipo || null,
+              fino: m.tipo === 'recomposicion' ? !!(comp(ultMed) || {}).fino : null,
+              medFecha: ultMed ? ultMed.fecha : null,
               direccion: m.direccion || 'subir', fechaObjetivo: m.fecha_objetivo };
           });
         }
@@ -221,7 +262,7 @@ export default async function handler(req, res) {
         cliente: { nombre: cli.nombre, apellido: cli.apellido, nivel: cli.nivel, objetivo: cli.objetivo,
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
-        criterios, metas, brand, plan, logs: logs || [], nombres, media, clinico,
+        criterios, metas, medidas, brand, plan, logs: logs || [], nombres, media, clinico,
       });
     }
 
@@ -230,6 +271,39 @@ export default async function handler(req, res) {
       const b = req.body || {};
       const cli = await clienteDeToken(b.token);
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
+
+      // ── MEDICIÓN CORPORAL CARGADA POR EL CLIENTE ──────────────────────
+      // Siempre fuente 'cliente': nunca pisa una medición del profesional.
+      // El índice único por (cliente, fecha, fuente) hace que recargar el día
+      // actualice en vez de duplicar.
+      if (b.accion === "medicion") {
+        const num = (v, min, max) => {
+          const x = parseFloat(String(v ?? '').replace(',', '.'));
+          if (isNaN(x)) return null;
+          return (x < min || x > max) ? null : Math.round(x * 10) / 10;
+        };
+        const peso = num(b.peso, 25, 250);
+        const pct  = num(b.pct_grasa, 3, 65);
+        if (peso == null && pct == null)
+          return res.status(400).json({ error: "Poné al menos un peso válido" });
+        const hoy = new Date().toISOString().slice(0, 10);
+        const fila = {
+          id: `med_cli_${cli.id}_${hoy}`,
+          gym_client_id: cli.id, fecha: hoy, fuente: "cliente",
+          peso, pct_grasa: pct,
+          nota: (b.nota || "").slice(0, 300) || null,
+        };
+        try {
+          await sb(`gym_medidas?on_conflict=gym_client_id,fecha,fuente`, {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify(fila),
+          });
+        } catch (e) {
+          return res.status(500).json({ error: e.message });
+        }
+        return res.status(200).json({ ok: true });
+      }
 
       // ── RPE de la sesión ──────────────────────────────────────────────
       // Una fila por (cliente, día, semana): el índice único hace que se
