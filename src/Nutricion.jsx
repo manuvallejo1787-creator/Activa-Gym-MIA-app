@@ -89,6 +89,21 @@ const ResumenDia = ({ totales, objetivoNut }) => {
   );
 };
 
+
+
+
+  // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
+
+
+  // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
+
+
+// ─── Componentes izados ─────────────────────────────────────────────────────
+// Estaban dentro del componente principal: React los desmontaba en cada render
+// del padre y borraba lo que el usuario estuviera tipeando. El mismo defecto
+// que hizo perder un test de fuerza completo en la pestaña Fuerza.
+// ─────────────────────────────────────────────────────────────────────────────
+
   const VistaAlimentosComp = ({todosAlimentos, onNuevoAlimento, onEliminar}) => {
     const [search, setSearch] = useState('');
     const [cat, setCat] = useState('all');
@@ -325,8 +340,6 @@ const ResumenDia = ({ totales, objetivoNut }) => {
     );
   };
 
-  // ─── FORMULARIO NUEVO PLAN ────────────────────────────────────────────────
-
   const NuevoAlimentoFormComp = ({onClose, onSave}) => {
     const [form, setF] = useState({ nombre:'', categoria:'proteina_animal', porcion_ref:100, proteinas:0, carbos:0, grasas:0, fibra:0, calorias:0, micro1_nombre:'', micro1_valor:'', micro1_unidad:'mg', micro2_nombre:'', micro2_valor:'', micro2_unidad:'mg', tiene_unidad:false, nombre_unidad:'', gramos_por_unidad:'' });
     const set = (k,v) => setF(f=>({...f,[k]:v}));
@@ -401,9 +414,6 @@ const ResumenDia = ({ totales, objetivoNut }) => {
       </div>
     );
   };
-
-  // ─── PICKER DE ALIMENTOS ──────────────────────────────────────────────────
-
 export default function Nutricion({ clients, brand, reglas = [] }) {
   // ── Estado principal ──────────────────────────────────────────────────────
   const [view, setView]     = useState('planes');    // planes | plan | alimentos | nuevo_cliente

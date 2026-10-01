@@ -185,7 +185,10 @@ export function resolverTransferencia(nombre) {
 
 export function estimacionConservadora(testId, pesoCorporal, sexo) {
   const r = RATIO_CONSERVADOR[testId];
-  const pc = parseFloat(pesoCorporal);
+  // El peso corporal viene del screening, donde se guarda como texto. Si
+  // alguna vez entra con coma decimal, parseFloat lo truncaría en silencio
+  // (90,5 -> 90) y arrastraría el error a todo el peso sugerido.
+  const pc = parseFloat(String(pesoCorporal ?? '').replace(',', '.'));
   if (!r || isNaN(pc) || pc <= 0) return null;
   return pc * (/^f/i.test(sexo || '') ? r.f : r.m);
 }
