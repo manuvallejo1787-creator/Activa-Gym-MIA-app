@@ -93,6 +93,19 @@
   .hero .big{font-size:32px;font-weight:900;color:#4ADE80;line-height:1}
   .hero .cap{font-size:10px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
   .hero .sub2{font-size:11px;color:#bbb;margin-top:7px}
+  /* ── MEDICIONES CORPORALES ────────────────────────────────────────── */
+  .med-card{background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:14px;margin:10px 0}
+  .med-row{display:flex;gap:8px;margin:8px 0}
+  .med-row input{flex:1;background:#1c1c1c;border:1px solid #333;border-radius:7px;color:#fff;padding:9px 10px;font-size:14px}
+  .med-btn{width:100%;background:#16A34A;color:#fff;border:none;border-radius:7px;padding:11px;font-size:14px;font-weight:700;margin-top:6px}
+  .med-btn:disabled{background:#333;color:#777}
+  .med-hist{margin-top:10px;border-top:1px solid #262626;padding-top:8px}
+  .med-it{display:flex;justify-content:space-between;font-size:11px;color:#9CA3AF;padding:3px 0}
+  .med-it b{color:#E5E7EB}
+  .med-fte{font-size:9px;padding:1px 5px;border-radius:4px;background:#1f2937;color:#9CA3AF}
+  .med-fte.pro{background:#064E3B;color:#6EE7B7}
+  .med-nota{font-size:10px;color:#6B7280;margin-top:8px;line-height:1.4}
+
   /* ── META PRINCIPAL EN EL ENCABEZADO ──────────────────────────────── */
   .meta-obj{font-size:15px;font-weight:800;color:#fff;line-height:1.25}
   .meta-cap{font-size:9px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
@@ -411,8 +424,64 @@ function renderDashboard(){
     html += `<div style="font-size:10px;color:#777;margin-top:8px">Lo que no tiene barra lo marca tu entrenador cuando lo evalúa. Lo que tiene barra se actualiza solo con lo que cargás.</div></div>`;
   }
 
+  html += bloqueMediciones();
   return heroHtml + html;
 }
+
+// Pantalla de mediciones corporales.
+// Cadencia semanal a propósito: el peso oscila 1-2 kg por hidratación, sal y
+// tránsito. Pedirlo a diario muestra ruido y no señal, y transforma una
+// herramienta de seguimiento en una báscula de ansiedad. Se muestra la
+// tendencia, nunca una cuenta regresiva hacia un peso objetivo.
+function bloqueMediciones(){
+  const meds = DATA.medidas || [];
+  const mias = meds.filter(m=>m.fuente==='cliente');
+  const ultMia = mias[mias.length-1];
+  const hoy = new Date().toISOString().slice(0,10);
+  const yaHoy = ultMia && ultMia.fecha === hoy;
+  // Días desde la última carga propia
+  const dias = ultMia ? Math.round((new Date(hoy)-new Date(ultMia.fecha))/86400000) : null;
+  const puedeCargar = dias===null || dias>=7 || yaHoy;
+
+  let h = `<div class="med-card"><h3 style="margin:0 0 4px">⚖️ Tus mediciones</h3>`;
+  if(!puedeCargar){
+    h += `<div class="med-nota">Cargaste hace ${dias} día${dias===1?'':'s'}. El peso cambia 1 a 2 kg por hidratación y comida, así que una medición semanal muestra tu tendencia real en vez de ruido. Podés volver a cargar en ${7-dias} día${7-dias===1?'':'s'}.</div>`;
+  } else {
+    h += `<div class="med-row">`+
+      `<input id="med_peso" inputmode="decimal" placeholder="Peso (kg)" value="${yaHoy&&ultMia.peso!=null?String(ultMia.peso).replace('.',','):''}">`+
+      `<input id="med_grasa" inputmode="decimal" placeholder="% grasa (opcional)" value="${yaHoy&&ultMia.pct_grasa!=null?String(ultMia.pct_grasa).replace('.',','):''}">`+
+      `</div>`+
+      `<input id="med_nota" placeholder="Nota (opcional)" style="width:100%;background:#1c1c1c;border:1px solid #333;border-radius:7px;color:#fff;padding:9px 10px;font-size:13px" value="${yaHoy?esc(ultMia.nota||''):''}">`+
+      `<button class="med-btn" id="med_btn" onclick="guardarMedicion()">${yaHoy?'Actualizar la de hoy':'Guardar medición'}</button>`+
+      `<div class="med-nota">Pesate siempre en las mismas condiciones: a la misma hora, con la misma ropa, antes de desayunar. Si no, lo que vas a ver son los cambios de la balanza, no los tuyos.</div>`;
+  }
+  if(meds.length){
+    h += `<div class="med-hist">`;
+    meds.slice(-8).reverse().forEach(m=>{
+      const partes=[];
+      if(m.peso!=null) partes.push(String(m.peso).replace('.',',')+' kg');
+      if(m.pct_grasa!=null) partes.push(String(m.pct_grasa).replace('.',',')+'% grasa');
+      h += `<div class="med-it"><span>${m.fecha}</span><span><b>${partes.join(' · ')||'—'}</b> <span class="med-fte ${m.fuente==='profesional'?'pro':''}">${m.fuente==='profesional'?'medición del centro':'tuya'}</span></span></div>`;
+    });
+    h += `</div>`;
+  }
+  return h+`</div>`;
+}
+
+window.guardarMedicion = async () => {
+  const b=$('med_btn'); if(b){b.disabled=true;b.textContent='Guardando…';}
+  try{
+    const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:TOKEN,accion:'medicion',
+        peso:$('med_peso').value, pct_grasa:$('med_grasa').value, nota:$('med_nota').value})});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||'No se pudo guardar');
+    await cargar();
+  }catch(e){
+    alert('No se pudo guardar: '+e.message);
+    if(b){b.disabled=false;b.textContent='Guardar medición';}
+  }
+};
 
 function esYoutube(url){ return url && (url.includes('youtube')||url.includes('youtu.be')); }
 function getYTEmbed(url){
@@ -577,12 +646,16 @@ function barraMeta(m, mini){
     return `<div class="meta-fte">Todavía sin medición — se actualiza sola cuando cargues este ejercicio o cuando tu entrenador te evalúe.</div>`;
   const fte = m.fuente==='portal' ? 'según lo que cargaste vos'
             : m.fuente==='test'   ? 'según tu último test de fuerza'
-            : m.fuente==='evaluacion' ? 'según tu última evaluación' : '';
+            : m.fuente==='evaluacion' ? 'según tu última medición en el centro' : '';
+  // Cuando no hay % de grasa cargado la meta cae al peso: se avisa, porque el
+  // peso solo no distingue grasa perdida de músculo ganado.
+  const grueso = m.tipo==='recomposicion' && m.fino===false
+    ? ' · medido por peso total, sin composición corporal' : '';
   return `<div class="meta-bar"><div class="meta-fill ${m.lograda?'logr':''}" style="width:${m.pct}%"></div></div>`+
-    `<div class="meta-ends"><span>arranque <b>${m.inicial??'—'} ${u}</b></span>`+
+    `<div class="meta-ends"><span>arranque <b>${m.inicial!=null?String(m.inicial).replace('.',','):'—'} ${u}</b></span>`+
     `<span>${m.lograda?'🏆 logrado':m.pct+'%'}</span>`+
-    `<span>meta <b>${m.objetivo} ${u}</b></span></div>`+
-    (mini?'':`<div class="meta-fte">Hoy: <strong style="color:#4ADE80">${m.actual} ${u}</strong>${fte?' · '+fte:''}</div>`);
+    `<span>meta <b>${String(m.objetivo).replace('.',',')} ${u}</b></span></div>`+
+    (mini?'':`<div class="meta-fte">Hoy: <strong style="color:#4ADE80">${String(m.actual).replace('.',',')} ${u}</strong>${fte?' · '+fte:''}${grueso}</div>`);
 }
 
 // Racha: semanas consecutivas (hacia atrás) con al menos una carga.
