@@ -1501,366 +1501,13 @@ const EditorCriteriosFase=({fase,criteriosAvanceTemplate,saveCriteriosFase,s})=>
     );
   };
 
-  const FuerzaTab=({brand,clients,s,saveClientFn})=>{
-    const [selClientId,setSelClientId]=useState('');
-    const pac=clients.find(x=>x.id===selClientId);
-    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
-    const [showForm,setShowForm]=useState(false);
-    const [editingTest,setEditingTest]=useState(null);
-    const [showPlan,setShowPlan]=useState(false);
-    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
-    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
-    const {customRows,saveCustom}=useCustomTests(selClientId||null);
-    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
-    const [showCustomEdit,setShowCustomEdit]=useState(false);
-    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
-    const migradoRef=useRef(new Set());
-    useEffect(()=>{
-      if(!selClientId||migradoRef.current.has(selClientId))return;
-      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
-      try{
-        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
-        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
-          migradoRef.current.add(selClientId);
-          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
-        }
-      }catch{}
-    },[selClientId,customRows,saveCustom]);
-
-    // Sync custom tests when client changes
-    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
-
-    return(
-      <div style={{padding:'12px 14px'}}>
-        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}} brand={brand} s={s}/>}
-        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)} brand={brand} clients={clients} s={s}/>}
-        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} brand={brand} s={s} onSave={(tests)=>{
-          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
-        }}/>}
-        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
-          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
-          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
-        </div>
-        {/* Selector de cliente */}
-        <div style={{...s.card,marginBottom:12}}>
-          <span style={s.lbl}>Seleccionar cliente</span>
-          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
-            <option value=''>— Seleccionar cliente —</option>
-            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
-          </select>
-        </div>
-        {pac&&(
-          <>
-            {/* Header del paciente */}
-            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
-                  <div style={{fontSize:11,color:G3,marginTop:2}}>
-                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
-                    {tests.length>0&&(()=>{
-                      const last=new Date(tests[0].fecha);
-                      const next=new Date(last);next.setMonth(next.getMonth()+4);
-                      const dias=Math.ceil((next-new Date())/86400000);
-                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
-                    })()}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
-                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
-                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
-                </div>
-              </div>
-            </div>
-            {/* Plan activo */}
-            {planes.filter(p=>p.activo).length>0&&(()=>{
-              const plan=planes.filter(p=>p.activo)[0];
-              const ps=PERIODIZACIONES[plan.sistema_id];
-              return(
-                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
-                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
-                  {ps&&(
-                    <>
-                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
-                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
-                        {ps.fases.map((f,i)=>(
-                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
-                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
-                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
-                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
-                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
-                    </>
-                  )}
-                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
-                </div>
-              );
-            })()}
-            {/* Grid resumen 1RM */}
-            <div style={{...s.card,marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
-                {allTests.map((tf,tfIdx)=>{
-                  const data=tests.filter(t=>t.test_id===tf.id);
-                  const last=data[0];
-                  const rm1=last?.rm1_real||last?.rm1_calculado;
-                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
-                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
-                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
-                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
-                  return(
-                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
-                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
-                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
-                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
-                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
-                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
-                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            {/* Historial */}
-            <div style={s.card}>
-              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
-              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
-              {tests.map(t=>{
-                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
-                const rm1=t.rm1_real||t.rm1_calculado;
-                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
-                return(
-                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
-                    <div>
-                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
-                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
-                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
-                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
-                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
-                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
-                      </div>
-                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
-                    </div>
-                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
-                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
-                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
-                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
-      </div>
-    );
-  };
 
 
-  const CustomTestsModal=({customTests,onSave,onClose,brand,s})=>{
-    const [local,setLocal]=useState(()=>[
-      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
-      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
-      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
-    ]);
-    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
-            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
-          </div>
-          {local.map((t,i)=>(
-            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
-              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
-              <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                <div><span style={s.lbl}>Nombre del ejercicio</span>
-                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Patrón de movimiento</span>
-                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
-                </div>
-                <div><span style={s.lbl}>Protocolo de evaluación</span>
-                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
-                </div>
-                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
-              </div>
-            </div>
-          ))}
-          <button onClick={()=>{
-            const validos=local.filter(t=>t.nombre.trim());
-            onSave(validos);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
-            💾 Guardar ejercicios personalizados
-          </button>
-        </div>
-      </div>
-    );
-  };
 
 
-  const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose,brand,clients,s})=>{
-    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
-      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const p=PERIODIZACIONES[form.sistema_id];
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div><span style={s.lbl}>Sistema de periodización</span>
-              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
-                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
-              </select>
-            </div>
-            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
-              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
-              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
-              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
-                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
-                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
-                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
-                </div>))}
-              </div>
-            </div>)}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
-            </div>
-            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
-          </div>
-          <button onClick={()=>{
-            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
-            savePlan(planFinal).catch(e=>console.error(e));
-            const cli=clients.find(x=>x.id===selClientId);
-            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
-            onClose();
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 Asignar plan
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   // ── CustomTestsModal — gestión de 3 ejercicios personalizados ─────────────
 
-  const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests,brand,s})=>{
-    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
-      fecha:new Date().toISOString().split('T')[0],
-      peso_corporal:pac?.screening?.peso||'',
-      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
-    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
-    const set=(k,v)=>setF(f=>({...f,[k]:v}));
-    const testsDisp=allTests||TESTS_FUERZA;
-    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
-    // Pull-ups: base = peso corporal
-    const esDom=form.test_id==='pull_ups';
-    const pesoLev=parseFloat(form.peso_levantado)||0;
-    const pesoCorp=parseFloat(form.peso_corporal)||0;
-    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
-    const formulaSel=form.formula||'epley_brzycki';
-    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
-    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
-    return(
-      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
-        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
-            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
-            <button onClick={onClose} style={s.btnG}>✕</button>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            <div>
-              <span style={s.lbl}>Ejercicio</span>
-              <select value={form.test_id} onChange={e=>{
-                const t=testsDisp.find(x=>x.id===e.target.value);
-                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
-              }} style={{...s.sel,width:'100%'}}>
-                <optgroup label="── Ejercicios estándar ──">
-                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>
-                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
-                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
-                </optgroup>}
-              </select>
-            </div>
-            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
-              <strong>📋 Protocolo:</strong> {ti.protocolo}
-              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
-            </div>}
-            {/* SELECTOR DE FÓRMULA */}
-            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
-              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
-              <select value={form.formula||'epley_brzycki'} onChange={e=>{
-                const nuevaF=e.target.value;
-                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
-                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
-              }} style={{...s.sel,width:'100%'}}>
-                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
-              </select>
-              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
-                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
-              </div>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
-              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
-              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
-                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
-                  {((form.formula||'epley_brzycki')==='lombardi'
-                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
-                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
-                </select>
-              </div>
-            </div>
-            {/* Preview 1RM */}
-            {rm1c&&(
-              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <div>
-                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
-                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
-                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
-                </div>
-                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
-                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
-                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
-                </div>}
-              </div>
-            )}
-            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
-              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
-              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
-            </div>
-          </div>
-          <button onClick={()=>{
-            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
-            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
-            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
-          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
-            💾 {editingTest?'Guardar cambios':'Guardar test'}
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   // ── PlanFormComp — asignar plan de periodización ──────────────────────────
 
@@ -3423,6 +3070,388 @@ function resolverPeriodizacion(texto){
   return porAlias?porAlias[0]:null;
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENTES IZADOS A NIVEL DE MÓDULO
+//
+// ESTO ERA LA CAUSA DE LA PÉRDIDA DE DATOS.
+//
+// Estaban definidos ADENTRO del componente principal. En React, un componente
+// declarado dentro de otro es una función NUEVA en cada render del padre, así
+// que React lo trata como un tipo distinto: desmonta el viejo y monta uno
+// nuevo. Todo su useState se reinicia.
+//
+// Consecuencia concreta en la pestaña Fuerza: la app tiene suscripciones en
+// tiempo real (clientes, planes, incidencias, pantalla Hoy). Cuando llegaba
+// cualquier evento —otro dispositivo guardando algo, el entrenador en sala— el
+// componente principal re-renderizaba, FuerzaTab se desmontaba, el cliente
+// seleccionado volvía a vacío y el formulario abierto desaparecía con todo lo
+// tipeado adentro. Sin error y sin aviso: el usuario cree que guardó.
+//
+// Caso real: el test de fuerza de Natalia Pais del 16/09/2026. Su screening
+// completo quedó guardado (se carga por otro camino) pero no existe ninguna
+// fila en fuerza_tests, ni huérfana ni asignada a otro cliente.
+//
+// Al estar acá afuera, la identidad de estas funciones es estable y su estado
+// sobrevive a cualquier render del padre.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FuerzaFormComp=({pac,editingTest,saveTest,onClose,allTests,brand,s})=>{
+    const emptyForm={id:genId('ft'),test_id:'squat',test_nombre:'',formula:'epley_brzycki',
+      fecha:new Date().toISOString().split('T')[0],
+      peso_corporal:pac?.screening?.peso||'',
+      peso_levantado:'',reps_realizadas:1,rm1_real:'',notas:'',evaluador:''};
+    const [form,setF]=useState(()=>editingTest?{...editingTest}:{...emptyForm});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const testsDisp=allTests||TESTS_FUERZA;
+    const ti=testsDisp.find(t=>t.id===form.test_id)||TESTS_FUERZA.find(t=>t.id===form.test_id);
+    // Pull-ups: base = peso corporal
+    const esDom=form.test_id==='pull_ups';
+    const pesoLev=parseFloat(form.peso_levantado)||0;
+    const pesoCorp=parseFloat(form.peso_corporal)||0;
+    const pesoCalculo=esDom&&pesoLev===0?pesoCorp:pesoLev+(esDom?pesoCorp:0);
+    const formulaSel=form.formula||'epley_brzycki';
+    const rm1c=pesoCalculo>0?calcular1RM(pesoCalculo,parseInt(form.reps_realizadas),formulaSel):null;
+    const niv=ti&&rm1c&&pesoCorp?nivelFuerza(ti,rm1c,pesoCorp):null;
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>{editingTest?'✏️ Editar test':'💪 Nuevo test de fuerza máxima'}</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div>
+              <span style={s.lbl}>Ejercicio</span>
+              <select value={form.test_id} onChange={e=>{
+                const t=testsDisp.find(x=>x.id===e.target.value);
+                setF(f=>({...f,test_id:e.target.value,test_nombre:t?.nombre||''}));
+              }} style={{...s.sel,width:'100%'}}>
+                <optgroup label="── Ejercicios estándar ──">
+                  {TESTS_FUERZA.map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>
+                {(allTests||[]).filter(t=>t.custom).length>0&&<optgroup label="── Ejercicios personalizados ──">
+                  {(allTests||[]).filter(t=>t.custom).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </optgroup>}
+              </select>
+            </div>
+            {ti&&<div style={{background:G1,borderRadius:6,padding:'8px 10px',fontSize:10,color:G4,lineHeight:1.6,border:`1px solid ${G2}`}}>
+              <strong>📋 Protocolo:</strong> {ti.protocolo}
+              {esDom&&<div style={{marginTop:3,color:'#1D4ED8'}}>💡 Sin lastre: dejá "peso levantado" en 0 y el 1RM se calcula sobre tu peso corporal.</div>}
+            </div>}
+            {/* SELECTOR DE FÓRMULA */}
+            <div style={{background:'#F5F3FF',borderRadius:6,padding:'8px 10px',border:'1px solid #C4B5FD'}}>
+              <span style={s.lbl}>🧮 Fórmula de estimación de 1RM</span>
+              <select value={form.formula||'epley_brzycki'} onChange={e=>{
+                const nuevaF=e.target.value;
+                const maxR=FORMULAS_1RM[nuevaF]?.maxReps||12;
+                setF(f=>({...f,formula:nuevaF,reps_realizadas:Math.min(parseInt(f.reps_realizadas)||1,maxR)}));
+              }} style={{...s.sel,width:'100%'}}>
+                {Object.entries(FORMULAS_1RM).map(([k,v])=><option key={k} value={k}>{v.label} — {v.sub}</option>)}
+              </select>
+              <div style={{fontSize:9,color:'#7C3AED',marginTop:3}}>
+                ✓ {FORMULAS_1RM[form.formula||'epley_brzycki']?.recomendado}
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha</span><DateInput value={form.fecha} onChange={v=>set('fecha',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Peso corporal (kg)</span><input type="number" value={form.peso_corporal} onChange={e=>set('peso_corporal',e.target.value)} style={s.inp} placeholder="kg"/></div>
+              <div><span style={s.lbl}>{esDom?'Lastre adicional (0 = sin lastre)':'Peso levantado (kg)'}</span><input type="number" value={form.peso_levantado} onChange={e=>set('peso_levantado',e.target.value)} style={s.inp} placeholder={esDom?'0 kg = solo peso corporal':'kg'}/></div>
+              <div><span style={s.lbl}>Repeticiones {(form.formula||'epley_brzycki')==='lombardi'&&<span style={{color:'#7C3AED',fontSize:8}}>(hasta 25)</span>}</span>
+                <select value={form.reps_realizadas} onChange={e=>set('reps_realizadas',parseInt(e.target.value))} style={{...s.sel,width:'100%'}}>
+                  {((form.formula||'epley_brzycki')==='lombardi'
+                    ?[1,2,3,4,5,6,8,10,12,15,18,20,22,25]
+                    :[1,2,3,4,5,6,7,8,10,12]).map(n=><option key={n} value={n}>{n} rep{n>1?'s':''}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Preview 1RM */}
+            {rm1c&&(
+              <div style={{background:niv?`${niv.color}15`:'#F0FDF4',border:`2px solid ${niv?.color||GN}`,borderRadius:8,padding:'12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:10,color:G4}}>1RM estimado ({FORMULAS_1RM[form.formula||'epley_brzycki']?.label})</div>
+                  <div style={{fontSize:30,fontWeight:800,color:niv?.color||GN,lineHeight:1}}>{rm1c}<span style={{fontSize:12,fontWeight:400}}> kg</span></div>
+                  {pesoCorp>0&&<div style={{fontSize:11,color:G4}}>{(rm1c/pesoCorp).toFixed(2)}× peso corporal</div>}
+                </div>
+                {niv&&<div style={{textAlign:'center',padding:'8px 14px',background:WH,borderRadius:7,border:`1px solid ${G2}`}}>
+                  <div style={{fontSize:18,fontWeight:800,color:niv.color}}>{niv.label}</div>
+                  {ti?.referencia&&<div style={{fontSize:9,color:G3}}>Ref H: {ti.referencia.masculino}× PC</div>}
+                </div>}
+              </div>
+            )}
+            <div><span style={s.lbl}>1RM real (solo si fue intento máximo)</span>
+              <input type="number" value={form.rm1_real||''} onChange={e=>set('rm1_real',e.target.value)} placeholder="Dejar vacío si fue test submáximo" style={s.inp}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Evaluador</span><input value={form.evaluador||''} onChange={e=>set('evaluador',e.target.value)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Observaciones..." style={s.inp}/></div>
+            </div>
+          </div>
+          <button onClick={()=>{
+            const t=testsDisp.find(x=>x.id===form.test_id)||{nombre:form.test_id};
+            const toSave={...form,test_nombre:t.nombre||form.test_id,rm1_calculado:rm1c||null,nivel_resultado:niv?.label||null,formula:formulaSel};
+            saveTest(toSave).then(()=>onClose()).catch(e=>alert('Error al guardar: '+e.message));
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 {editingTest?'Guardar cambios':'Guardar test'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+const PlanFormComp=({selClientId,savePlan,saveClientFn,onClose,brand,clients,s})=>{
+    const [form,setF]=useState({id:genId('pl'),sistema_id:'lineal',sistema_nombre:'',
+      fecha_inicio:new Date().toISOString().split('T')[0],objetivo:'',notas:'',activo:true});
+    const set=(k,v)=>setF(f=>({...f,[k]:v}));
+    const p=PERIODIZACIONES[form.sistema_id];
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:520,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>📅 Asignar Plan de Periodización</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div><span style={s.lbl}>Sistema de periodización</span>
+              <select value={form.sistema_id} onChange={e=>setF(f=>({...f,sistema_id:e.target.value,sistema_nombre:PERIODIZACIONES[e.target.value]?.nombre||''}))} style={{...s.sel,width:'100%'}}>
+                {Object.entries(PERIODIZACIONES).map(([k,v])=><option key={k} value={k}>{v.nombre} · {v.duracion}</option>)}
+              </select>
+            </div>
+            {p&&(<div style={{background:G1,borderRadius:7,padding:'10px 12px',fontSize:11,border:`1px solid ${G2}`}}>
+              <div style={{fontWeight:700,marginBottom:4,color:'#4C1D95'}}>{p.autor} · {p.duracion}</div>
+              <div style={{color:G4,marginBottom:5,lineHeight:1.5}}>{p.descripcion}</div>
+              <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(p.fases.length,4)},1fr)`,gap:4}}>
+                {p.fases.map((f,i)=>(<div key={i} style={{background:WH,borderRadius:5,padding:'5px 6px',border:`1px solid ${G2}`,fontSize:9}}>
+                  <div style={{fontWeight:700,color:'#7C3AED',marginBottom:1}}>{f.nombre}</div>
+                  <div style={{color:G4}}>{f.reps} rep · RIR {f.rir}</div>
+                </div>))}
+              </div>
+            </div>)}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <div><span style={s.lbl}>Fecha de inicio</span><DateInput value={form.fecha_inicio} onChange={v=>set('fecha_inicio',v)} style={s.inp}/></div>
+              <div><span style={s.lbl}>Objetivo del plan</span><input value={form.objetivo||''} onChange={e=>set('objetivo',e.target.value)} placeholder="Ej: +5kg sentadilla" style={s.inp}/></div>
+            </div>
+            <div><span style={s.lbl}>Notas</span><input value={form.notas||''} onChange={e=>set('notas',e.target.value)} placeholder="Consideraciones..." style={s.inp}/></div>
+          </div>
+          <button onClick={()=>{
+            const planFinal={...form,sistema_nombre:PERIODIZACIONES[form.sistema_id]?.nombre||form.sistema_id};
+            savePlan(planFinal).catch(e=>console.error(e));
+            const cli=clients.find(x=>x.id===selClientId);
+            if(cli)saveClientFn({...cli,periodizacion:form.sistema_id}).catch(console.error);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',marginTop:12,background:brand.colorPrimary}}>
+            💾 Asignar plan
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+const CustomTestsModal=({customTests,onSave,onClose,brand,s})=>{
+    const [local,setLocal]=useState(()=>[
+      customTests[0]||{id:'ct1',nombre:'',patron:'',protocolo:''},
+      customTests[1]||{id:'ct2',nombre:'',patron:'',protocolo:''},
+      customTests[2]||{id:'ct3',nombre:'',patron:'',protocolo:''},
+    ]);
+    const set=(i,k,v)=>setLocal(p=>p.map((t,j)=>j===i?{...t,[k]:v}:t));
+    return(
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.65)',zIndex:999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'20px 14px'}}>
+        <div style={{background:WH,borderRadius:10,padding:20,width:'100%',maxWidth:500,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontWeight:800,fontSize:14}}>🔧 Ejercicios personalizados (máx. 3)</div>
+            <button onClick={onClose} style={s.btnG}>✕</button>
+          </div>
+          <div style={{fontSize:11,color:G3,marginBottom:12,background:G1,borderRadius:6,padding:'8px 10px'}}>
+            Agregá hasta 3 ejercicios de fuerza a medida — aparecen en el selector junto a los estándar.
+          </div>
+          {local.map((t,i)=>(
+            <div key={t.id} style={{background:G1,borderRadius:7,padding:'10px 12px',marginBottom:8,border:`1px solid ${t.nombre?brand.colorPrimary:G2}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:G4,marginBottom:6}}>Ejercicio personalizado {i+1}</div>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div><span style={s.lbl}>Nombre del ejercicio</span>
+                  <input value={t.nombre} onChange={e=>set(i,'nombre',e.target.value)} placeholder="Ej: Press inclinado con mancuernas" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Patrón de movimiento</span>
+                  <input value={t.patron} onChange={e=>set(i,'patron',e.target.value)} placeholder="Ej: Empuje inclinado" style={s.inp}/>
+                </div>
+                <div><span style={s.lbl}>Protocolo de evaluación</span>
+                  <input value={t.protocolo} onChange={e=>set(i,'protocolo',e.target.value)} placeholder="Ej: Calentar 50/70/85% × 3 reps. Intentos máximos con 3 min descanso." style={s.inp}/>
+                </div>
+                {t.nombre&&<button onClick={()=>set(i,'nombre','')} style={{...s.btnG,fontSize:9,color:R,borderColor:R,padding:'2px 8px',alignSelf:'flex-start'}}>Limpiar</button>}
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>{
+            const validos=local.filter(t=>t.nombre.trim());
+            onSave(validos);
+            onClose();
+          }} style={{...s.btnR,width:'100%',padding:'10px',background:brand.colorPrimary}}>
+            💾 Guardar ejercicios personalizados
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+const FuerzaTab=({brand,clients,s,saveClientFn})=>{
+    const [selClientId,setSelClientId]=useState('');
+    const pac=clients.find(x=>x.id===selClientId);
+    const {tests,saveTest,deleteTest}=useFuerzaTests(selClientId||null);
+    const [showForm,setShowForm]=useState(false);
+    const [editingTest,setEditingTest]=useState(null);
+    const [showPlan,setShowPlan]=useState(false);
+    const {planes,savePlan,deletePlan}=usePlanesCliente(selClientId||null);
+    // ── Ejercicios personalizados (en Supabase, funcionan en todos los dispositivos)
+    const {customRows,saveCustom}=useCustomTests(selClientId||null);
+    const customTests=customRows.map(r=>({id:r.slot,nombre:r.nombre,patron:r.patron||'',protocolo:r.protocolo||''}));
+    const [showCustomEdit,setShowCustomEdit]=useState(false);
+    // Migración única: si en este navegador había custom en localStorage y la DB está vacía, los sube
+    const migradoRef=useRef(new Set());
+    useEffect(()=>{
+      if(!selClientId||migradoRef.current.has(selClientId))return;
+      if(customRows.length>0){migradoRef.current.add(selClientId);return;}
+      try{
+        const local=JSON.parse(localStorage.getItem('custom_tests_'+selClientId)||'[]');
+        if(Array.isArray(local)&&local.some(t=>t&&t.nombre)){
+          migradoRef.current.add(selClientId);
+          saveCustom(local).then(()=>{try{localStorage.removeItem('custom_tests_'+selClientId);}catch{}});
+        }
+      }catch{}
+    },[selClientId,customRows,saveCustom]);
+
+    // Sync custom tests when client changes
+    const allTests=[...TESTS_FUERZA,...customTests.filter(t=>t.nombre).map(t=>({id:t.id,nombre:t.nombre,patron:t.patron||'',protocolo:t.protocolo||'Protocolo libre.',referencia:{masculino:1.0,femenino:0.7},unidad:'kg',nivel:{debil:0,promedio:0.5,bueno:1.0,elite:1.5},custom:true}))];
+
+    return(
+      <div style={{padding:'12px 14px'}}>
+        {showForm&&<FuerzaFormComp pac={pac} editingTest={editingTest} saveTest={saveTest} allTests={allTests} onClose={()=>{setShowForm(false);setEditingTest(null);}} brand={brand} s={s}/>}
+        {showPlan&&<PlanFormComp selClientId={selClientId} savePlan={savePlan} saveClientFn={saveClientFn} onClose={()=>setShowPlan(false)} brand={brand} clients={clients} s={s}/>}
+        {showCustomEdit&&<CustomTestsModal customTests={customTests} onClose={()=>setShowCustomEdit(false)} brand={brand} s={s} onSave={(tests)=>{
+          saveCustom(tests).catch(e=>{console.error(e);alert('No se pudieron guardar los ejercicios personalizados: '+e.message);});
+        }}/>}
+        <div style={{background:BK,borderRadius:10,padding:'14px 16px',marginBottom:12,borderLeft:`3px solid ${brand.colorPrimary}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:WH}}>💪 Tests de Fuerza Máxima · Planificación</div>
+          <div style={{fontSize:11,color:G3}}>🗓️ Tests cada 4 meses · 📊 Integrado a criterios de evolución · 📅 9 sistemas de periodización</div>
+        </div>
+        {/* Selector de cliente */}
+        <div style={{...s.card,marginBottom:12}}>
+          <span style={s.lbl}>Seleccionar cliente</span>
+          <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
+            <option value=''>— Seleccionar cliente —</option>
+            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
+          </select>
+        </div>
+        {pac&&(
+          <>
+            {/* Header del paciente */}
+            <div style={{...s.card,borderLeft:`4px solid ${brand.colorPrimary}`,marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700}}>{pac.nombre} {pac.apellido}</div>
+                  <div style={{fontSize:11,color:G3,marginTop:2}}>
+                    {tests.length===0?'Sin tests previos — registrar línea de base':`Último test: ${tests[0]?.fecha}`}
+                    {tests.length>0&&(()=>{
+                      const last=new Date(tests[0].fecha);
+                      const next=new Date(last);next.setMonth(next.getMonth()+4);
+                      const dias=Math.ceil((next-new Date())/86400000);
+                      return<span style={{marginLeft:8,fontWeight:700,color:dias<30?RJ:GN}}>{dias>0?`Próximo test en ${dias} días`:'⚠ Test vencido — reagendar'}</span>;
+                    })()}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>{setEditingTest(null);setShowForm(true);}} style={{...s.btnR,background:brand.colorPrimary,fontSize:11}}>+ Nuevo test</button>
+                  <button onClick={()=>setShowCustomEdit(true)} style={{...s.btnG,fontSize:11,background:'#FEF3C7',color:'#92400E',borderColor:'#FCD34D'}}>🔧 Ej. custom ({customTests.filter(t=>t.nombre).length}/3)</button>
+                  <button onClick={()=>setShowPlan(true)} style={{...s.btnG,fontSize:11,background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📅 Asignar plan</button>
+                </div>
+              </div>
+            </div>
+            {/* Plan activo */}
+            {planes.filter(p=>p.activo).length>0&&(()=>{
+              const plan=planes.filter(p=>p.activo)[0];
+              const ps=PERIODIZACIONES[plan.sistema_id];
+              return(
+                <div style={{...s.card,borderLeft:'4px solid #7C3AED',marginBottom:10,background:'#F5F3FF'}}>
+                  <div style={{fontSize:11,fontWeight:800,color:'#4C1D95',marginBottom:4}}>📅 Plan activo: {plan.sistema_nombre}</div>
+                  {ps&&(
+                    <>
+                      <div style={{fontSize:10,color:'#6D28D9',marginBottom:6}}>{ps.autor} · {ps.duracion}</div>
+                      <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(ps.fases.length,4)},1fr)`,gap:5}}>
+                        {ps.fases.map((f,i)=>(
+                          <div key={i} style={{background:WH,borderRadius:5,padding:'6px 8px',border:'1px solid #C4B5FD'}}>
+                            <div style={{fontSize:9,fontWeight:700,color:'#7C3AED',marginBottom:2}}>{f.nombre}</div>
+                            <div style={{fontSize:9,color:G4}}>{f.reps} reps</div>
+                            <div style={{fontSize:9,color:G4}}>RIR {f.rir}</div>
+                            <div style={{fontSize:8,color:G3,marginTop:1}}>{f.semanas}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {plan.objetivo&&<div style={{fontSize:10,color:'#4C1D95',marginTop:6}}>🎯 {plan.objetivo}</div>}
+                    </>
+                  )}
+                  <button onClick={()=>deletePlan(plan.id)} style={{...s.btnG,fontSize:9,padding:'2px 6px',marginTop:6,color:RJ,borderColor:RJ}}>Quitar plan</button>
+                </div>
+              );
+            })()}
+            {/* Grid resumen 1RM */}
+            <div style={{...s.card,marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:10}}>Resumen de fuerza</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                {allTests.map((tf,tfIdx)=>{
+                  const data=tests.filter(t=>t.test_id===tf.id);
+                  const last=data[0];
+                  const rm1=last?.rm1_real||last?.rm1_calculado;
+                  const niv=rm1&&last?.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(last.peso_corporal)):null;
+                  const prev=data[1];const prevRm=prev?.rm1_real||prev?.rm1_calculado;
+                  const diff=rm1&&prevRm?Math.round((parseFloat(rm1)-parseFloat(prevRm))*10)/10:null;
+                  const icons=['🏋️','⬆️','🫷','🤚','🍑','🧗'];
+                  return(
+                    <div key={tf.id} style={{background:G1,borderRadius:7,padding:'9px 10px',border:`1px solid ${niv?.color||G2}`,borderTop:`3px solid ${niv?.color||G2}`}}>
+                      <div style={{fontSize:10,color:G4,fontWeight:700,marginBottom:3}}>{icons[tfIdx]||'💪'} {tf.nombre}</div>
+                      <div style={{fontSize:22,fontWeight:800,color:niv?.color||G3,lineHeight:1}}>{rm1?`${rm1}kg`:'—'}</div>
+                      {last?.peso_corporal&&rm1&&<div style={{fontSize:9,color:G4}}>{(parseFloat(rm1)/parseFloat(last.peso_corporal)).toFixed(2)}× PC</div>}
+                      {niv&&<div style={{fontSize:9,color:niv.color,fontWeight:700}}>{niv.label}</div>}
+                      {diff&&<div style={{fontSize:9,color:diff>0?GN:RJ,fontWeight:700}}>{diff>0?'+':''}{diff}kg vs anterior</div>}
+                      {!rm1&&<div style={{fontSize:9,color:G3}}>Sin test registrado</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {/* Historial */}
+            <div style={s.card}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Historial de tests ({tests.length})</div>
+              {tests.length===0&&<div style={{textAlign:'center',padding:20,color:G3,fontSize:12}}>Sin tests registrados. Agregá el primero para establecer la línea de base.</div>}
+              {tests.map(t=>{
+                const tf=allTests.find(x=>x.id===t.test_id)||TESTS_FUERZA.find(x=>x.id===t.test_id);
+                const rm1=t.rm1_real||t.rm1_calculado;
+                const niv=tf&&rm1&&t.peso_corporal?nivelFuerza(tf,parseFloat(rm1),parseFloat(t.peso_corporal)):null;
+                return(
+                  <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:G1,borderRadius:7,marginBottom:5,border:`1px solid ${G2}`}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700}}>{t.test_nombre} <span style={{fontSize:10,color:G3}}>· {t.fecha}</span></div>
+                      <div style={{fontSize:11,color:G4,display:'flex',gap:8,flexWrap:'wrap',marginTop:2}}>
+                        {rm1&&<span style={{color:niv?.color,fontWeight:700}}>{rm1} kg</span>}
+                        {t.peso_corporal&&rm1&&<span style={{color:G3}}>{(parseFloat(rm1)/parseFloat(t.peso_corporal)).toFixed(2)}× PC</span>}
+                        {t.reps_realizadas>1&&<span style={{color:G3}}>{t.peso_levantado}kg×{t.reps_realizadas} rep (estimado)</span>}
+                        {t.evaluador&&<span style={{color:G3}}>{t.evaluador}</span>}
+                      </div>
+                      {t.notas&&<div style={{fontSize:10,color:G4,fontStyle:'italic',marginTop:1}}>{t.notas}</div>}
+                    </div>
+                    <div style={{display:'flex',gap:5,alignItems:'center',flexShrink:0}}>
+                      {niv&&<span style={{...s.tag(niv.color),fontSize:9}}>{niv.label}</span>}
+                      <button onClick={()=>{setEditingTest(t);setShowForm(true);}} style={{...s.btnG,fontSize:10,padding:'2px 6px'}}>✏️</button>
+                      <button onClick={()=>deleteTest(t.id).catch(e=>console.error(e))} style={{...s.btnG,fontSize:10,padding:'2px 6px',color:RJ,borderColor:RJ}}>✕</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {!selClientId&&<div style={{...s.card,textAlign:'center',padding:28,borderStyle:'dashed',color:G3,fontSize:12}}>Seleccioná un cliente para ver sus tests y plan de periodización.</div>}
+      </div>
+    );
+  };
 export default function App(){
   const s=mkS();
   const [tab,setTab]=useState(()=>{
@@ -5394,7 +5423,9 @@ export default function App(){
         <div style={{display:'flex',gap:14,alignItems:'center'}}>
           <div style={{textAlign:'right'}}>
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
-            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · v9.0</div>
+            {/* El sello de build visible permite distinguir en un segundo
+                "el código no se subió" de "el navegador tiene caché vieja". */}
+            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · build {typeof __BUILD_ID__!=='undefined'?__BUILD_ID__:'—'}</div>
           </div>
           <BotonSalir/>
           <div style={{width:2,height:36,background:brand.colorPrimary,borderRadius:99,flexShrink:0}}/>

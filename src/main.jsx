@@ -17,13 +17,33 @@ class ErrorBoundary extends React.Component {
           <div style={{fontSize:13,color:'#999',marginBottom:24,maxWidth:480,textAlign:'center'}}>
             {this.state.error?.message || 'Error desconocido'}
           </div>
+          {/* Un reload común puede devolver el MISMO bundle cacheado, y entonces
+              el botón repite el error para siempre. Este limpia cachés y fuerza
+              una URL distinta, así el navegador no tiene de dónde reusar nada. */}
           <button
-            onClick={()=>window.location.reload()}
+            onClick={async()=>{
+              try{
+                if('caches' in window){
+                  const ks=await caches.keys()
+                  await Promise.all(ks.map(k=>caches.delete(k)))
+                }
+                if(navigator.serviceWorker?.getRegistrations){
+                  const rs=await navigator.serviceWorker.getRegistrations()
+                  await Promise.all(rs.map(r=>r.unregister()))
+                }
+              }catch(e){ console.warn('limpieza de caché:',e) }
+              const u=new URL(window.location.href)
+              u.searchParams.set('_v', Date.now())
+              window.location.replace(u.toString())
+            }}
             style={{background:'#CC0000',color:'#fff',border:'none',borderRadius:6,padding:'10px 24px',fontSize:14,fontWeight:700,cursor:'pointer'}}>
-            Reintentar
+            Recargar limpiando caché
           </button>
-          <div style={{marginTop:16,fontSize:11,color:'#555'}}>
+          <div style={{marginTop:16,fontSize:11,color:'#555',maxWidth:480,textAlign:'center'}}>
             Si el problema persiste, verificar las variables de entorno en Vercel (VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY)
+          </div>
+          <div style={{marginTop:10,fontSize:10,color:'#444',fontFamily:'monospace'}}>
+            build {typeof __BUILD_ID__!=='undefined'?__BUILD_ID__:'desconocido'}
           </div>
         </div>
       )
