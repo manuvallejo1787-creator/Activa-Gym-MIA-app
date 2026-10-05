@@ -16,7 +16,9 @@
 // y tratar los efectos en paralelo gasta sesiones sin resolver la causa.
 
 import { useState, useMemo, useEffect } from "react";
-import { HORIZONTES, generarPlanClinico, DOSIS_FASE, PROT_SESION } from "./planClinicoMotor.js";
+import { HORIZONTES, generarPlanClinico, DOSIS_FASE, PROT_SESION,
+  generarSesionesPlan, sesionQueToca, dosisDeFase, evaluarEva, deltaEva,
+  CONSULTAS_FASE, TERCIO_LABEL, tipoItemRehab } from "./planClinicoMotor.js";
 
 const NV = '#0A3D62', TL = '#1BAA86', CR = '#FF6F4C';
 const WH = '#FFFFFF', BG = '#F0F4F8', GL = '#E2E8F0';
@@ -119,15 +121,217 @@ export default function PlanClinico({
       )}
 
       {planes.map(p => (
-        <ResumenPlan key={p.id} plan={p} sesiones={sesiones} regionesList={regionesList} fs={fs}
-          onEditar={() => setEditando(p)}
-          onEliminar={() => { if (confirm(`¿Eliminar "${p.nombre}"? No se puede deshacer.`)) deletePlan(p.id); }} />
+        <div key={p.id}>
+          <ResumenPlan plan={p} sesiones={sesiones} regionesList={regionesList} fs={fs}
+            onEditar={() => setEditando(p)}
+            onEliminar={() => { if (confirm(`¿Eliminar "${p.nombre}"? No se puede deshacer.`)) deletePlan(p.id); }} />
+          {/* La grilla de sesiones solo tiene sentido sobre el plan activo: un
+              plan cerrado no tiene sesión "que toca". */}
+          {p.estado === 'activo' && (
+            <GrillaSesiones plan={p}
+              sesionesHechas={sesiones.filter(x => x.plan_clinico_id === p.id)}
+              onGuardar={(campos) => savePlan({ ...p, ...campos })}
+              fs={fs} />
+          )}
+        </div>
       ))}
     </div>
   );
 }
 
 // ─── Resumen de un plan guardado ───────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// GRILLA DE SESIONES DEL PLAN
+//
+// El plan deja de ser un cronograma de fases y pasa a tener las sesiones
+// diseñadas de antemano. Todo es editable: la frecuencia de consultas por
+// fase, la dosis de cada ejercicio y qué ejercicios entran en cada sesión.
+//
+// El rango de EVA de la fase está visible en cada sesión, no escondido en la
+// definición de la fase: cuando abrís la que toca, el techo está a la vista.
+// ═══════════════════════════════════════════════════════════════════════════
+function GrillaSesiones({ plan, sesionesHechas = [], onGuardar, fs }) {
+  const [frec, setFrec] = useState(() => ({ ...CONSULTAS_FASE, ...(plan.consultas_por_fase || {}) }));
+  const [grilla, setGrilla] = useState(() => plan.sesiones_plan || null);
+  const [abierta, setAbierta] = useState(null);
+  const [generando, setGenerando] = useState(false);
+
+  const gen = (frecUsar) => {
+    setGenerando(true);
+    try {
+      const r = generarSesionesPlan({ plan, protSesion: PROT_SESION, consultasPorFase: frecUsar || frec, genId });
+      setGrilla(r.sesiones);
+      return r;
+    } finally { setGenerando(false); }
+  };
+
+  const resultado = useMemo(() => {
+    if (!grilla) return null;
+    return sesionQueToca(grilla, sesionesHechas);
+  }, [grilla, sesionesHechas]);
+
+  const regenerar = () => {
+    const editadas = (grilla || []).filter(s => s.editado).length;
+    if (editadas && !confirm(`Hay ${editadas} sesión/es que editaste a mano. Regenerar las reemplaza. ¿Seguir?`)) return;
+    const r = gen();
+    if (r.avisos?.length) alert(r.avisos.join('\n\n'));
+  };
+
+  const setFrecFase = (fase, v) => {
+    const n = Math.max(1, Math.min(7, parseInt(v) || 1));
+    const nf = { ...frec, [fase]: n };
+    setFrec(nf);
+    if (grilla) gen(nf);
+  };
+
+  const editarEj = (sn, ejId, campo, valor) => {
+    setGrilla(g => g.map(s => s.n !== sn ? s : {
+      ...s, editado: true,
+      ejercicios: s.ejercicios.map(e => e.id !== ejId ? e : { ...e, [campo]: valor, editado: true }),
+    }));
+  };
+  const toggleEj = (sn, ejId) => {
+    setGrilla(g => g.map(s => s.n !== sn ? s : {
+      ...s, editado: true,
+      ejercicios: s.ejercicios.map(e => e.id !== ejId ? e : { ...e, activo: !e.activo, editado: true }),
+    }));
+  };
+
+  const COLOR_FASE = { proteccion: RJ, carga_progresiva: AM, retorno_funcion: GN };
+  const LBL_FASE = { proteccion: 'Protección', carga_progresiva: 'Carga progresiva', retorno_funcion: 'Retorno a la función' };
+
+  return (
+    <div style={{ background: WH, border: `1px solid ${GL}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 800 }}>🗓 Sesiones del plan</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {grilla && <button onClick={() => onGuardar({ sesiones_plan: grilla, consultas_por_fase: frec })}
+            style={{ ...fs.btnNV, fontSize: 10, padding: '4px 10px' }}>Guardar grilla</button>}
+          <button onClick={regenerar} disabled={generando}
+            style={{ ...fs.btnG, fontSize: 10, padding: '4px 10px' }}>
+            {generando ? 'Generando…' : grilla ? 'Regenerar' : '⚡ Diseñar las sesiones'}</button>
+        </div>
+      </div>
+
+      {/* Frecuencia de CONSULTAS por fase — editable */}
+      <div style={{ background: BG, borderRadius: 7, padding: 9, marginBottom: 9 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: GD, marginBottom: 6 }}>Consultas por semana, por fase</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {['proteccion', 'carga_progresiva', 'retorno_funcion'].map(f => (
+            <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ fontSize: 10, color: COLOR_FASE[f], fontWeight: 700 }}>{LBL_FASE[f]}</span>
+              <input type="number" min="1" max="7" value={frec[f]} onChange={e => setFrecFase(f, e.target.value)}
+                style={{ width: 44, padding: '3px 5px', border: `1px solid ${GL}`, borderRadius: 5, fontSize: 11, textAlign: 'center' }}/>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 9, color: GM, marginTop: 6 }}>
+          Esto es cuántas veces lo ves vos en la clínica. Lo que el paciente hace solo en casa es el
+          programa domiciliario, que sale de la dosis de cada fase y aparece dentro de cada sesión.
+        </div>
+      </div>
+
+      {!grilla && <div style={{ fontSize: 11, color: GM }}>
+        Todavía no diseñaste las sesiones. El generador las arma desde las fases del plan, con la dosis
+        del tercio que corresponde a cada semana y el rango de EVA de su fase.
+      </div>}
+
+      {resultado && (
+        <>
+          <div style={{ display: 'flex', gap: 12, fontSize: 11, marginBottom: 8, flexWrap: 'wrap' }}>
+            <span>Hechas: <b>{resultado.hechas}</b>/{resultado.total}</span>
+            {resultado.toca && <span style={{ color: TL, fontWeight: 700 }}>
+              Toca la n° {resultado.toca.n} · semana {resultado.toca.semana} · EVA hasta {resultado.toca.eva?.max}/10
+            </span>}
+            {!resultado.toca && <span style={{ color: GN, fontWeight: 700 }}>Plan completo</span>}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {resultado.lista.map(ses => {
+              const esLaQueToca = resultado.toca && resultado.toca.n === ses.n;
+              const abiertaAhora = abierta === ses.n;
+              const activos = ses.ejercicios.filter(e => e.activo);
+              return (
+                <div key={ses.n} style={{
+                  border: `1px solid ${esLaQueToca ? TL : GL}`,
+                  borderLeft: `4px solid ${COLOR_FASE[ses.fase] || GM}`,
+                  background: ses.estado === 'hecha' ? '#F8FAFC' : WH,
+                  borderRadius: 7, padding: '7px 9px', opacity: ses.estado === 'hecha' ? 0.65 : 1 }}>
+                  <div onClick={() => setAbierta(abiertaAhora ? null : ses.n)}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700 }}>
+                        {ses.estado === 'hecha' ? '✓ ' : esLaQueToca ? '▶ ' : ''}Sesión {ses.n}
+                        <span style={{ fontWeight: 400, color: GM }}> · semana {ses.semana}</span>
+                        {ses.editado && <span style={{ fontSize: 9, color: MO, marginLeft: 5 }}>editada</span>}
+                      </div>
+                      <div style={{ fontSize: 9, color: GM, marginTop: 1 }}>
+                        <span style={{ color: COLOR_FASE[ses.fase], fontWeight: 700 }}>{LBL_FASE[ses.fase] || ses.fase}</span>
+                        {ses.tercio && ` · ${TERCIO_LABEL[ses.tercio]}`} · {activos.length} ítems
+                      </div>
+                    </div>
+                    <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                      {ses.eva && <div style={{ fontSize: 10, fontWeight: 800, color: COLOR_FASE[ses.fase] }}>
+                        EVA ≤{ses.eva.max}<span style={{ fontWeight: 400, color: GM }}> (techo {ses.eva.techo})</span>
+                      </div>}
+                      <div style={{ fontSize: 9, color: GM }}>{abiertaAhora ? '▾' : '▸'}</div>
+                    </div>
+                  </div>
+
+                  {abiertaAhora && (
+                    <div style={{ marginTop: 8, borderTop: `1px solid ${GL}`, paddingTop: 8 }}>
+                      {ses.eva && (
+                        <div style={{ background: '#FFFBEB', border: `1px solid ${AM}`, borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 800, color: '#92400E' }}>Rango de EVA de esta fase</div>
+                          <div style={{ fontSize: 10, color: GD, marginTop: 2 }}>{ses.eva.regla}</div>
+                        </div>
+                      )}
+                      {ses.domiciliario && (
+                        <div style={{ fontSize: 10, color: GD, marginBottom: 7 }}>
+                          🏠 <b>Programa domiciliario:</b> {ses.domiciliario}
+                        </div>
+                      )}
+                      {ses.objetivo && <div style={{ fontSize: 10, color: GM, marginBottom: 7, fontStyle: 'italic' }}>{ses.objetivo}</div>}
+
+                      {ses.ejercicios.map(e => (
+                        <div key={e.id} style={{ display: 'flex', gap: 5, alignItems: 'center', marginBottom: 4, opacity: e.activo ? 1 : 0.4 }}>
+                          <input type="checkbox" checked={e.activo} onChange={() => toggleEj(ses.n, e.id)}/>
+                          <span style={{ fontSize: 10, flex: 1, minWidth: 0 }}>
+                            {e.nombre}
+                            <span style={{ color: GM, fontSize: 9 }}> · {e.tipo}</span>
+                          </span>
+                          {e.tipo === 'modalidad' ? (
+                            <input value={e.tiempo || ''} onChange={ev => editarEj(ses.n, e.id, 'tiempo', ev.target.value)}
+                              placeholder="duración" style={{ width: 70, padding: '2px 4px', border: `1px solid ${GL}`, borderRadius: 4, fontSize: 10 }}/>
+                          ) : (
+                            <>
+                              <input value={e.series || ''} onChange={ev => editarEj(ses.n, e.id, 'series', ev.target.value)}
+                                placeholder="ser" style={{ width: 34, padding: '2px 4px', border: `1px solid ${GL}`, borderRadius: 4, fontSize: 10, textAlign: 'center' }}/>
+                              <span style={{ fontSize: 9, color: GM }}>×</span>
+                              <input value={e.reps || e.tiempo || ''}
+                                onChange={ev => editarEj(ses.n, e.id, e.reps ? 'reps' : 'tiempo', ev.target.value)}
+                                placeholder="reps/tiempo" style={{ width: 72, padding: '2px 4px', border: `1px solid ${GL}`, borderRadius: 4, fontSize: 10, textAlign: 'center' }}/>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                      {ses.ejercicios.some(e => e.carga) && (
+                        <div style={{ fontSize: 9, color: GM, marginTop: 5 }}>
+                          Carga / intención: {ses.ejercicios.find(e => e.carga)?.carga}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ResumenPlan({ plan, sesiones, regionesList, fs, onEditar, onEliminar }) {
   const gasto = useMemo(() => calcularGasto(plan), [plan]);
   const usadas = sesiones.filter(s => s.plan_clinico_id === plan.id).length;

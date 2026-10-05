@@ -95,18 +95,51 @@ export const DOSIS_FASE = {
     series: 3, reps: '30-45 seg', carga: 'Isométrica submáxima (~40-70% MVC)',
     frecuencia: 'Diario o 2 veces/día', descanso: '60 seg',
     intencion: 'Analgesia y protección. No buscar adaptación, buscar tolerancia.',
+    // Rango de EVA tolerable DURANTE el ejercicio, estructurado.
+    // Antes esto vivía solo dentro de `intencion`, en prosa: no se podía
+    // mostrar en la sesión ni comparar contra el EVA registrado.
+    eva: { max: 2, techo: 3, ventana24h: 0,
+      regla: 'Hasta 2/10 durante el ejercicio. Por encima de 3/10 se baja la dosis o se cambia el ejercicio. A las 24 h debe volver al nivel previo.' },
   },
   carga_progresiva: {
     series: 3, reps: '8-15', carga: 'Progresiva · excéntrico lento (3-4 seg)',
     frecuencia: '3-4 veces/semana', descanso: '90 seg',
-    intencion: 'Reintroducir carga y restaurar control motor. El dolor durante el ejercicio hasta 3/10 es aceptable si baja en 24 h.',
+    intencion: 'Reintroducir carga y restaurar control motor.',
+    eva: { max: 3, techo: 5, ventana24h: 1,
+      regla: 'Hasta 3/10 durante el ejercicio es aceptable si baja en 24 h. Entre 4 y 5/10 se tolera solo si a las 24 h volvió al nivel previo. Por encima de 5/10 se interrumpe.' },
   },
   retorno_funcion: {
     series: 4, reps: '6-10', carga: 'Pesado-lento y específico del objetivo',
     frecuencia: '2-3 veces/semana', descanso: '120-150 seg',
     intencion: 'Capacidad funcional del gesto objetivo, sin compensaciones ni dolor residual.',
+    eva: { max: 4, techo: 5, ventana24h: 1,
+      regla: 'Hasta 4/10 durante el trabajo pesado-lento. No debe quedar dolor residual al día siguiente por encima del nivel previo.' },
   },
 };
+
+// Semáforo del EVA registrado contra el rango de la fase.
+// Se usa durante la sesión: el profesional ve en el momento si el número que
+// acaba de anotar está dentro de lo prescrito, no después al revisar la ficha.
+export function evaluarEva(fase, valor) {
+  const d = DOSIS_FASE[fase]; const v = valor == null || valor === '' ? null : parseInt(valor);
+  if (!d || !d.eva || v == null || isNaN(v)) return null;
+  const { max, techo } = d.eva;
+  if (v <= max)   return { nivel: 'ok',      color: '#16A34A', texto: `Dentro del rango de la fase (≤${max}/10)` };
+  if (v <= techo) return { nivel: 'limite',  color: '#D97706', texto: `Sobre el objetivo (${max}/10) pero bajo el techo (${techo}/10). Verificar a las 24 h.` };
+  return { nivel: 'excedido', color: '#DC2626', texto: `Por encima del techo de la fase (${techo}/10). Bajar dosis o cambiar el ejercicio.` };
+}
+
+// Comparación EVA inicio vs fin dentro de una misma sesión.
+export function deltaEva(fase, ini, fin) {
+  const a = ini == null || ini === '' ? null : parseInt(ini);
+  const b = fin == null || fin === '' ? null : parseInt(fin);
+  if (a == null || b == null || isNaN(a) || isNaN(b)) return null;
+  const d = b - a;
+  if (d <= -2) return { d, color: '#16A34A', texto: `Bajó ${Math.abs(d)} puntos en la sesión` };
+  if (d <= 0)  return { d, color: '#16A34A', texto: d === 0 ? 'Se mantuvo' : 'Bajó 1 punto' };
+  if (d <= 2)  return { d, color: '#D97706', texto: `Subió ${d} punto${d>1?'s':''}: aceptable si vuelve en 24 h` };
+  return { d, color: '#DC2626', texto: `Subió ${d} puntos: la dosis de hoy fue excesiva` };
+}
 
 const norm = (s) => (s || '').toLowerCase();
 
@@ -377,9 +410,12 @@ export function tipoItemRehab(nombre) {
   // Los acrónimos y palabras cortas van anclados: sin \b, "tens" matcheaba
   // dentro de "ex-tens-ores" y un excéntrico de muñeca se clasificaba como
   // modalidad pasiva.
-  if (/crioterapia|termoterapia|\btens\b|\bcalor\b|\bfrio\b|\bfr[ií]o\b|ultrasonido|vendaje|kinesiotap|masaje|liberaci[oó]n miofascial|punci[oó]n|educaci[oó]n|higiene postural|reposo relativo|reposo absoluto|\brice\b|control de carga/.test(n))
+  if (/crioterapia|termoterapia|\btens\b|\bcalor\b|\bfrio\b|\bfr[ií]o\b|ultrasonido|vendaje|kinesiotap|masaje|liberaci[oó]n miofascial|punci[oó]n|educaci[oó]n|higiene postural|reposo relativo|reposo absoluto|\brice\b|control de carga|inmovilizaci[oó]n|ortesis|dec[uú]bito|almohada/.test(n))
     return 'modalidad';
-  if (/estiramiento|elongaci[oó]n|movilidad|deslizamiento neural|neurodin|p[eé]ndulo/.test(n))
+  // "movilización" no entraba por buscar solo "movilidad": una movilización
+  // rotuliana suave salía prescrita como isométrico al 40-70% MVC. Lo mismo la
+  // respiración diafragmática y el alfabeto con el pie.
+  if (/estiramiento|elongaci[oó]n|movilidad|moviliza|deslizamiento neural|neurodin|p[eé]ndulo|respiraci[oó]n|alfabeto/.test(n))
     return 'movilidad';
   return 'ejercicio';
 }
@@ -405,7 +441,11 @@ export function generarSesionClinica({
 
   const ejercicios = [], criterios = [];
   regiones.forEach(r => {
-    const d = r.dosis || {};
+    // Dosis del TERCIO de la fase, no la plana. Sin esto todas las sesiones de
+    // una misma fase salían idénticas: ocho veces 3×8-15 entre la semana 6 y
+    // la 13 no es progresión, es el mismo estímulo repetido.
+    const dTercio = dosisDeFase(r.fase, r.semanaDeFase, r.totalFase);
+    const d = { ...(r.dosis || {}), ...dTercio };
     // ¿La fase se prescribe por tiempo o por repeticiones?
     const porTiempo = /seg|min/i.test(String(d.reps || ''));
     const lista = r.ejercicios && r.ejercicios.length
@@ -443,7 +483,230 @@ export function generarSesionClinica({
 
   return {
     ejercicios, criterios, avisos, pres,
-    resumen: regiones.map(r => `${r.region}: ${r.label} (sem ${r.semanaDeFase}/${r.totalFase}) · ${r.dosis?.series}×${r.dosis?.reps}`).join(' · '),
+    resumen: regiones.map(r => {
+      const dt = dosisDeFase(r.fase, r.semanaDeFase, r.totalFase);
+      return `${r.region}: ${r.label} · ${dt.tercioLabel} (sem ${r.semanaDeFase}/${r.totalFase}) · ${dt.series}×${dt.reps}`;
+    }).join(' · '),
     semana: pres.semana, totalSemanas: pres.totalSemanas,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7) SESIONES PREDISEÑADAS DE TODO EL PLAN
+//
+// Hasta ahora la sesión se armaba el día que tocaba: el profesional abría el
+// formulario y apretaba "armar desde el plan". Eso sirve para improvisar, no
+// para planificar: no se podía ver el plan completo de antemano, ni ajustar la
+// sesión 7 estando en la 3, ni saber cuántas sesiones quedaban.
+//
+// Acá se genera la grilla entera. Cada sesión queda con su semana, su fase,
+// sus ejercicios con dosis y EL RANGO DE EVA DE SU FASE PEGADO, de modo que al
+// abrirla durante el tratamiento el rango esté visible sin tener que
+// recordarlo ni ir a buscarlo.
+//
+// Todo es editable después: `editado: true` marca lo que tocó el profesional
+// para que un regenerado no le pise el criterio clínico.
+// ═══════════════════════════════════════════════════════════════════════════
+// Frecuencia de CONSULTAS por fase, por defecto.
+//
+// Ojo con la distinción, que antes estaba colapsada en un solo número:
+//   · la `frecuencia` de DOSIS_TERCIO es el PROGRAMA DOMICILIARIO — lo que el
+//     paciente hace solo en casa ("diario", "3-4 veces/semana");
+//   · esto de acá es cuántas veces lo ves VOS en la clínica.
+// En protección el paciente hace isometría a diario pero no viene a diario:
+// viene más seguido que en retorno a la función, porque hay que vigilar la
+// respuesta del tejido y ajustar. Al final del proceso se espacia.
+export const CONSULTAS_FASE = { proteccion: 2, carga_progresiva: 2, retorno_funcion: 1 };
+
+export function generarSesionesPlan({
+  plan, protSesion = {}, custom = [], sesionesPorSemana = null,
+  consultasPorFase = null,
+  genId = (p) => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+}) {
+  const avisos = [];
+  if (!plan?.fecha_inicio) return { sesiones: [], avisos: ['El plan no tiene fecha de inicio.'] };
+  const semanas = parseInt(plan.semanas) || 0;
+  if (!semanas) return { sesiones: [], avisos: ['El plan no tiene cantidad de semanas definida.'] };
+
+  // Consultas por semana, POR FASE. Repartir parejo contradecía la
+  // prescripción en los extremos: dejaba la misma frecuencia de control en
+  // protección (donde hay que vigilar la respuesta del tejido semana a semana)
+  // que en retorno a la función (donde el paciente ya trabaja solo).
+  const frec = { ...CONSULTAS_FASE, ...(plan.consultas_por_fase || {}), ...(consultasPorFase || {}) };
+  // sesionesPorSemana fuerza un valor único para todas las fases: se respeta
+  // porque a veces lo impone la agenda o el convenio, no la clínica.
+  if (sesionesPorSemana) Object.keys(frec).forEach(k => { frec[k] = sesionesPorSemana; });
+
+  // Tope por sesiones contratadas. Sin esto el generador producía una sesión
+  // por semana durante TODO el horizonte: 18 sesiones para 16 contratadas, o
+  // peor, un plan de 40 semanas con 20 sesiones pagas. El plan clínico puede
+  // durar más que las sesiones compradas —eso es normal— pero hay que decirlo
+  // en vez de prediseñar trabajo que nadie pagó.
+  const tope = parseInt(plan.sesiones_presupuestadas) || 0;
+
+  const sesiones = [];
+  let n = 0;
+  for (let sem = 1; sem <= semanas; sem++) {
+    // La fecha del lunes de esa semana, para que prescripcionDeHoy resuelva
+    // la fase de cada región igual que lo hace en la sesión real.
+    const f = new Date(new Date(plan.fecha_inicio + 'T12:00').getTime() + (sem - 1) * 7 * 864e5);
+    const fechaSem = f.toISOString().slice(0, 10);
+    const base = generarSesionClinica({ plan, fecha: fechaSem, protSesion, custom, genId });
+    if (!base.pres || base.pres.fueraDePlan) continue;
+
+    // Fase dominante de esta semana, para saber cuántas consultas van.
+    const fasesSem = (base.pres.regiones || []).map(r => r.fase);
+    const ordenF = ['proteccion', 'carga_progresiva', 'retorno_funcion'];
+    const faseSemana = ordenF.find(x => fasesSem.includes(x)) || fasesSem[0] || 'carga_progresiva';
+    const porSemana = Math.max(1, parseInt(frec[faseSemana]) || 2);
+
+    for (let k = 1; k <= porSemana; k++) {
+      if (tope && n >= tope) break;
+      n++;
+      // Fase dominante de la sesión: si hay varias regiones, la más conservadora
+      // manda sobre el rango de EVA. Mezclar una región en protección con otra
+      // en retorno a la función y usar el techo de la segunda sería prescribir
+      // dolor sobre un tejido que todavía no lo tolera.
+      const fases = (base.pres.regiones || []).map(r => r.fase);
+      const orden = ['proteccion', 'carga_progresiva', 'retorno_funcion'];
+      const faseDom = orden.find(x => fases.includes(x)) || fases[0] || 'carga_progresiva';
+      const evaFase = (DOSIS_FASE[faseDom] || {}).eva || null;
+
+      sesiones.push({
+        n,
+        semana: sem,
+        sesionDeLaSemana: k,
+        fase: faseDom,
+        faseLabel: (base.pres.regiones || []).find(r => r.fase === faseDom)?.label || faseDom,
+        tercio: (()=>{ const rr=(base.pres.regiones||[]).find(r=>r.fase===faseDom);
+          return rr ? tercioDeFase(rr.semanaDeFase, rr.totalFase) : null; })(),
+        regiones: (base.pres.regiones || []).map(r => ({ region: r.region, fase: r.fase, label: r.label,
+          semanaDeFase: r.semanaDeFase, totalFase: r.totalFase,
+          tercio: tercioDeFase(r.semanaDeFase, r.totalFase) })),
+        // El rango de EVA viaja DENTRO de la sesión: al abrirla, el techo de la
+        // fase está ahí sin depender de que nadie lo recuerde.
+        eva: evaFase ? { max: evaFase.max, techo: evaFase.techo, regla: evaFase.regla } : null,
+        // El programa domiciliario es la `frecuencia` de la dosis del tercio:
+        // qué tiene que hacer el paciente entre esta consulta y la siguiente.
+        domiciliario: (() => {
+          const rr = (base.pres.regiones || []).find(r => r.fase === faseDom);
+          return rr ? (dosisDeFase(rr.fase, rr.semanaDeFase, rr.totalFase).frecuencia || '') : '';
+        })(),
+        consultasSemana: porSemana,
+        ejercicios: (base.ejercicios || []).map(e => ({ ...e, id: genId('ej'), activo: true, editado: false })),
+        criterios: (base.criterios || []).map(c => ({ ...c, id: genId('cr') })),
+        objetivo: (base.pres.regiones || []).map(r => r.objetivo).filter(Boolean).join(' · '),
+        notas: '',
+        editado: false,
+        estado: 'pendiente',   // pendiente | hecha | salteada
+      });
+    }
+  }
+
+  if (!sesiones.length) avisos.push('No se generó ninguna sesión: revisá fecha de inicio, semanas y regiones del plan.');
+  const ultSem = sesiones.length ? sesiones[sesiones.length - 1].semana : 0;
+  if (tope && ultSem < semanas) {
+    avisos.push(`Las ${tope} sesiones contratadas alcanzan hasta la semana ${ultSem} de ${semanas}. ` +
+      `Desde la semana ${ultSem + 1} el plan sigue pero sin sesiones asignadas: hay que contratar más o pasar a trabajo autónomo supervisado.`);
+  }
+  // Cuántas consultas pide el plan según la frecuencia por fase, contra las
+  // contratadas: es la conversación comercial antes de empezar, no después.
+  let necesarias = 0;
+  (plan.fases_detalle || []).forEach(d => (d.fases || []).forEach(f => {
+    necesarias += (parseInt(f.semanas) || 0) * (parseInt(frec[f.fase]) || 2);
+  }));
+  const regs = (plan.fases_detalle || []).length || 1;
+  necesarias = Math.round(necesarias / regs);
+  if (tope && necesarias > tope) {
+    avisos.push(`La frecuencia por fase pide ${necesarias} consultas y hay ${tope} contratadas. ` +
+      `Faltan ${necesarias - tope}: o se contratan, o se baja la frecuencia en alguna fase.`);
+  }
+  return { sesiones, avisos, frecuencia: frec, consultasNecesarias: necesarias,
+    total: sesiones.length, cubreHastaSemana: ultSem, semanasPlan: semanas };
+}
+
+// Cuál es la sesión que toca: la primera pendiente. Devuelve también el avance,
+// para que el profesional vea en qué punto del plan está sin contar a mano.
+export function sesionQueToca(sesionesPlan = [], realizadas = []) {
+  const hechas = new Set((realizadas || []).map(s => s.sesion_plan_n).filter(x => x != null));
+  const lista = (sesionesPlan || []).map(s => ({ ...s, estado: hechas.has(s.n) ? 'hecha' : s.estado }));
+  const toca = lista.find(s => s.estado === 'pendiente') || null;
+  return {
+    toca, lista,
+    hechas: lista.filter(s => s.estado === 'hecha').length,
+    total: lista.length,
+    pendientes: lista.filter(s => s.estado === 'pendiente').length,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8) PROGRESIÓN DENTRO DE LA FASE — DOSIS POR TERCIO
+//
+// DOSIS_FASE tiene UNA dosis por fase, y eso generaba ocho sesiones idénticas
+// de "sentadilla parcial 3×8-15" entre las semanas 6 y 13. Un tendón que
+// tolera esa dosis en la semana 6 necesita más en la 13 o deja de adaptarse.
+//
+// Cada fase se parte en tercios: inicio, medio y final. El tercio sale de la
+// posición de la sesión DENTRO de su fase, no del plan completo, así que una
+// fase de 2 semanas y otra de 8 progresan las dos.
+//
+// Estos nueve valores son una propuesta de referencia, no un dogma. Están para
+// editarse: un tendón rotuliano y un manguito rotador no progresan igual.
+// ═══════════════════════════════════════════════════════════════════════════
+export const DOSIS_TERCIO = {
+  proteccion: {
+    inicio: { series: 3, reps: '20-30 seg', carga: 'Isométrica 40-50% MVC',
+      descanso: '60 seg', frecuencia: 'Diario o 2 veces/día',
+      intencion: 'Entrar sin provocar. Buscar la contracción tolerada, no la máxima.' },
+    medio:  { series: 3, reps: '30-45 seg', carga: 'Isométrica 50-60% MVC',
+      descanso: '60 seg', frecuencia: 'Diario',
+      intencion: 'Sostener más tiempo con la misma indolencia. Ya debería haber analgesia post-isométrica.' },
+    final:  { series: 4, reps: '45-60 seg', carga: 'Isométrica 60-70% MVC',
+      descanso: '45-60 seg', frecuencia: 'Diario',
+      intencion: 'Máxima isometría tolerada. Preparar el tejido para aceptar movimiento con carga.' },
+  },
+  carga_progresiva: {
+    inicio: { series: 3, reps: '12-15', carga: 'Carga baja · excéntrico lento 4 seg · RIR 4-5',
+      descanso: '90 seg', frecuencia: '3-4 veces/semana',
+      intencion: 'Reintroducir el movimiento completo con poca carga y mucho control del descenso.' },
+    medio:  { series: 3, reps: '8-12', carga: 'Carga media · excéntrico 3 seg · RIR 3',
+      descanso: '90 seg', frecuencia: '3-4 veces/semana',
+      intencion: 'Subir carga manteniendo el control. Acá es donde el tejido gana capacidad.' },
+    final:  { series: 4, reps: '6-10', carga: 'Carga alta · tempo controlado · RIR 2',
+      descanso: '120 seg', frecuencia: '3 veces/semana',
+      intencion: 'Carga cercana a la del gesto objetivo, todavía en ambiente controlado.' },
+  },
+  retorno_funcion: {
+    inicio: { series: 4, reps: '6-8', carga: 'Pesado-lento · RIR 3',
+      descanso: '120 seg', frecuencia: '2-3 veces/semana',
+      intencion: 'Fuerza máxima en rango completo, sin componente de velocidad todavía.' },
+    medio:  { series: 4, reps: '5-6', carga: 'Pesado-lento · RIR 2 · introducir velocidad',
+      descanso: '150 seg', frecuencia: '2-3 veces/semana',
+      intencion: 'Sumar intención de velocidad al trabajo pesado. Primer contacto con lo reactivo.' },
+    final:  { series: 4, reps: '3-6', carga: 'Específico del gesto · pliométrico si corresponde',
+      descanso: '150-180 seg', frecuencia: '2 veces/semana',
+      intencion: 'Replicar la demanda real del deporte o la tarea. Criterio de alta, no de progreso.' },
+  },
+};
+
+// Qué tercio de la fase es esta sesión. Con fases cortas se reparte igual:
+// una fase de 2 semanas da inicio y final, no tres tercios imposibles.
+export function tercioDeFase(semanaDeFase, totalFase) {
+  const sem = parseInt(semanaDeFase) || 1;
+  const tot = parseInt(totalFase) || 1;
+  if (tot <= 1) return 'medio';
+  if (tot === 2) return sem === 1 ? 'inicio' : 'final';
+  const p = (sem - 1) / tot;
+  return p < 1 / 3 ? 'inicio' : p < 2 / 3 ? 'medio' : 'final';
+}
+
+export const TERCIO_LABEL = { inicio: 'Inicio de fase', medio: 'Medio de fase', final: 'Final de fase' };
+
+// Dosis efectiva: la del tercio si existe, con respaldo a la dosis plana de la
+// fase para no romper nada que ya la consumiera.
+export function dosisDeFase(fase, semanaDeFase, totalFase) {
+  const t = tercioDeFase(semanaDeFase, totalFase);
+  const d = (DOSIS_TERCIO[fase] || {})[t];
+  if (!d) return { ...(DOSIS_FASE[fase] || {}), tercio: t, tercioLabel: TERCIO_LABEL[t] };
+  return { ...d, eva: (DOSIS_FASE[fase] || {}).eva || null, tercio: t, tercioLabel: TERCIO_LABEL[t] };
 }
