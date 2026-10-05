@@ -269,6 +269,19 @@ export default async function handler(req, res) {
     // ── ESCRITURA: el cliente registra lo que hizo ──
     if (req.method === "POST") {
       const b = req.body || {};
+
+      // Fecha de ENTRENAMIENTO que declara el cliente. Por defecto hoy, pero
+      // puede ser anterior: a veces carga al otro día por olvido, o repasa su
+      // seguimiento y corrige. Se acota a 30 días atrás y nunca al futuro —
+      // un registro adelantado no es un olvido, es un error o una invención.
+      const fechaEntreno = (() => {
+        const hoy = new Date().toISOString().slice(0, 10);
+        const f = String(b.fecha || '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return hoy;
+        if (f > hoy) return hoy;
+        const limite = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+        return f < limite ? limite : f;
+      })();
       const cli = await clienteDeToken(b.token);
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
 
@@ -315,13 +328,17 @@ export default async function handler(req, res) {
           return isNaN(x) ? null : Math.max(min, Math.min(max, x));
         };
         const fila = {
-          id: `${cli.id}__${b.dia_id}__w${b.semana}`,
+          // La clave lleva semana Y fecha: si el cliente repite la misma
+          // sesión dos veces en la semana, son dos encuestas, no una que pisa
+          // a la otra.
+          id: `${cli.id}__${b.dia_id}__w${b.semana}__${fechaEntreno}`,
           gym_client_id: cli.id,
           plan_id: b.plan_id || null,
           dia_id: b.dia_id,
           dia_nombre: b.dia_nombre || "",
           semana: parseInt(b.semana),
-          fecha: new Date().toISOString().slice(0, 10),
+          fecha: fechaEntreno,
+          cargado_el: new Date().toISOString(),
           rpe_sesion: n(b.rpe_sesion, 1, 10),
           energia: n(b.energia, 1, 5),
           dolor: n(b.dolor, 0, 10),
@@ -348,7 +365,7 @@ export default async function handler(req, res) {
         return res.status(403).json({ error: "El plan no corresponde a este cliente" });
       }
 
-      const id = `${plan_id}__${dia_id}__${ejercicio_id}__w${semana}`;
+      const id = `${plan_id}__${dia_id}__${ejercicio_id}__w${semana}__${fechaEntreno}`;
       // ═══════════════════════════════════════════════════════════════════
       // ACTUALIZACIÓN PARCIAL — solo se escriben los campos que cambiaron.
       //
@@ -379,6 +396,11 @@ export default async function handler(req, res) {
         ejercicio_id,
         ejercicio_nombre: ejercicio_nombre || "",
         semana: parseInt(semana),
+        // Día en que ENTRENÓ (lo declara el cliente) vs. momento real de carga.
+        // Antes `fecha` se llenaba con el día de carga en los 6.523 registros:
+        // el campo existía pero no distinguía nada.
+        fecha: fechaEntreno,
+        cargado_el: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       const campo = b.campo;
