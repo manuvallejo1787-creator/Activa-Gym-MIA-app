@@ -93,6 +93,13 @@
   .hero .big{font-size:32px;font-weight:900;color:#4ADE80;line-height:1}
   .hero .cap{font-size:10px;color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;margin-top:4px}
   .hero .sub2{font-size:11px;color:#bbb;margin-top:7px}
+  /* ── FECHA DE ENTRENAMIENTO ───────────────────────────────────────── */
+  .fecha-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
+  .fecha-lbl{font-size:11px;color:#9CA3AF}
+  .fecha-row input{background:#1c1c1c;border:1px solid #333;border-radius:6px;color:#fff;padding:5px 8px;font-size:12px}
+  .fecha-hoy{background:#1f2937;border:1px solid #374151;border-radius:6px;color:#9CA3AF;padding:5px 9px;font-size:11px}
+  .fecha-aviso{font-size:10px;color:#FBBF24;margin-bottom:6px}
+
   /* ── MEDICIONES CORPORALES ────────────────────────────────────────── */
   .med-card{background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:14px;margin:10px 0}
   .med-row{display:flex;gap:8px;margin:8px 0}
@@ -691,7 +698,13 @@ let RPE_BORRADOR={rpe:null,energia:null,dolor:null,zona:'',nota:''};
 const ZONAS=['Cuello','Hombro','Codo','Muñeca','Espalda alta','Lumbares','Cadera','Rodilla','Tobillo','Otra'];
 
 function fbKey(diaId,sem){ return diaId+'|'+sem; }
-function feedbackDe(diaId,sem){ return (DATA.feedback||[]).find(f=>f.dia_id===diaId&&f.semana===sem)||null; }
+// Antes buscaba solo por (día, semana): si el cliente repetía la misma sesión
+// dos veces en la semana —4 días de entrenamiento con 2 rutinas alternadas—
+// la segunda encuesta pisaba a la primera. Ahora la fecha forma parte de la
+// identidad de la sesión, así que cada vez que la hace puede responderla.
+function feedbackDe(diaId,sem,fecha){
+  return (DATA.feedback||[]).find(f=>f.dia_id===diaId&&f.semana===sem&&f.fecha===(fecha||FECHA_ENTRENO))||null;
+}
 
 function semanaActual(){
   // La semana "en curso" es la última con algo cargado; si no hay nada, la 1.
@@ -702,15 +715,25 @@ function semanaActual(){
 
 function renderRPE(dia){
   const sem=semanaActual();
-  const ya=feedbackDe(dia.id,sem);
+  const ya=feedbackDe(dia.id,sem,FECHA_ENTRENO);
+  const hoy=new Date().toISOString().slice(0,10);
+  const esHoy=FECHA_ENTRENO===hoy;
+  // Selector de la fecha en que entrenó, acotado a 30 días atrás y sin futuro.
+  const selFecha=`<div class="fecha-row">`+
+    `<span class="fecha-lbl">¿Qué día entrenaste?</span>`+
+    `<input type="date" value="${FECHA_ENTRENO}" max="${hoy}" min="${new Date(Date.now()-30*864e5).toISOString().slice(0,10)}" `+
+    `onchange="setFechaEntreno(this.value)">`+
+    (esHoy?'':`<button class="fecha-hoy" onclick="setFechaEntreno('${hoy}')">hoy</button>`)+
+    `</div>`+
+    (esHoy?'':`<div class="fecha-aviso">Estás cargando una sesión del ${FECHA_ENTRENO}, no de hoy.</div>`);
   if(ya){
-    return `<div class="rpedone">✓ Ya registraste cómo te fue en la semana ${sem}:
+    return selFecha+`<div class="rpedone">✓ Ya registraste cómo te fue el ${ya.fecha}:
       <strong style="color:${RPE_COL[ya.rpe_sesion]||'#86EFAC'}">RPE ${ya.rpe_sesion}/10 · ${RPE_TXT[ya.rpe_sesion]||''}</strong>
       ${ya.dolor>0?`<br><span style="color:#FCA5A5">Molestia: ${ya.dolor}/10${ya.dolor_zona?' en '+esc(ya.dolor_zona):''} — tu entrenador lo ve</span>`:''}
-      <br><span style="font-size:10px;color:#6b8f7a;font-weight:400">Se renueva solo la próxima semana.</span></div>`;
+      <br><span style="font-size:10px;color:#6b8f7a;font-weight:400">Si volvés a hacer esta misma rutina otro día, vas a poder responderla de nuevo.</span></div>`;
   }
   const b=RPE_BORRADOR;
-  return `<div class="rpecard">
+  return selFecha+`<div class="rpecard">
     <h4>¿Cómo te fue hoy?</h4>
     <div class="hint">Tocá el número que mejor describa el esfuerzo de esta sesión. Es lo que usa tu entrenador para ajustar las cargas de la semana que viene.</div>
     <div class="rpescale">${[1,2,3,4,5,6,7,8,9,10].map(n=>
@@ -746,7 +769,7 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
   if(!b.rpe) return;
   try{
     const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,
+      body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,fecha:FECHA_ENTRENO,
         rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota})});
     if(!r.ok) throw new Error();
     (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota,fecha:new Date().toISOString().slice(0,10)});
@@ -764,6 +787,17 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
 // funciona del sistema.
 // ═══════════════════════════════════════════════════════════════════════
 const SERIES_ABIERTAS = {};
+
+// Fecha de ENTRENAMIENTO que declara el cliente. Por defecto hoy.
+// Existe porque a veces carga al otro día por olvido, o repasa su seguimiento
+// y corrige algo de días atrás. Sin esto, todo quedaba fechado el día de la
+// carga: 6.523 de 6.523 registros tenían fecha = día en que se tocó el botón.
+let FECHA_ENTRENO = new Date().toISOString().slice(0,10);
+window.setFechaEntreno = (v) => {
+  const hoy = new Date().toISOString().slice(0,10);
+  FECHA_ENTRENO = (!v || v > hoy) ? hoy : v;
+  render();
+};
 window.toggleSeries=(k)=>{SERIES_ABIERTAS[k]=!SERIES_ABIERTAS[k];render();};
 // Qué ejercicios dejó abiertos el cliente. Sobrevive a cada render().
 const EX_ABIERTOS={};
@@ -839,6 +873,11 @@ const COLA_GUARDADO = {};
 const PENDIENTES = {};
 
 async function enviarConReintento(payload, intentos = 3){
+  // La fecha de entrenamiento viaja en TODO guardado de carga. Se inyecta acá
+  // y no en cada punto de llamada para que ninguno se olvide: si un payload
+  // sale sin fecha, el servidor la rellena con hoy y se pierde la distinción
+  // entre el día que entrenó y el día que lo cargó.
+  if(payload && payload.token && !payload.accion && !payload.fecha) payload.fecha = FECHA_ENTRENO;
   for(let n=0;n<intentos;n++){
     try{
       const r = await fetch('/api/portal', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
