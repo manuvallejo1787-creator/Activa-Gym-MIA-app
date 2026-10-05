@@ -1010,6 +1010,13 @@ export function useFeedbackSesiones(clienteId){
 export function useMetas(clienteId){
   const [metas,setMetas]=useState([])
   const [loading,setLoading]=useState(true)
+
+  // BUG QUE ESTO CORRIGE: al cambiar de cliente, `metas` conservaba las del
+  // anterior hasta que volvía la consulta. En una ficha abierta eso se veía
+  // como "a todos les aparecen las mismas metas". Se limpia de entrada: mejor
+  // un instante vacío que un instante mintiendo con datos de otra persona.
+  useEffect(()=>{ setMetas([]); setLoading(true) },[clienteId])
+
   const fetch=useCallback(async()=>{
     if(!isSupabaseReady||!clienteId){setMetas([]);setLoading(false);return}
     try{
@@ -1025,6 +1032,16 @@ export function useMetas(clienteId){
 
   const guardar=useCallback(async(meta)=>{
     if(!isSupabaseReady)throw new Error('Sin conexión a la base')
+    if(!clienteId)throw new Error('No hay cliente seleccionado')
+
+    // SEGUNDO BUG, más grave: si el formulario quedaba abierto con la meta de
+    // otro cliente y se guardaba desde una ficha distinta, el id se conservaba
+    // pero gym_client_id se pisaba con el cliente actual. La meta no se
+    // duplicaba: se MUDABA, y desaparecía del cliente original.
+    // Una meta que ya tiene dueño no cambia de dueño nunca.
+    if(meta.gym_client_id && meta.gym_client_id!==clienteId)
+      throw new Error('Esa meta pertenece a otro cliente. Cerrá el editor y volvé a abrirlo desde la ficha correcta.')
+
     const row={...meta,gym_client_id:clienteId,updated_at:new Date().toISOString()}
     if(!row.id)row.id='meta_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)
     // El índice único deja una sola principal activa: si esta lo es, se bajan

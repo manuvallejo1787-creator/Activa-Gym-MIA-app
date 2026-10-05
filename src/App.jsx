@@ -1125,6 +1125,15 @@ const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Envoltorio del panel de avance que le inyecta las metas del cliente.
+// Existe porque PanelVeredicto es puro (no consulta la base) y el checkpoint
+// necesita mostrar, además del checklist del método, qué vino a buscar el
+// cliente y qué déficits detectó el análisis.
+function PanelVeredictoConMetas({ clienteId, ...props }) {
+  const { metas } = useMetas(clienteId || null);
+  return <PanelVeredicto {...props} metas={metas} />;
+}
+
 // PanelMetas — objetivos MEDIBLES del cliente.
 //
 // Es lo que hace que el portal pueda mostrar una barra que se mueva sola.
@@ -1139,6 +1148,9 @@ function PanelMetas({ clienteId, cliente, exercises, criterios, s }) {
   const [edit, setEdit] = useState(null);
   const [genIA, setGenIA] = useState(false);
   const [errIA, setErrIA] = useState('');
+  // Cinturón además del key: si por cualquier motivo el panel se reutilizara,
+  // el editor abierto no sobrevive al cambio de cliente.
+  useEffect(() => { setEdit(null); setErrIA(''); }, [clienteId]);
   if (!clienteId) return null;
 
   const analisis = (cliente?.screening || {})._ultimoAnalisisIA || null;
@@ -4498,11 +4510,16 @@ export default function App(){
                   })}
                 </div>
               )}
-              <PanelMetas clienteId={c.id} cliente={c} exercises={exs}
+              {/* key por cliente: obliga a React a montar un panel NUEVO por
+                  ficha. Sin esto reutilizaba la instancia y el formulario de
+                  edición abierto viajaba de un cliente a otro. */}
+              <PanelMetas key={'metas_'+c.id} clienteId={c.id} cliente={c} exercises={exs}
                 criterios={criteriosAvanceTemplate[c.nivel]||[]} s={s}/>
               <PanelPercepcion clienteId={c.id}/>
               {avanceAbierto===c.id&&(
-                <PanelVeredicto
+                <PanelVeredictoConMetas
+                  key={'ver_'+c.id}
+                  clienteId={c.id}
                   cliente={c}
                   incidencias={incidencias}
                   siguienteFase={siguienteFase}

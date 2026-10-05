@@ -28,7 +28,7 @@ const TXT_ESTADO   = { cumple: "cumple", no_cumple: "no cumple", sin_medir: "sin
 
 export default function PanelVeredicto({
   cliente, evaluacion = null, tests = [], incidencias = [],
-  siguienteFase, onAvanzar, compacto = false,
+  siguienteFase, onAvanzar, compacto = false, metas = [],
 }) {
   const { metricas, avance } = useMemo(() => {
     const m = computarMetricas(cliente, { evaluacion, tests, incidencias });
@@ -96,6 +96,72 @@ export default function PanelVeredicto({
               {metricas.eva.aproximado && <span style={{ color: AM }}> · aproximado, no es una medición directa</span>}</>
           : <span style={{ color: AM }}>{metricas.eva.motivo || "sin medir"}</span>}
       </div>
+
+      {/* ── OBJETIVOS DEL CLIENTE Y METAS DEL ANÁLISIS ──────────────────
+          Van acá porque el checkpoint es el momento en que se decide si
+          avanza de fase, y esa decisión no se puede tomar mirando solo el
+          checklist del método: hay que ver si lo que el cliente vino a buscar
+          se está moviendo, y si los déficits que detectó el análisis se
+          resolvieron. Los criterios de fase dicen si PUEDE avanzar; las metas
+          dicen si TIENE SENTIDO hacerlo ahora. */}
+      {metas.length > 0 && (() => {
+        const delCliente = metas.filter(m => (m.origen || 'cliente') === 'cliente' && m.estado !== 'propuesta');
+        const deIA = metas.filter(m => m.origen === 'ia' && m.estado !== 'propuesta');
+        const propuestas = metas.filter(m => m.estado === 'propuesta');
+        const fila = (m) => {
+          const ini = m.valor_inicial == null ? null : parseFloat(m.valor_inicial);
+          const obj = m.valor_objetivo == null ? null : parseFloat(m.valor_objetivo);
+          const act = m.valor_manual != null ? parseFloat(m.valor_manual) : null;
+          let pct = null;
+          if (act != null && ini != null && obj != null && obj !== ini)
+            pct = Math.max(0, Math.min(100, Math.round(((act - ini) / (obj - ini)) * 100)));
+          const lograda = act != null && obj != null &&
+            (m.direccion === 'bajar' ? act <= obj : act >= obj);
+          const txt = (v) => v == null ? '—' : String(v).replace('.', ',');
+          return (
+            <div key={m.id} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
+                <span style={{ fontWeight: 600 }}>{lograda ? '🏆 ' : ''}{m.titulo}</span>
+                <span style={{ color: G4, flexShrink: 0, fontSize: 10 }}>
+                  {txt(ini)} → <strong style={{ color: lograda ? GN : G4 }}>{txt(obj)}</strong> {m.unidad || ''}
+                </span>
+              </div>
+              <div style={{ height: 5, background: '#E5E7EB', borderRadius: 99, marginTop: 3, overflow: 'hidden' }}>
+                <div style={{ width: (pct ?? 0) + '%', height: '100%', borderRadius: 99,
+                  background: lograda ? '#CA8A04' : GN, transition: 'width .4s' }}/>
+              </div>
+              {pct == null && (
+                <div style={{ fontSize: 9, color: AM, marginTop: 2 }}>
+                  Sin medición desde que se creó: el avance se ve en el portal, no acá.
+                </div>
+              )}
+            </div>
+          );
+        };
+        return (
+          <div style={{ background: '#fff', border: `1px solid ${G2}`, borderRadius: 7, padding: '8px 10px', marginBottom: 9 }}>
+            {delCliente.length > 0 && (<>
+              <div style={{ fontSize: 10, fontWeight: 700, color: G4, marginBottom: 5 }}>🎯 LO QUE EL CLIENTE VINO A BUSCAR</div>
+              {delCliente.map(fila)}
+            </>)}
+            {deIA.length > 0 && (<>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#6D28D9', margin: '8px 0 5px' }}>🧠 DÉFICITS DEL ANÁLISIS</div>
+              <div style={{ fontSize: 9, color: G4, marginBottom: 5 }}>
+                No bloquean el avance de fase — eso lo decide el checklist del método. Orientan el ciclo.
+              </div>
+              {deIA.map(fila)}
+            </>)}
+            {propuestas.length > 0 && (
+              <div style={{ fontSize: 10, color: '#6D28D9', marginTop: 7, fontWeight: 700 }}>
+                ⏳ {propuestas.length} meta{propuestas.length > 1 ? 's' : ''} propuesta{propuestas.length > 1 ? 's' : ''} sin aprobar — el cliente todavía no la{propuestas.length > 1 ? 's' : ''} ve
+              </div>
+            )}
+            {!delCliente.length && !deIA.length && !propuestas.length && (
+              <div style={{ fontSize: 10, color: G4 }}>Sin objetivos cargados para este cliente.</div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Qué falta medir */}
       {avance.sinMedir.length > 0 && (
