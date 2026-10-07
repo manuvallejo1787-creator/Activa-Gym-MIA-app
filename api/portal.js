@@ -275,11 +275,14 @@ export default async function handler(req, res) {
       // seguimiento y corrige. Se acota a 30 días atrás y nunca al futuro —
       // un registro adelantado no es un olvido, es un error o una invención.
       const fechaEntreno = (() => {
-        const hoy = new Date().toISOString().slice(0, 10);
+        // "Hoy" en hora de Uruguay. En UTC, lo cargado después de las 21 h
+        // quedaba fechado al día siguiente.
+        const hoyUY = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/Montevideo' });
+        const hoy = hoyUY(Date.now());
         const f = String(b.fecha || '').slice(0, 10);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return hoy;
         if (f > hoy) return hoy;
-        const limite = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+        const limite = hoyUY(Date.now() - 30 * 864e5);
         return f < limite ? limite : f;
       })();
       const cli = await clienteDeToken(b.token);
@@ -299,7 +302,7 @@ export default async function handler(req, res) {
         const pct  = num(b.pct_grasa, 3, 65);
         if (peso == null && pct == null)
           return res.status(400).json({ error: "Poné al menos un peso válido" });
-        const hoy = new Date().toISOString().slice(0, 10);
+        const hoy = new Date().toLocaleDateString("en-CA", { timeZone: "America/Montevideo" });
         const fila = {
           id: `med_cli_${cli.id}_${hoy}`,
           gym_client_id: cli.id, fecha: hoy, fuente: "cliente",

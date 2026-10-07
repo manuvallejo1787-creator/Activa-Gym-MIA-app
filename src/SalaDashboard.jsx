@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { computarMetricas } from "./motor.js";
 import { faseActual, diasDesde, PLAZOS } from "./hoy.js";
 import { PERIODIZACIONES, TESTS_FUERZA } from "./planificacion.js";
+import AsistenciaManual from "./AsistenciaManual.jsx";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SalaDashboard — la información que el profe necesita EN EL MOMENTO
@@ -102,6 +103,8 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
 
   return (
     <div style={{ padding: '10px 12px' }}>
+      {/* ── Asistencia de los que todavía no tienen usuario en el portal ── */}
+      <AsistenciaManual />
       {/* ── Selector de quiénes están en sala ─────────────────────────────── */}
       <div style={{ background: BK, border: `1px solid ${G2}`, borderRadius: 10, padding: '11px 13px', marginBottom: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 800, color: WH, marginBottom: 3 }}>🏋️ Quién está en sala</div>
