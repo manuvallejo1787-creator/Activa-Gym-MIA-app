@@ -500,6 +500,22 @@ function getYTEmbed(url){
 }
 
 function render(){
+  // ═══════════════════════════════════════════════════════════════════════
+  // CAUSA DE "SE BORRAN LAS CARGAS DE PESO O REPS".
+  //
+  // Los campos de kg y reps guardan en onblur. render() reemplaza el
+  // innerHTML completo del contenedor, así que el input no pierde el foco:
+  // se DESTRUYE. onblur nunca se dispara y lo tipeado desaparece sin llegar
+  // al servidor. En la base no faltaba nada porque nunca llegó a escribirse.
+  //
+  // Dispara render() cualquiera de: los botones de RPE, energía, dolor y
+  // zona; "series distintas"; la pestaña de día; el selector de fecha de
+  // entrenamiento; y guardar una medición corporal.
+  //
+  // Soltar el foco ANTES de redibujar fuerza el onblur, así el valor se
+  // guarda como si el cliente hubiera salido del campo a mano.
+  try { document.activeElement && document.activeElement.blur(); } catch(e){}
+
   const plan = DATA.plan;
   let html = renderDashboard();
 
@@ -575,15 +591,15 @@ function render(){
           for(let i=1;i<=nSer;i++){
             const dd = det[i-1] || {};
             body += `<div class="serie"><span class="sn">${i}ª</span>`+
-              `<input inputmode="decimal" placeholder="kg" value="${esc(dd.peso??'')}" onblur="guardarSerie(this,${args},${s},${i},'peso')"><span class="u2">kg</span>`+
-              `<input inputmode="numeric" placeholder="reps" value="${esc(dd.reps??'')}" onblur="guardarSerie(this,${args},${s},${i},'reps')"><span class="u2">reps</span>`+
+              `<input inputmode="decimal" placeholder="kg" value="${esc(dd.peso??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'peso'))" onblur="guardarSerie(this,${args},${s},${i},'peso')"><span class="u2">kg</span>`+
+              `<input inputmode="numeric" placeholder="reps" value="${esc(dd.reps??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'reps'))" onblur="guardarSerie(this,${args},${s},${i},'reps')"><span class="u2">reps</span>`+
               `</div>`;
           }
           body += `<div style="font-size:9px;color:#666;margin-top:4px">Se guarda solo. El resumen usa la serie más pesada y el total de repeticiones.</div>`;
         }else{
           body += `<div class="serie"><span class="sn" style="flex:0 0 46px;font-size:9px">TODAS</span>`+
-            `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" onblur="guardar(this,${args},${s},'peso')"><span class="u2">kg</span>`+
-            `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" onblur="guardar(this,${args},${s},'reps')"><span class="u2">reps</span>`+
+            `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'peso'))" onblur="guardar(this,${args},${s},'peso')"><span class="u2">kg</span>`+
+            `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'reps'))" onblur="guardar(this,${args},${s},'reps')"><span class="u2">reps</span>`+
             `</div>`;
         }
         body += `</div>`;
@@ -836,6 +852,24 @@ window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre
   });
 };
 
+// Guardado mientras tipea, 800 ms desde la última tecla.
+// Segundo cinturón sobre el onblur: en el celular hay formas de salir del
+// campo que no disparan blur (cambiar de app, cerrar la pestaña, el teclado
+// que se cierra solo). Con esto el valor llega al servidor igual.
+const TIPEO_TIMERS = {};
+window.alTipear = (inp, fn) => {
+  const k = inp.dataset.tk || (inp.dataset.tk = 'tk_' + Math.random().toString(36).slice(2, 9));
+  clearTimeout(TIPEO_TIMERS[k]);
+  TIPEO_TIMERS[k] = setTimeout(() => {
+    // Marca el guardado como automático: el tilde verde del campo sí se
+    // muestra, pero no el aviso flotante. Un "Guardado ✓" en cada pausa de
+    // tipeo, en mitad de una serie, es ruido.
+    inp.dataset.auto = '1';
+    try { fn(); } catch(e){ console.warn(e); }
+    setTimeout(() => { delete inp.dataset.auto; }, 50);
+  }, 800);
+};
+
 window.setDia = i => { activeDia = i; render(); };
 // Si el cliente cierra o cambia de pestaña con guardados todavía en camino,
 // el navegador pregunta antes de salir.
@@ -899,6 +933,7 @@ window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nomb
   const prev = LOGMAP[k] || {};
   const actual = prev[col] == null ? '' : String(prev[col]);
   if(val === actual) return;                              // no cambió nada: no se envía
+  const auto = inp.dataset.auto === '1';                  // vino del tipeo, no del blur
 
   // 1) Optimista: el próximo guardado ya ve este valor.
   LOGMAP[k] = { ...prev, plan_id, [col]: (campo==='peso' && val==='') ? null : val, updated_at: new Date().toISOString() };
@@ -913,7 +948,7 @@ window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nomb
     PENDIENTES[k]--;
     if(ok){
       inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
-      if(!PENDIENTES[k]) toast('Guardado ✓', true);
+      if(!PENDIENTES[k] && !auto) toast('Guardado ✓', true);
       const idx = (DATA.logs||[]).findIndex(l=>l.dia_id===dia_id&&l.ejercicio_id===ejercicio_id&&l.semana===semana);
       const fila = { dia_id, ejercicio_id, semana, ...LOGMAP[k] };
       if(idx>=0) DATA.logs[idx] = fila; else (DATA.logs = DATA.logs||[]).push(fila);
