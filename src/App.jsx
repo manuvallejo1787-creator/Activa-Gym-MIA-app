@@ -2097,6 +2097,7 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
         ['mov_tor_rot','Rotación torácica',45],
         ['mov_cad_flex','Flexión de cadera',120],
         ['mov_cad_rot','Rotación interna de cadera',45],
+        ['mov_cad_rot_ext','Rotación externa de cadera',45],
         ['mov_tobillo_wblt','Dorsiflexión de tobillo (WBLT)',38],
         ['mov_tobillo','Dorsiflexión de tobillo (protocolo anterior)',20],
       ];
@@ -2270,7 +2271,7 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
     const posturaRows=Object.keys(POSTURA_LBL).filter(k=>sc[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}${sc[k]===POSTURA_DEF[k]?' (normal)':''}`);
     const posturaTxt=posturaRows.length?posturaRows.join('; '):'NO REGISTRADA';
     // ── Movilidad articular / ángulos (N/L/ML/D con referencias) ──
-    const MOV=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)','ref ≥38° · limitado <35°'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)','campo histórico — no comparable'],['mov_cad_rot','Rotación interna cadera','ref 40-45°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
+    const MOV=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)','ref ≥38° · limitado <35°'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)','campo histórico — no comparable'],['mov_cad_rot','Rotación interna cadera (prono)','ref 45°'],['mov_cad_rot_ext','Rotación externa cadera (prono)','ref 45° · arco RI+RE ≥70°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
     const GMAP={N:'Óptimo',L:'Limitado (leve)',ML:'Muy limitado (severo)',D:'Dolor'};
     const movRows=MOV.map(([k,lbl,ref])=>{
       const d=sc[k+'_DBil'],i=sc[k+'_Izq'],g=sc[k+'_grados'];
@@ -3190,8 +3191,13 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
               // intercambiables, así que comparten ficha pero no campo: si
               // compartieran clave, la primera reevaluación mostraría una
               // mejora de 20° que sería solo el cambio de instrumento.
-              ['mov_tobillo_wblt','Dorsiflexión tobillo (lunge en carga)','Normal ≥38° · Limitado <35° · foto de perfil',{region:'tobillo',mov:'Dorsiflexión WBLT'}],
-              ['mov_cad_rot','Rotación interna cadera','Normal 40-45° · Disfunc <30°',null],
+              ['mov_tobillo_wblt','Dorsiflexión tobillo (lunge en carga)','Óptimo ≥35° · Limitado 30-35° · Disfunc <30° · asimetría ≥4°',{region:'tobillo',mov:'Dorsiflexión WBLT'}],
+              // La RI de cadera sola no se puede interpretar: 13-68° de rango
+              // en la base, CV 36%, que es versión femoral y no tejido blando.
+              // Con la RE al lado se calcula el arco total y recién ahí se
+              // distingue restricción real de retroversión.
+              ['mov_cad_rot','Rotación interna cadera (prono)','Prono, tibias hacia afuera · ref 45°',null],
+              ['mov_cad_rot_ext','Rotación externa cadera (prono)','Prono, tibias hacia la línea media · ref 45° · arco RI+RE ≥70°',null],
               ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°',{region:'cadera',mov:'Flexión'}],
               ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°',null],
               ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°',{region:'hombro',mov:'Flexión'}],
@@ -4451,7 +4457,7 @@ export default function App(){
                     const color=comparable?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
                     return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi||'—'}${vi&&unidad?' '+unidad:''} → <strong style="color:${color}">${vf||'—'}${vf&&unidad?' '+unidad:''}</strong></span></div>`;
                   };
-                  const MOVX=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
+                  const MOVX=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_rot_ext','Rotación externa cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
                   const PVFIX=[['pvfi_chair_stand','30s Chair Stand','reps'],['pvfi_dino_d','Dinamometría der','kg'],['pvfi_dino_i','Dinamometría izq','kg'],['pvfi_tug','TUG','seg'],['pvfi_plancha_elev','Plancha elevada','seg'],['pvfi_wallsit','Wall sit 90°','seg'],['pvfi_pushup_rod','Push-up rodillas','reps'],['pvfi_plancha_suelo','Plancha suelo','seg'],['pvfi_row_iso','Row isométrico','seg'],['pvfi_dino2','Dinamometría TS','kg']];
                   const movsComp=MOVX.filter(([k])=>scA[k+'_grados']||scB[k+'_grados']);
                   const pvfiComp=PVFIX.filter(([k])=>scA[k]||scB[k]);

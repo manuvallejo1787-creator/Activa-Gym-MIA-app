@@ -220,7 +220,29 @@ export const ROM_GYM = [
   { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70,  mdc: 8  },
   { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45,  mdc: 8  },
   { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120, mdc: 10 },
-  { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8  },
+
+  // ─── Rotación de cadera ────────────────────────────────────────────────────
+  // Protocolo: prono, rodillas a 90°, dejando caer las tibias. Hacia afuera =
+  // rotación INTERNA; cruzando hacia la línea media = rotación EXTERNA.
+  // En prono se mide más rango rotacional que en sedestación y en supino
+  // (Bierma-Zeinstra 1998, Clin Rehabil, DOI 10.1191/026921598677459668), y
+  // las posiciones no son intercambiables: una referencia tomada de
+  // sedestación no aplica acá.
+  //
+  // POR QUÉ NO ALCANZA CON LA RI SOLA: medida sobre los 66 registros de la
+  // base, la RI va de 13° a 68° con un CV del 36%, contra 15-19% de las
+  // rotaciones de hombro en la misma población. Esa dispersión es versión
+  // femoral — anteversión sube la RI y baja la RE, retroversión lo inverso —
+  // y es hueso, no tejido blando. Con un umbral absoluto sobre la RI quedaba
+  // marcado el 55% de los clientes como limitados, mezclando restricción real
+  // con arquitectura normal. Prescribir movilidad contra una retroversión no
+  // mejora la cadera: el segmento que cede es el lumbar.
+  //
+  // El discriminador es el ARCO TOTAL (RI + RE): la cadera retrovertida tiene
+  // RI baja, RE alta y arco normal; la restringida tiene el arco reducido.
+  { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8,
+    arco: { par: 'mov_cad_rot_ext', min: 70, etiqueta: 'Arco de rotación de cadera' } },
+  { k: 'mov_cad_rot_ext', label: 'Rotación externa de cadera',   ref: 45,  mdc: 8  },
 
   // ─── Tobillo ───────────────────────────────────────────────────────────────
   // Protocolo nuevo: test de lunge en carga (WBLT) con ángulo calculado por
@@ -230,7 +252,22 @@ export const ROM_GYM = [
   // más de 6° de error del inclinómetro (Langarika-Rocafort 2016, Phys Ther
   // Sport, DOI 10.1016/j.ptsp.2016.06.010). Dos landmarks, plano sagital: lo
   // mide el estimador de pose mejor que el goniómetro.
-  { k: 'mov_tobillo_wblt', label: 'Dorsiflexión de tobillo (WBLT)', ref: 38, corte: 35, mdc: 2 },
+  // Bandas y umbral de asimetría según el protocolo de Manu (14/10/2026),
+  // medido con regla desde el maléolo externo hasta la rodilla:
+  //   ≥35° óptimo · 30-35° funcional pero limitado · <30° disfuncional
+  //   ≥4° de diferencia entre lados = asimetría relevante
+  // El criterio de asimetría es ABSOLUTO y reemplaza al 15% relativo: 15% de
+  // 38° serían 5,7°, más permisivo que el criterio clínico. Y 4° está por
+  // encima del MDC del método dentro de una misma sesión (2,1° para la
+  // asimetría, Howe 2020), así que es detectable.
+  //
+  // OJO con el seguimiento entre sesiones: medido a mano con regla, el MDC del
+  // WBLT sube a 4,6-4,7° (Powden 2015, DOI 10.1016/j.math.2015.01.004). Un
+  // cambio de 4° entre una evaluación y la siguiente NO es distinguible del
+  // error si se midió a mano; medido por pose, sí (MDC 1,7°).
+  { k: 'mov_tobillo_wblt', label: 'Dorsiflexión de tobillo (WBLT)', ref: 38,
+    bandas: [{ bajo: 30, nivel: 'disfuncional' }, { bajo: 35, nivel: 'funcional pero limitado' }],
+    asimAbs: 4, mdc: 2 },
 
   // Protocolo viejo: campo `mov_tobillo`. Se conserva SOLO para no perder el
   // histórico. El cálculo anterior tomaba el ángulo rodilla-tobillo-dedos y le
@@ -262,6 +299,15 @@ export function parseGrados(t) {
 
 export function calcROMGym(screening = {}) {
   const detalle = [], limitados = [], asimetrias = [], invalidos = [];
+  // `estructurales`: déficit explicado por arquitectura ósea, no entrenable.
+  // `ambiguos`: falta el componente opuesto para poder decidir.
+  const estructurales = [], ambiguos = [];
+  // Movimientos que se juzgan por el arco combinado y NO por su propio valor
+  // absoluto. Si emitieran las dos cosas, una RI de 35° con RE de 35° daría
+  // arco normal de 70° y además dos limitaciones por el 80% de la referencia:
+  // tres veredictos contradictorios sobre la misma cadera.
+  const porArco = new Set();
+  ROM_GYM.filter(m => m.arco).forEach(m => { porArco.add(m.k); porArco.add(m.arco.par); });
   let suma = 0, n = 0;
   // Si el tobillo ya está medido con el protocolo nuevo, el campo viejo no
   // vuelve a entrar al cálculo: queda solo como histórico.
@@ -288,35 +334,99 @@ export function calcROMGym(screening = {}) {
     const pct = Math.round(Math.min(peor / m.ref * 100, 100));
     detalle.push({ mov: m.label, der, izq, ref: m.ref, pct });
 
-    // Punto de corte clínico si el movimiento lo tiene; si no, 80% de la ref.
-    const umbral = m.corte != null ? m.corte : 0.8 * m.ref;
-    if (peor < umbral) {
-      limitados.push(m.corte != null
-        ? `${m.label}: ${peor}° (corte <${m.corte}°)`
-        : `${m.label}: ${pct}% del rango normal`);
+    // Bandas clínicas si el movimiento las tiene (se evalúa de peor a mejor);
+    // si no, punto de corte absoluto; si no, 80% de la referencia.
+    if (porArco.has(m.k)) {
+      // El veredicto lo da el bloque de arco, más abajo.
+    } else if (m.bandas) {
+      const banda = [...m.bandas].sort((a, b) => a.bajo - b.bajo).find(b => peor < b.bajo);
+      if (banda) limitados.push(`${m.label}: ${peor}° — ${banda.nivel} (<${banda.bajo}°)`);
+    } else {
+      const umbral = m.corte != null ? m.corte : 0.8 * m.ref;
+      if (peor < umbral) {
+        limitados.push(m.corte != null
+          ? `${m.label}: ${peor}° (corte <${m.corte}°)`
+          : `${m.label}: ${pct}% del rango normal`);
+      }
     }
 
     if (der != null && izq != null) {
       const may = Math.max(der, izq);
       const dif = Math.abs(der - izq);
       const difPct = may > 0 ? dif / may * 100 : 0;
-      // Doble criterio: relativo Y absoluto. El 15% solo no alcanza — sobre
-      // arcos cortos se cumple con diferencias que están dentro del error.
-      if (difPct >= 15 && dif >= (m.mdc ?? 0)) asimetrias.push({
+      // Dos criterios posibles. `asimAbs` = umbral clínico en grados, y manda
+      // solo. Si no, relativo Y absoluto: el 15% por sí mismo no alcanza —
+      // sobre arcos cortos se cumple con diferencias que caen dentro del error
+      // del instrumento.
+      const marca = m.asimAbs != null
+        ? dif >= m.asimAbs
+        : (difPct >= 15 && dif >= (m.mdc ?? 0));
+      if (marca) asimetrias.push({
         mov: m.label, der, izq, dif,
         difPct: Math.round(difPct * 10) / 10,
         mdc: m.mdc ?? 0,
+        criterio: m.asimAbs != null ? `≥${m.asimAbs}°` : '≥15%',
         ladoCorto: der < izq ? 'derecho' : 'izquierdo',
       });
     }
   });
 
-  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [], invalidos };
+  // ─── Arco de rotación: separa restricción real de versión femoral ─────────
+  // Una cadera retrovertida tiene RI baja, RE alta y arco total normal. Una
+  // cadera restringida tiene el arco reducido. Sin los dos componentes, una RI
+  // baja es ambigua y no se puede decidir si el déficit es entrenable.
+  ROM_GYM.filter(m => m.arco).forEach(m => {
+    const a = parseGrados(screening[m.k + '_grados']);
+    const b = parseGrados(screening[m.arco.par + '_grados']);
+    const otro = ROM_GYM.find(x => x.k === m.arco.par);
+    ['der', 'izq'].forEach(lado => {
+      if (a[lado] == null) return;
+      const nombreLado = lado === 'der' ? 'derecha' : 'izquierda';
+      // Sin el componente de rotación externa no se puede interpretar.
+      if (b[lado] == null) {
+        if (a[lado] < 0.8 * m.ref) ambiguos.push({
+          mov: m.label, lado: nombreLado, valor: a[lado],
+          motivo: `${a[lado]}° de ${m.label.toLowerCase()} (${nombreLado}) sin ${otro?.label.toLowerCase() || 'el componente opuesto'}: `
+                + `no se puede distinguir restricción de versión femoral. Falta medir el arco completo.`,
+        });
+        return;
+      }
+      const arco = a[lado] + b[lado];
+      detalle.push({ mov: `${m.arco.etiqueta} (${nombreLado})`, der: null, izq: null,
+                     ref: m.arco.min, pct: Math.round(Math.min(arco / m.arco.min * 100, 100)), arco });
+      const refRI = m.ref, refRE = otro?.ref ?? m.ref;
+      if (arco < m.arco.min) {
+        limitados.push(`${m.arco.etiqueta} ${nombreLado}: ${arco}° (RI ${a[lado]}° + RE ${b[lado]}°, mínimo ${m.arco.min}°) — restricción real`);
+      } else if (a[lado] < 0.8 * refRI && b[lado] >= refRE) {
+        // Arco normal, RI baja y RE por encima de su referencia: la movilidad
+        // total está y lo que cambia es el reparto. Eso es geometría del cuello
+        // femoral, no tejido blando, y no es un objetivo de movilidad.
+        // Hace falta que la RE esté ALTA: si ambas están bajas con arco apenas
+        // suficiente, no es un patrón de versión — es un arco en el límite.
+        estructurales.push({
+          mov: m.label, lado: nombreLado, ri: a[lado], re: b[lado], arco,
+          nota: `RI ${a[lado]}° con RE ${b[lado]}° y arco de ${arco}° (normal ≥${m.arco.min}°): `
+              + `compatible con retroversión femoral, no con restricción de tejido blando. `
+              + `No prescribir movilidad rotacional por este hallazgo. `
+              + `Para confirmarlo: test de Craig en la misma posición de prono.`,
+        });
+      } else if (b[lado] < 0.8 * refRE && a[lado] >= refRI) {
+        estructurales.push({
+          mov: otro?.label || 'Rotación externa de cadera', lado: nombreLado, ri: a[lado], re: b[lado], arco,
+          nota: `RE ${b[lado]}° con RI ${a[lado]}° y arco de ${arco}° (normal ≥${m.arco.min}°): `
+              + `compatible con anteversión femoral, no con restricción de tejido blando. `
+              + `Para confirmarlo: test de Craig en la misma posición de prono.`,
+        });
+      }
+    });
+  });
+
+  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [], invalidos, estructurales, ambiguos };
   return {
     medido: true,
     pct: Math.round(suma / n),
     detalle: detalle.sort((a, b) => a.pct - b.pct),
-    limitados, asimetrias, invalidos, n,
+    limitados, asimetrias, invalidos, estructurales, ambiguos, n,
   };
 }
 
@@ -517,6 +627,8 @@ export function resumenDeterminista(cliente, metricas, avance) {
     if (rg?.medido) {
       if (rg.limitados.length) L.push(`  · limitados: ${rg.limitados.join('; ')}`);
       if (rg.asimetrias.length) L.push(`  · asimetrías ≥15% y por encima del error de medición: ${rg.asimetrias.map(a => `${a.mov} D ${a.der}° / I ${a.izq}° (${a.difPct}%, ${a.dif}°, corto ${a.ladoCorto})`).join('; ')}`);
+      if (rg.estructurales?.length) L.push(`  · déficit NO entrenable (arquitectura ósea): ${rg.estructurales.map(e => `${e.mov} ${e.lado} — ${e.nota}`).join(' | ')}`);
+      if (rg.ambiguos?.length) L.push(`  · sin interpretar: ${rg.ambiguos.map(a => a.motivo).join(' | ')}`);
       if (rg.invalidos?.length) L.push(`  · SIN MEDIR por protocolo inválido: ${rg.invalidos.map(i => `${i.mov} (${i.motivo})`).join('; ')}`);
     }
   } else L.push(`ROM: sin medir`);

@@ -412,7 +412,17 @@ export function generarPlanBase({
     if (!patronesDeficit.includes('unilateral')) patronesDeficit.unshift('unilateral');
     if (!patronesDeficit.includes('propioc')) patronesDeficit.push('propioc');
   }
-  (m.romGym?.limitados || []).forEach(l => {
+  // Los hallazgos ambiguos (falta el componente opuesto para interpretarlos)
+  // SÍ alimentan los patrones de déficit: no afirmamos que haya restricción,
+  // pero tampoco dejamos de programar movilidad mientras falte el dato.
+  // Los `estructurales` NO entran: ahí hay evidencia positiva de que el
+  // déficit es arquitectura ósea, y forzar rango rotacional sobre una cadera
+  // retrovertida no mejora la cadera — carga el lumbar.
+  const fuentesDeficit = [
+    ...(m.romGym?.limitados || []),
+    ...(m.romGym?.ambiguos || []).map(a => `${a.mov}: sin interpretar`),
+  ];
+  fuentesDeficit.forEach(l => {
     const mov = norm(l.split(':')[0]);
     if (mov.includes('hombro')) patronesDeficit.push('hombro');
     if (mov.includes('cadera')) patronesDeficit.push('cadera');
