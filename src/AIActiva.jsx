@@ -398,6 +398,13 @@ IMPORTANTE: Usá SOLO alimentos de esta lista (ID exacto):
 ${alimentosList}
 
 Generá menús para ${diasTarget} días. Respondé ÚNICAMENTE con este JSON:
+
+REGLAS DEL FORMATO (si no se cumplen, el plan no se puede aplicar):
+- "dia" debe ser uno de estos valores EXACTOS, con tilde: Lunes, Martes, Miércoles, Jueves, Viernes, Sábado, Domingo. No uses "Día 1" ni minúsculas.
+- "alimentoId" debe ser un ID EXACTO de la lista de arriba. No inventes IDs ni uses el nombre del alimento.
+- "dias" va en la raíz del JSON, no anidado dentro de otra clave.
+- Las comidas van dentro de "comidas", no sueltas en el día.
+
 {
   "titulo": "nombre del plan",
   "resumen": "descripción breve (1 línea)",

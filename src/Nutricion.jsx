@@ -559,25 +559,125 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
     });
   }, [planActivo, diaActivo, comidaActiva]);
 
-  // ─── PDF EXPORT ────────────────────────────────────────────────────────────
+  // ─── APLICAR UN PLAN GENERADO POR LA IA ────────────────────────────────────
+  //
+  // POR QUÉ ESTO ES ASÍ DE DEFENSIVO:
+  // La versión anterior exigía que la IA devolviera EXACTAMENTE la forma del
+  // ejemplo del prompt. Cualquier desvío daba cero alimentos aplicados, y en
+  // los casos peores vaciaba el día — todo sin un solo mensaje de error, con
+  // el botón "Aplicar" comportándose como si hubiera funcionado.
+  //
+  // Formas reales en que un LLM se desvía, todas probadas:
+  //   · "Miercoles" sin tilde      -> el día no existe en semana, se salta
+  //   · "lunes" en minúscula       -> idem
+  //   · "Día 1", "Dia 1"           -> idem
+  //   · IDs de alimento inventados -> el filtro los borra, día vacío
+  //   · comidas en la raíz del día -> no encuentra .comidas, día vacío
+  //   · {plan:{dias:[...]}}        -> no encuentra .dias, no aplica nada
+  //
+  // Ahora: se normaliza el nombre del día, se aceptan las formas alternativas,
+  // los alimentos se resuelven por id y por nombre, y un día que no produjo
+  // ningún alimento NO se escribe (antes borraba lo que ya había).
+
+  // "Miércoles" -> "miercoles": sin tildes, sin espacios, minúscula.
+  const claveDia = (s) => String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .trim().toLowerCase();
+
   const applyAIPlan = (aiResult) => {
-    if (!planActivo) return;
-    const nuevaSemana = { ...planActivo.semana };
-    (aiResult.dias || []).forEach(diaData => {
-      const diaNombre = diaData.dia;
-      if (!nuevaSemana[diaNombre]) return;
-      const comidas = {};
-      COMIDAS.forEach(c => {
-        const items = (diaData.comidas?.[c.id] || [])
-          .filter(it => todosAlimentos.find(a => a.id === it.alimentoId))
-          .map(it => ({ id: genNutId('it'), alimentoId: it.alimentoId, gramos: parseFloat(it.gramos) || 100 }));
-        comidas[c.id] = items;
-      });
-      nuevaSemana[diaNombre] = comidas;
+    if (!planActivo) {
+      alert('Primero creá un plan de nutrición: la IA necesita un plan donde volcar los menús.');
+      return;
+    }
+
+    // La IA a veces envuelve el resultado. Se acepta cualquiera de las formas.
+    const dias = aiResult?.dias || aiResult?.plan?.dias || aiResult?.semana?.dias
+      || (Array.isArray(aiResult) ? aiResult : null);
+    if (!Array.isArray(dias) || !dias.length) {
+      alert('La IA no devolvió días en un formato reconocible. Probá "Regenerar".');
+      return;
+    }
+
+    // Índice de los días reales del plan por su clave normalizada.
+    const porClave = {};
+    Object.keys(planActivo.semana || {}).forEach(d => { porClave[claveDia(d)] = d; });
+    const ordenDias = Object.keys(planActivo.semana || {});
+
+    // Resolución de alimento: primero por id exacto, después por id
+    // normalizado, y por último por nombre. Un LLM que escribe
+    // "pechuga_pollo" en vez de "pollo" no debería costar la comida entera.
+    const porId = {}, porNombre = {};
+    (todosAlimentos || []).forEach(a => {
+      porId[claveDia(a.id)] = a;
+      if (a.nombre) porNombre[claveDia(a.nombre)] = a;
     });
-    const nuevoPlan = { ...planActivo, semana: nuevaSemana, notas: (aiResult.consejos || []).join(' · ') || planActivo.notas };
+    const resolverAlimento = (ref) => {
+      if (!ref) return null;
+      const k = claveDia(ref);
+      return porId[k] || porNombre[k]
+        || (todosAlimentos || []).find(a => claveDia(a.nombre).includes(k) || k.includes(claveDia(a.id)))
+        || null;
+    };
+
+    const nuevaSemana = { ...planActivo.semana };
+    const sinUbicar = [], sinAlimentos = [];
+    let diasAplicados = 0, itemsAplicados = 0, itemsDescartados = 0;
+
+    dias.forEach((diaData, i) => {
+      // Nombre del día: normalizado, o por posición si vino como "Día 1".
+      let destino = porClave[claveDia(diaData?.dia || diaData?.nombre)];
+      if (!destino) {
+        const m = String(diaData?.dia || '').match(/(\d+)/);
+        const idx = m ? parseInt(m[1], 10) - 1 : i;
+        destino = ordenDias[idx];
+      }
+      if (!destino) { sinUbicar.push(diaData?.dia || `(posición ${i + 1})`); return; }
+
+      // Las comidas pueden venir en .comidas o directamente en la raíz del día.
+      const fuente = diaData?.comidas || diaData;
+      const comidas = {};
+      let itemsDelDia = 0;
+      COMIDAS.forEach(c => {
+        const lista = Array.isArray(fuente?.[c.id]) ? fuente[c.id] : [];
+        const items = [];
+        lista.forEach(it => {
+          const al = resolverAlimento(it?.alimentoId || it?.id || it?.alimento || it?.nombre);
+          if (!al) { itemsDescartados++; return; }
+          items.push({ id: genNutId('it'), alimentoId: al.id, gramos: parseFloat(it?.gramos) || 100 });
+        });
+        comidas[c.id] = items;
+        itemsDelDia += items.length;
+      });
+
+      // Si un día no produjo NINGÚN alimento, no se escribe: vaciar el día
+      // sería destruir lo que ya estaba cargado a cambio de nada.
+      if (!itemsDelDia) { sinAlimentos.push(destino); return; }
+      nuevaSemana[destino] = comidas;
+      diasAplicados++; itemsAplicados += itemsDelDia;
+    });
+
+    if (!diasAplicados) {
+      alert('No se aplicó nada: ningún día de la IA pudo volcarse al plan.\n\n' +
+        (sinUbicar.length ? `Días que no se reconocieron: ${sinUbicar.join(', ')}\n` : '') +
+        (itemsDescartados ? `Alimentos que no existen en la base: ${itemsDescartados}\n` : '') +
+        '\nProbá "Regenerar".');
+      return;
+    }
+
+    const nuevoPlan = { ...planActivo, semana: nuevaSemana,
+      notas: (aiResult.consejos || []).join(' · ') || planActivo.notas };
     setPlanActivo(nuevoPlan);
     setPlanes(ps => ps.map(pl => pl.id === nuevoPlan.id ? nuevoPlan : pl));
+
+    // Resultado explícito. El botón "Aplicar" ya no puede mentir, y recuerda
+    // que esto todavía vive en memoria: sin "Guardar plan" no queda nada.
+    const avisos = [];
+    if (sinUbicar.length) avisos.push(`No se reconocieron estos días: ${sinUbicar.join(', ')}.`);
+    if (sinAlimentos.length) avisos.push(`Sin alimentos válidos (se dejaron como estaban): ${sinAlimentos.join(', ')}.`);
+    if (itemsDescartados) avisos.push(`${itemsDescartados} alimento/s de la IA no existen en la base y se descartaron.`);
+    alert(`Plan aplicado: ${diasAplicados} día/s, ${itemsAplicados} alimento/s.` +
+      (avisos.length ? `\n\n${avisos.join('\n')}` : '') +
+      `\n\nTocá "💾 Guardar plan" para que quede guardado.`);
   };
 
   const exportarPDF = () => {
