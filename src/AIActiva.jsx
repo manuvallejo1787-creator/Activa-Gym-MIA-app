@@ -378,9 +378,16 @@ export function AIGeneradorNutricion({ cliente, objetivoNut, todosAlimentos, reg
   const generar = async () => {
     setLoading(true); setError(null); setResult(null);
     try {
-      const alimentosList = todosAlimentos.slice(0, 100)
-        .map(a => `${a.id}|${a.nombre}|P:${a.proteinas}g C:${a.carbos}g G:${a.grasas}g ${a.calorias}kcal`)
-        .join("\n");
+      // Antes se mandaban solo los primeros 100 de ~190 alimentos: los otros
+      // 90 eran invisibles para la IA y nunca los podía proponer, sin que
+      // nada lo dijera. Ahora van todos, con un formato más compacto para
+      // que el prompt no crezca: se quitan las unidades repetidas y las
+      // etiquetas, que la IA infiere del encabezado.
+      const alimentosList =
+        'id|nombre|prot|carb|gras|kcal (por 100 g)\n' +
+        todosAlimentos
+          .map(a => `${a.id}|${a.nombre}|${a.proteinas}|${a.carbos}|${a.grasas}|${a.calorias}`)
+          .join("\n");
 
       const prompt = `Generá un plan nutricional semanal en JSON para este cliente de ACTIVA Fitness Club:
 

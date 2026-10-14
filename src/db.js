@@ -6,6 +6,74 @@ export const genId = (prefix = 'id') =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
 
 // ─── HOOK: Clientes del Gym ───────────────────────────────────────────────
+// ─── SANEADO DE LA FICHA ANTES DE GUARDAR ──────────────────────────────────
+//
+// POR QUÉ: la fecha de evaluación de una clienta quedó como "262026-12-06"
+// (un año de seis dígitos). Se corrigió en la base el 30/09 y VOLVIÓ. El
+// formulario no era el culpable: DateInput valida y solo propaga fechas
+// reales. El valor corrupto vivía en `screening_historial` — las dos
+// versiones guardadas lo tenían — y volvía cada vez que la ficha se
+// re-guardaba arrastrando el historial.
+//
+// Una fecha así no es cosmética: `new Date('262026-12-06')` es inválida y
+// `toISOString()` sobre ella lanza RangeError. Una sola ficha con ese valor
+// dejaba a TODOS sin app.
+//
+// Por eso el saneado va acá, en el único punto por donde pasan todos los
+// guardados, y no en cada formulario: cubre el alta, la edición, la
+// restauración de historial y cualquier camino futuro.
+
+const FECHAS_SCREENING = ['fechaEvaluacion', 'pvfi_proxima_eval', 'fechaNac', 'proximaEval'];
+const ANTROPOMETRIA = ['peso','talla','imc','pctGrasa','fcReposo','per_cintura','per_cadera',
+  'per_cintura_escapular','per_brazo_d','per_brazo_i','per_muslo_d','per_muslo_i',
+  'per_pantorrilla_d','per_pantorrilla_i'];
+
+const sanearScreening = (sc) => {
+  if (!sc || typeof sc !== 'object') return sc;
+  const out = { ...sc };
+  FECHAS_SCREENING.forEach(k => {
+    const v = out[k];
+    if (v == null || v === '') return;
+    // Debe ser aaaa-mm-dd Y existir de verdad en el calendario.
+    const t = String(v);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) { out[k] = ''; return; }
+    const d = new Date(t + 'T12:00:00');
+    if (isNaN(d.getTime())) { out[k] = ''; return; }
+    // JS no rechaza "2026-02-31": lo corre al 3 de marzo. Se compara la fecha
+    // resultante con la escrita para detectar esos días que no existen.
+    if (d.toISOString().slice(0, 10) !== t) { out[k] = ''; return; }
+    const anio = parseInt(t.slice(0, 4), 10);
+    if (anio < 1900 || anio > 2100) out[k] = '';
+  });
+  ANTROPOMETRIA.forEach(k => {
+    const v = out[k];
+    if (v == null || v === '') return;
+    const s = String(v).trim().replace(',', '.');
+    if (/^[0-9]+\.?[0-9]*$/.test(s)) { out[k] = s; return; }
+    // Se limpia SOLO la basura de los extremos: "`160" -> "160".
+    // Lo que separa dígitos NO se toca. Un peso "67/85" puede ser 67,85 o una
+    // tensión arterial en el campo equivocado; sacarle la barra daría 6785 kg,
+    // que es peor que dejarlo roto. Un dato clínico ambiguo lo resuelve una
+    // persona, no una expresión regular.
+    const limpio = s.replace(/^[^0-9]+/, '').replace(/[^0-9]+$/, '');
+    if (/^[0-9]+(\.[0-9]+)?$/.test(limpio)) out[k] = limpio;
+  });
+  return out;
+};
+
+const sanearCliente = (c) => {
+  if (!c || typeof c !== 'object') return c;
+  const out = { ...c, screening: sanearScreening(c.screening) };
+  // El historial también: es de donde volvía la corrupción.
+  const hist = out.screening_historial ?? out.screeningHistorial;
+  if (Array.isArray(hist)) {
+    const limpio = hist.map(h => (h && h.screening) ? { ...h, screening: sanearScreening(h.screening) } : h);
+    if ('screening_historial' in out) out.screening_historial = limpio;
+    if ('screeningHistorial' in out) out.screeningHistorial = limpio;
+  }
+  return out;
+};
+
 export function useGymClients() {
   const [clients, setClients]   = useState([])
   const [loading, setLoading]   = useState(true)
@@ -67,7 +135,7 @@ export function useGymClients() {
   // esto queda resuelto.
   const saveClient = useCallback(async (client) => {
     const fresh = clientsRef.current.find(x => x.id === client.id)
-    const merged = fresh ? { ...fresh, ...client } : client
+    const merged = sanearCliente(fresh ? { ...fresh, ...client } : client)
     setClients(prev => fresh ? prev.map(x => x.id === client.id ? merged : x) : [merged, ...prev])
     if (dbMode && isSupabaseReady) {
       const { error: e } = await supabase

@@ -584,7 +584,7 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .trim().toLowerCase();
 
-  const applyAIPlan = (aiResult) => {
+  const applyAIPlan = async (aiResult) => {
     if (!planActivo) {
       alert('Primero creá un plan de nutrición: la IA necesita un plan donde volcar los menús.');
       return;
@@ -669,6 +669,28 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
     setPlanActivo(nuevoPlan);
     setPlanes(ps => ps.map(pl => pl.id === nuevoPlan.id ? nuevoPlan : pl));
 
+    // Se guarda en la base al aplicar, no solo en memoria. Antes "aplicar" y
+    // "guardar" eran dos pasos: si el navegador se recargaba entre uno y otro,
+    // el plan entero se perdía y nada avisaba que faltaba el segundo paso.
+    let guardado = false;
+    if (selClientId) {
+      try {
+        await saveNutriPlan({
+          id: nuevoPlan.id,
+          nombre: nuevoPlan.nombre,
+          fecha_creacion: nuevoPlan.fechaCreacion || new Date().toISOString().split('T')[0],
+          objetivo_nut: objetivoNut?.label || nuevoPlan.perfil?.objetivo_nut || '',
+          kcal: objetivoNut?.kcal || null,
+          perfil: nuevoPlan.perfil || {},
+          semana: nuevoPlan.semana || {},
+          resumen: resumirPlanNutri(nuevoPlan),
+          es_ejemplo: nuevoPlan.es_ejemplo || false,
+          notas: nuevoPlan.notas || '',
+        });
+        guardado = true;
+      } catch (e) { console.error('guardar plan nutrición:', e.message); }
+    }
+
     // Resultado explícito. El botón "Aplicar" ya no puede mentir, y recuerda
     // que esto todavía vive en memoria: sin "Guardar plan" no queda nada.
     const avisos = [];
@@ -677,7 +699,8 @@ export default function Nutricion({ clients, brand, reglas = [] }) {
     if (itemsDescartados) avisos.push(`${itemsDescartados} alimento/s de la IA no existen en la base y se descartaron.`);
     alert(`Plan aplicado: ${diasAplicados} día/s, ${itemsAplicados} alimento/s.` +
       (avisos.length ? `\n\n${avisos.join('\n')}` : '') +
-      `\n\nTocá "💾 Guardar plan" para que quede guardado.`);
+      (guardado ? `\n\n💾 Guardado en el historial del cliente.`
+                : `\n\n⚠ No se pudo guardar solo: tocá "💾 Guardar plan".`));
   };
 
   const exportarPDF = () => {

@@ -56,7 +56,33 @@ export default async function handler(req, res) {
       // mostraba todas juntas. Ahora el portal combina TODOS los planes
       // activos en un solo plan virtual, igual que hace el PDF.
       const planes = await sb(`gym_planes?gym_client_id=eq.${cli.id}&estado=eq.activo&select=id,nombre,fecha_inicio,fecha_fin_estimada,num_dias,dias,plazos,created_at&order=fecha_inicio.asc.nullslast,created_at.asc`);
-      const planesActivos = Array.isArray(planes) ? planes : [];
+      const todosActivos = Array.isArray(planes) ? planes : [];
+
+      // ── QUE BLOQUE LE TOCA HOY ──────────────────────────────────────────
+      // Varios planes activos a la vez NO son un error: es como se arma una
+      // periodizacion por bloques, cada uno con su fecha de inicio. Santiago
+      // Larrama tenia cuatro (Volumen 19/08, Hipertrofia 31/08, Fuerza 14/09,
+      // Negativas 28/09) y el portal se los mostraba TODOS juntos: ocho
+      // sesiones en pantalla en vez de las dos que le tocaban esa semana.
+      //
+      // Regla: de los bloques que YA EMPEZARON, vale el de fecha de inicio mas
+      // reciente. Los que comparten esa misma fecha se combinan — ese es el
+      // caso legitimo de armar un bloque en varios planes sueltos.
+      // Un bloque con fecha de fin ya pasada se descarta, salvo que no quede
+      // ninguno: mejor mostrar el ultimo plan vencido que una pantalla vacia.
+      const hoyISO = new Date().toISOString().slice(0, 10);
+      const planesActivos = (() => {
+        if (todosActivos.length <= 1) return todosActivos;
+        const empezados = todosActivos.filter(p => !p.fecha_inicio || p.fecha_inicio <= hoyISO);
+        const base = empezados.length ? empezados : todosActivos;
+        const vigentes = base.filter(p => !p.fecha_fin_estimada || p.fecha_fin_estimada >= hoyISO);
+        const candidatos = vigentes.length ? vigentes : base;
+        const ultimaFecha = candidatos
+          .map(p => p.fecha_inicio || '')
+          .sort()
+          .slice(-1)[0];
+        return candidatos.filter(p => (p.fecha_inicio || '') === ultimaFecha);
+      })();
       let plan = null;
       let logs = [];
       let nombres = {};
@@ -67,6 +93,8 @@ export default async function handler(req, res) {
           (p.dias || []).forEach(d => diasCombinados.push({ ...d, _planId: p.id }));
         });
         plan = {
+          // Cuantos bloques del plan quedaron fuera por no ser el vigente.
+          _bloquesOcultos: todosActivos.length - planesActivos.length,
           id: planesActivos.length === 1 ? planesActivos[0].id : "combinado",
           nombre: planesActivos.length === 1 ? planesActivos[0].nombre : planesActivos.map(p => p.nombre).join(" + "),
           fecha_inicio: planesActivos[0].fecha_inicio,
