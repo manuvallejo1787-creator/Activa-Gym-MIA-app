@@ -417,7 +417,12 @@ export function generarPlanBase({
     if (mov.includes('hombro')) patronesDeficit.push('hombro');
     if (mov.includes('cadera')) patronesDeficit.push('cadera');
     if (mov.includes('tobillo')) patronesDeficit.push('tobillo');
-    if (mov.includes('torácica')) patronesDeficit.push('torácica');
+    // `norm` saca los acentos, así que buscar 'torácica' con tilde nunca
+    // matcheaba: la cadena normalizada es 'rotacion toracica'. La limitación
+    // de rotación torácica venía quedando fuera de los patrones de déficit
+    // desde siempre, o sea que el generador nunca prescribió movilidad
+    // torácica por este criterio. El patrón de salida sí lleva tilde.
+    if (mov.includes('toracica')) patronesDeficit.push('torácica');
   });
 
   // ── 3) Periodización ────────────────────────────────────────────────────

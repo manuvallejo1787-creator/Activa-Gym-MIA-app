@@ -195,14 +195,58 @@ export function calcEva({ screening = {}, evaluacion = null, incidencias = [] } 
 //
 // Referencias normativas alineadas con las del informe.
 // ═══════════════════════════════════════════════════════════════════════════
+// `mdc` = cambio mínimo detectable, en GRADOS. Es el piso por debajo del cual
+// una diferencia entre lados no se distingue del error del instrumento, así
+// que no se puede llamar asimetría. Sin este piso, el criterio del 15% sobre
+// movimientos de arco corto exige una precisión que ningún método tiene:
+// en rotación interna de cadera, 15% de 40° son 6°, y el MDC publicado para
+// goniometría de rotación de cadera es de 6,1° a 8,6° (Gradoz 2018,
+// J Sport Rehabil, DOI 10.1123/jsr.2017-0243). O sea que el umbral estaba
+// apoyado exactamente sobre el piso de ruido. Peor: la confiabilidad
+// INTER-evaluador para rotaciones de cadera es pobre (ICC -0,33 a 0,04,
+// Stołowski 2023, Sensors, DOI 10.3390/s23218782), así que medir más
+// despacio y a mano tampoco compra esa precisión.
+//
+// `corte` = umbral absoluto de limitación cuando el movimiento tiene un punto
+// de corte clínico establecido. Tiene prioridad sobre el 80% de la referencia,
+// que es una heurística buena para arcos largos y mala para arcos cortos.
+//
+// `maxPlausible` = techo anatómico. Un valor por encima no es una medición
+// fuera de rango: es una medición de otra cosa. Se excluye del promedio en vez
+// de aportar un 100% falso.
 export const ROM_GYM = [
-  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180 },
-  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90 },
-  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70 },
-  { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45 },
-  { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120 },
-  { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45 },
-  { k: 'mov_tobillo',     label: 'Dorsiflexión de tobillo',      ref: 20 },
+  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180, mdc: 8  },
+  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90,  mdc: 8  },
+  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70,  mdc: 8  },
+  { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45,  mdc: 8  },
+  { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120, mdc: 10 },
+  { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8  },
+
+  // ─── Tobillo ───────────────────────────────────────────────────────────────
+  // Protocolo nuevo: test de lunge en carga (WBLT) con ángulo calculado por
+  // trigonometría sobre el segmento tibial. Es el método más repetible de los
+  // cinco comparados: ICC 0,98 y MDC 1,7° para un lado, ICC 0,85 y MDC 2,1°
+  // para la asimetría (Howe 2020, Int J Sports Phys Ther, PMC7015029), contra
+  // más de 6° de error del inclinómetro (Langarika-Rocafort 2016, Phys Ther
+  // Sport, DOI 10.1016/j.ptsp.2016.06.010). Dos landmarks, plano sagital: lo
+  // mide el estimador de pose mejor que el goniómetro.
+  { k: 'mov_tobillo_wblt', label: 'Dorsiflexión de tobillo (WBLT)', ref: 38, corte: 35, mdc: 2 },
+
+  // Protocolo viejo: campo `mov_tobillo`. Se conserva SOLO para no perder el
+  // histórico. El cálculo anterior tomaba el ángulo rodilla-tobillo-dedos y le
+  // restaba 90, pero ese ángulo ya vale 110-125° con el tobillo en neutro
+  // porque el vector apunta a la punta del pie. Resultado medido sobre los 30
+  // clientes cargados: mediana 41°, máximo 56°, y 59 de 60 mediciones por
+  // encima del techo anatómico del movimiento. Lo que quedó registrado es, en
+  // buena parte, el largo del pie. Nunca disparó una limitación: 0 de 60.
+  //
+  // Los dos métodos NO son intercambiables — Langarika-Rocafort midió sesgos
+  // de 1,93° a 14,42° entre métodos del propio WBLT. Por eso el campo es otro
+  // y no la misma clave con otra referencia: si compartieran clave, la primera
+  // reevaluación de cada cliente mostraría una "mejora" de 20° que sería puro
+  // cambio de instrumento.
+  { k: 'mov_tobillo', label: 'Dorsiflexión de tobillo (protocolo anterior)',
+    ref: 20, mdc: 5, legacy: true, maxPlausible: 25 },
 ];
 
 // Los grados vienen como texto libre y sin formato uniforme.
@@ -217,32 +261,62 @@ export function parseGrados(t) {
 }
 
 export function calcROMGym(screening = {}) {
-  const detalle = [], limitados = [], asimetrias = [];
+  const detalle = [], limitados = [], asimetrias = [], invalidos = [];
   let suma = 0, n = 0;
+  // Si el tobillo ya está medido con el protocolo nuevo, el campo viejo no
+  // vuelve a entrar al cálculo: queda solo como histórico.
+  const tieneWBLT = parseGrados(screening['mov_tobillo_wblt_grados']).der != null;
+
   ROM_GYM.forEach(m => {
     const { der, izq } = parseGrados(screening[m.k + '_grados']);
     const lados = [der, izq].filter(v => v != null);
     if (!lados.length) return;
+    if (m.legacy && tieneWBLT) return;
+
+    // Un valor por encima del techo anatómico no es movilidad excepcional:
+    // es otra medición metida en el campo. No se promedia ni se interpreta.
+    if (m.maxPlausible != null && Math.max(...lados) > m.maxPlausible) {
+      invalidos.push({
+        mov: m.label, der, izq, max: m.maxPlausible,
+        motivo: `${der ?? '–'}°/${izq ?? '–'}° supera el techo anatómico de ${m.maxPlausible}°`,
+      });
+      return;
+    }
+
     lados.forEach(v => { suma += Math.min(v / m.ref * 100, 100); n++; });
-    const pct = Math.round(Math.min(Math.min(...lados) / m.ref * 100, 100));
+    const peor = Math.min(...lados);
+    const pct = Math.round(Math.min(peor / m.ref * 100, 100));
     detalle.push({ mov: m.label, der, izq, ref: m.ref, pct });
-    if (pct < 80) limitados.push(`${m.label}: ${pct}% del rango normal`);
+
+    // Punto de corte clínico si el movimiento lo tiene; si no, 80% de la ref.
+    const umbral = m.corte != null ? m.corte : 0.8 * m.ref;
+    if (peor < umbral) {
+      limitados.push(m.corte != null
+        ? `${m.label}: ${peor}° (corte <${m.corte}°)`
+        : `${m.label}: ${pct}% del rango normal`);
+    }
+
     if (der != null && izq != null) {
       const may = Math.max(der, izq);
-      const difPct = may > 0 ? Math.abs(der - izq) / may * 100 : 0;
-      if (difPct >= 15) asimetrias.push({
-        mov: m.label, der, izq,
+      const dif = Math.abs(der - izq);
+      const difPct = may > 0 ? dif / may * 100 : 0;
+      // Doble criterio: relativo Y absoluto. El 15% solo no alcanza — sobre
+      // arcos cortos se cumple con diferencias que están dentro del error.
+      if (difPct >= 15 && dif >= (m.mdc ?? 0)) asimetrias.push({
+        mov: m.label, der, izq, dif,
         difPct: Math.round(difPct * 10) / 10,
+        mdc: m.mdc ?? 0,
         ladoCorto: der < izq ? 'derecho' : 'izquierdo',
       });
     }
   });
-  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [] };
+
+  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [], invalidos };
   return {
     medido: true,
     pct: Math.round(suma / n),
     detalle: detalle.sort((a, b) => a.pct - b.pct),
-    limitados, asimetrias, n,
+    limitados, asimetrias, invalidos, n,
   };
 }
 
@@ -442,7 +516,8 @@ export function resumenDeterminista(cliente, metricas, avance) {
     const rg = metricas.romGym;
     if (rg?.medido) {
       if (rg.limitados.length) L.push(`  · limitados: ${rg.limitados.join('; ')}`);
-      if (rg.asimetrias.length) L.push(`  · asimetrías ≥15%: ${rg.asimetrias.map(a => `${a.mov} D ${a.der}° / I ${a.izq}° (${a.difPct}%, corto ${a.ladoCorto})`).join('; ')}`);
+      if (rg.asimetrias.length) L.push(`  · asimetrías ≥15% y por encima del error de medición: ${rg.asimetrias.map(a => `${a.mov} D ${a.der}° / I ${a.izq}° (${a.difPct}%, ${a.dif}°, corto ${a.ladoCorto})`).join('; ')}`);
+      if (rg.invalidos?.length) L.push(`  · SIN MEDIR por protocolo inválido: ${rg.invalidos.map(i => `${i.mov} (${i.motivo})`).join('; ')}`);
     }
   } else L.push(`ROM: sin medir`);
   L.push(metricas.fuerza.medido ? `ASIMETRÍA DE FUERZA: ${metricas.fuerza.pct}%` : `ASIMETRÍA DE FUERZA: ${metricas.fuerza.motivo}`);

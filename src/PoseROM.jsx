@@ -22,16 +22,46 @@ import { useState, useRef, useCallback } from "react";
 // ─── Definiciones de ángulos medibles por región+movimiento ───────────────
 // triplet: 3 landmarks de MediaPipe Pose (BlazePose, 33 puntos) —
 // se arma como `${lado}_${nombre}` (ej: 'right_shoulder').
-// type: '180-angle' → flexión = 180 - ángulo interior en el vértice.
-//       'above90'   → ej. dorsiflexión: cuánto supera los 90° neutros.
-//       'below90'   → ej. plantarflexión: cuánto queda por debajo de 90°.
+// type: '180-angle'   → flexión = 180 - ángulo interior en el vértice.
+//       'seg-vertical'→ ángulo de un SEGMENTO de 2 landmarks contra la
+//                       vertical de la imagen. No usa vértice ni tercer punto.
+//       'above90'     → cuánto supera los 90° neutros (DEPRECADO, ver abajo).
+//       'below90'     → cuánto queda por debajo de 90°.
 const ANGLE_DEFS = {
   hombro:   { 'Flexión':{t:['hip','shoulder','elbow'],type:'180-angle'}, 'Abducción':{t:['hip','shoulder','elbow'],type:'180-angle'} },
   esc:      { 'Elevación hombro':{t:['hip','shoulder','elbow'],type:'180-angle'} },
   codo:     { 'Flexión':{t:['shoulder','elbow','wrist'],type:'180-angle'} },
   cadera:   { 'Flexión':{t:['shoulder','hip','knee'],type:'180-angle'} },
   rodilla:  { 'Flexión':{t:['hip','knee','ankle'],type:'180-angle'} },
-  tobillo:  { 'Dorsiflexión':{t:['knee','ankle','foot_index'],type:'above90'}, 'Plantar-flex.':{t:['knee','ankle','foot_index'],type:'below90'} },
+
+  // ─── Tobillo ─────────────────────────────────────────────────────────────
+  // MÉTODO NUEVO: ángulo del segmento tibial contra la vertical, en la
+  // posición de lunge en carga (WBLT). Es el "método trigonométrico" de la
+  // literatura: ICC 0,98 y MDC 1,7° para un lado, ICC 0,85 y MDC 2,1° para la
+  // asimetría (Howe 2020, PMC7015029); contra más de 6° de error del
+  // inclinómetro y ICC <0,90 (Langarika-Rocafort 2016,
+  // DOI 10.1016/j.ptsp.2016.06.010).
+  //
+  // Por qué funciona acá y el método viejo no: usa SOLO rodilla y tobillo, dos
+  // landmarks de alta visibilidad, y mide contra la vertical de la imagen. No
+  // toca `foot_index`.
+  //
+  // POR QUÉ SE CAMBIÓ: el cálculo anterior era angleAt(rodilla, tobillo,
+  // dedos) - 90. Ese ángulo ya vale 110-125° con el tobillo en NEUTRO, porque
+  // el vector va a la punta del pie y no a la planta. Medido sobre los 30
+  // clientes cargados: mediana 41°, máximo 56°, 59 de 60 mediciones por encima
+  // del techo anatómico (~25°), desvío de apenas 6,3° — la distribución de un
+  // offset constante (el largo del pie), no de una articulación. Nunca disparó
+  // una limitación: 0 de 60.
+  //
+  // REQUISITO DE ENCUADRE: la foto tiene que ser de perfil y la cámara
+  // perpendicular al plano sagital. Un desvío de la cámara proyecta el
+  // segmento y subestima el ángulo.
+  tobillo:  {
+    'Dorsiflexión WBLT':{t:['ankle','knee'],type:'seg-vertical'},
+    'Plantar-flex.':{t:['knee','ankle','foot_index'],type:'below90'},
+  },
+
   lumbar:   { 'Flexión':{t:['knee','hip','shoulder'],type:'180-angle',aprox:true} },
   columna:  { 'Flexión lumbar':{t:['knee','hip','shoulder'],type:'180-angle',aprox:true} },
 };
@@ -119,6 +149,19 @@ const calcAngulo=(landmarks,def,lado)=>{
   const pts=def.t.map(name=>({name,p:landmarks[IDX[name]+off]}));
   const faltantes=pts.filter(({p})=>!p||(p.visibility??1)<0.3).map(({name})=>NOMBRE_LEGIBLE[name]||name);
   if(faltantes.length>0)return{angulo:null,faltantes};
+  // Segmento de 2 landmarks contra la vertical de la imagen.
+  // pts[0] = origen distal (tobillo), pts[1] = extremo proximal (rodilla).
+  // En coordenadas de imagen la y crece hacia abajo, así que la vertical
+  // "hacia arriba" es (0,-1). El ángulo es la inclinación del segmento
+  // respecto de esa vertical, siempre positivo.
+  if(def.type==='seg-vertical'){
+    const A=pts[0].p, B=pts[1].p;
+    const dx=B.x-A.x, dy=B.y-A.y;
+    if(dx===0&&dy===0)return{angulo:null,faltantes:['puntos degenerados']};
+    const ang=Math.abs(Math.atan2(dx,-dy))*180/Math.PI;
+    return{angulo:Math.round(ang),faltantes:[]};
+  }
+
   const raw=angleAt(pts[0].p,pts[1].p,pts[2].p);
   if(raw==null)return{angulo:null,faltantes:['puntos degenerados']};
   let angulo;
