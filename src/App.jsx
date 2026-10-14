@@ -964,12 +964,129 @@ const WIZARD_STEPS=[
   {title:'Estilo de vida y objetivos',icon:'🌿',fase:1},
   {title:'Guardar / Agendar evaluación',icon:'💾',fase:'transicion'},
   {title:'Composición corporal',      icon:'📊',fase:2},
-  {title:'Evaluación postural',       icon:'🔍',fase:2},
-  {title:'Movilidad y control motor', icon:'🦵',fase:2},
+  {title:'Postura y ROM',             icon:'🔍',fase:2},
+  {title:'Movimientos funcionales',   icon:'🦵',fase:2},
   {title:'PVFI — Capacidades físicas',icon:'⚡',fase:2},
   {title:'Banderas clínicas',         icon:'🚩',fase:2},
   {title:'Potencia y saltos (deportistas)',icon:'🏃',fase:2},
   {title:'Síntesis y plan',           icon:'📋',fase:2},
+];
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PANEL DE POSTURA Y ROM
+//
+// Orden de medición definido por Manu el 14/10/2026. No es arbitrario: va de
+// craneal a distal, y dentro de cada región la observación postural va antes
+// que el rango articular, porque es el orden en que se recorre al cliente en
+// la camilla. Mezclar los dos tipos de dato en una sola lista es deliberado:
+// agrupar "todo lo cualitativo" aparte obligaría a volver a la misma región
+// dos veces.
+//
+// `tipo`:
+//   'grados' → medición angular con lado derecho/izquierdo y campo de grados.
+//   'grado'  → hallazgo cualitativo graduado (desplegable).
+//
+// POR QUÉ ALGUNAS SON CUALITATIVAS Y NO ANGULARES: la antepulsión de hombros
+// se mide en la práctica como distancia acromion-camilla y la simetría
+// bilateral como diferencia de altura; convertirlas a grados las haría ver
+// más precisas de lo que son. La inclinación pélvica tiene el mismo problema
+// y además un rango normativo demasiado amplio para sostener puntos de corte.
+export const PANEL_POSTURA_ROM = [
+  { n:1, k:'mov_cv_angulo', tipo:'grados', bilateral:false,
+    label:'Antepulsión cefálica — ángulo craneovertebral',
+    pos:'De pie, de perfil. Adhesivo en el proceso espinoso de C7. Ángulo entre la línea C7→trago del pabellón auricular y la horizontal que pasa por C7.',
+    bandas:'Óptimo ≥50° · Funcional 44–50° · Limitado 38–44° · Disfuncional <38°',
+    pose:null,
+    // Bandas derivadas de la distribución publicada: media 50,7° ± 6,3° en
+    // postura relajada, ICC inter 0,88 / intra 0,91 (Cote 2021, Int J
+    // Telerehabil, DOI 10.5195/ijt.2021.6346). Son percentiles de esa muestra,
+    // no un corte inventado.
+    //
+    // NO automatizado a propósito: el método validado marca C7 con adhesivo y
+    // MediaPipe no tiene landmark de C7. El acromion como proxy queda por
+    // delante del vértice real e infla el ángulo — el mismo error que tenía la
+    // dorsiflexión con el landmark de los dedos. Se puede automatizar después
+    // de validar el sesgo contra el método con adhesivo.
+    manual:'El método validado necesita el adhesivo en C7. Automatizarlo con el acromion como proxy infla el ángulo.' },
+
+  { n:2, k:'postura_hombros_ante', tipo:'grado',
+    label:'Antepulsión de hombros',
+    pos:'Supino en camilla, brazos al costado, sin almohada. Se gradúa cuánto despega el acromion de la camilla.',
+    opts:['Óptimo','Leve','Moderada','Marcada'] },
+
+  { n:3, k:'postura_hombros', tipo:'grado',
+    label:'Simetría bilateral de hombros',
+    pos:'De pie, de frente, peso repartido. Comparación de altura de ambos acromion.',
+    opts:['Simétrico','Elevado derecho','Elevado izquierdo'] },
+
+  { n:4, k:'mov_hombro_flex', tipo:'grados',
+    label:'Flexión de hombro',
+    pos:'Supino en camilla, rodillas flexionadas para bloquear la compensación lumbar. Elevación del brazo en el plano sagital.',
+    bandas:'Óptimo ≥170° · Funcional 150–170° · Limitado 120–150° · Disfuncional <120°',
+    pose:{region:'hombro',mov:'Flexión'} },
+
+  { n:5, k:'mov_hombro_ri', tipo:'grados',
+    label:'Rotación interna de hombro',
+    pos:'Supino, hombro a 90° de abducción, codo a 90°. Antebrazo rotando hacia los pies. Estabilizar la escápula.',
+    bandas:'Óptimo ≥65° · Funcional 55–65° · Limitado 45–55° · Disfuncional <45°',
+    pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+
+  { n:6, k:'mov_hombro_re', tipo:'grados',
+    label:'Rotación externa de hombro',
+    pos:'Misma posición que la RI. Antebrazo rotando hacia la cabeza.',
+    bandas:'Óptimo ≥85° · Funcional 70–85° · Limitado 60–70° · Disfuncional <60°',
+    pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+
+  { n:7, k:'postura_pelvis', tipo:'grado',
+    label:'Anteversión / retroversión pélvica',
+    pos:'De pie, de perfil. Referencia EIAS–EIPS.',
+    opts:['Neutra','Anteversión leve','Anteversión marcada','Retroversión leve','Retroversión marcada'] },
+
+  { n:8, k:'mov_cad_flex', tipo:'grados',
+    label:'Flexión de cadera',
+    // Corregido el 14/10/2026: la posición es SUPINO, no prono. En prono la
+    // cadera está extendida y lo que se mide es extensión. Los 32 registros
+    // existentes de este campo van de 90° a 132°, que es flexión supina.
+    pos:'SUPINO en camilla. Flexión activa de cadera con rodilla flexionada. La pelvis no debe despegar.',
+    bandas:'Óptimo ≥120° · Funcional 100–120° · Limitado 80–100° · Disfuncional <80°',
+    pose:{region:'cadera',mov:'Flexión'} },
+
+  { n:9, k:'mov_cad_rot', tipo:'grados',
+    label:'Rotación interna de cadera',
+    pos:'PRONO en camilla, rodillas a 90°. Dejar caer las tibias HACIA AFUERA. En prono se mide más rango rotacional que en sedestación o supino: las posiciones no son intercambiables.',
+    bandas:'Se juzga por el arco RI+RE, no por el valor aislado · ref 45°',
+    pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+
+  { n:10, k:'mov_cad_rot_ext', tipo:'grados',
+    label:'Rotación externa de cadera',
+    pos:'Misma posición de prono. Dejar caer las tibias HACIA LA LÍNEA MEDIA, cruzando.',
+    bandas:'Arco RI+RE: Óptimo ≥80° · Funcional 70–80° · Restricción <70° · ref 45°',
+    pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+
+  { n:11, k:'mov_tobillo_wblt', tipo:'grados',
+    label:'Dorsiflexión de tobillo (lunge en carga)',
+    pos:'De pie frente a la pared, pie de prueba adelante, talón apoyado. Regla desde el maléolo externo hasta la rodilla: ángulo del segmento tibial contra la vertical. Foto de perfil, cámara perpendicular.',
+    bandas:'Óptimo ≥35° · Funcional pero limitado 30–35° · Disfuncional <30° · asimetría relevante ≥4°',
+    pose:{region:'tobillo',mov:'Dorsiflexión WBLT'} },
+];
+
+// Hallazgos que la lista ordenada de 11 no cubre pero que se siguen
+// registrando: tienen histórico y la rotación torácica alimenta los patrones
+// de déficit del generador.
+export const PANEL_SECUNDARIO = [
+  { k:'mov_tor_rot', tipo:'grados', label:'Rotación torácica',
+    pos:'Sentado a horcajadas en el banco con palo en los hombros, o en cuadrupedia con mano en la nuca.',
+    bandas:'ref 45°/lado · Disfuncional <30°', pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+  { k:'postura_columna_lat', tipo:'grado', label:'Curva lumbar (perfil)',
+    opts:['Normal','Hiperlordosis','Rectificación'] },
+  { k:'postura_columna_tor', tipo:'grado', label:'Curva torácica',
+    opts:['Normal','Hipercifosis','Rectificación'] },
+  { k:'postura_cabeza', tipo:'grado', label:'Alineación de cabeza (plano frontal)',
+    opts:['Centrada','Lateralización D','Lateralización I'] },
+  { k:'postura_rodillas', tipo:'grado', label:'Rodillas',
+    opts:['Neutro','Valgo bilateral','Varo bilateral','Hiperextensión'] },
+  { k:'postura_pies', tipo:'grado', label:'Pies',
+    opts:['Neutro','Pronación bilateral','Supinación bilateral','Asimétrico'] },
 ];
 
 // Componente propio a nivel de módulo — usa hooks internamente (useState),
@@ -2091,6 +2208,7 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
 
       // ─── RANGOS DE MOVIMIENTO ARTICULAR ───────────────────────────────────
       const MOVPDF=[
+        ['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)',50],
         ['mov_hombro_flex','Flexión de hombro',180],
         ['mov_hombro_re','Rotación externa de hombro',90],
         ['mov_hombro_ri','Rotación interna de hombro',70],
@@ -2271,7 +2389,7 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
     const posturaRows=Object.keys(POSTURA_LBL).filter(k=>sc[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}${sc[k]===POSTURA_DEF[k]?' (normal)':''}`);
     const posturaTxt=posturaRows.length?posturaRows.join('; '):'NO REGISTRADA';
     // ── Movilidad articular / ángulos (N/L/ML/D con referencias) ──
-    const MOV=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)','ref ≥38° · limitado <35°'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)','campo histórico — no comparable'],['mov_cad_rot','Rotación interna cadera (prono)','ref 45°'],['mov_cad_rot_ext','Rotación externa cadera (prono)','ref 45° · arco RI+RE ≥70°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
+    const MOV=[['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)','Óptimo ≥50° · Funcional 44-50° · Limitado 38-44° · Disfunc <38°'],['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)','ref ≥38° · limitado <35°'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)','campo histórico — no comparable'],['mov_cad_rot','Rotación interna cadera (prono)','ref 45°'],['mov_cad_rot_ext','Rotación externa cadera (prono)','ref 45° · arco RI+RE ≥70°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
     const GMAP={N:'Óptimo',L:'Limitado (leve)',ML:'Muy limitado (severo)',D:'Dolor'};
     const movRows=MOV.map(([k,lbl,ref])=>{
       const d=sc[k+'_DBil'],i=sc[k+'_Izq'],g=sc[k+'_grados'];
@@ -3147,91 +3265,88 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
             </div>
           </div>
         );
-        // ── PASO 6: EVALUACIÓN POSTURAL ──────────────────────────────────
-        case 6: return(
-          <div>
-            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:12}}>🩺 <strong>Fase 2.</strong> Registrar hallazgos posturales principales.</div>
-            {[
-              ['postura_cabeza','Alineación de cabeza',['Centrada','Lateralización D','Lateralización I','Antepulsión']],
-              ['postura_hombros','Nivel de hombros',['Simétrico','Elevado derecho','Elevado izquierdo']],
-              ['postura_columna_lat','Curva lumbar (lateral)',['Normal','Hiperlordosis','Rectificación']],
-              ['postura_columna_tor','Curva torácica',['Normal','Hipercifosis','Rectificación']],
-              ['postura_pelvis','Posición pélvica',['Neutra','Anteversión','Retroversión']],
-              ['postura_rodillas','Rodillas',['Neutro','Valgo bilateral','Varo bilateral','Hiperextensión']],
-              ['postura_pies','Pies',['Neutro','Pronación bilateral','Supinación bilateral','Asimétrico']],
-            ].map(([k,lbl,opts])=>(
-              <div key={k} style={{marginBottom:8,display:'grid',gridTemplateColumns:'160px 1fr',gap:8,alignItems:'center'}}>
-                <span style={{fontSize:11,fontWeight:600}}>{lbl}</span>
-                <select value={sc[k]||''} onChange={e=>setSCK(k,e.target.value)} style={{...s.sel,width:'100%'}}>
-                  <option value="">— sin evaluar</option>
-                  {opts.map(o=><option key={o}>{o}</option>)}
-                </select>
+        // ── PASO 6: POSTURA Y ROM (unificado) ────────────────────────────
+        // Antes eran dos pantallas: "Evaluación postural" (7 desplegables
+        // cualitativos) y la tabla de ROM dentro de "Movilidad y control
+        // motor". Se unificaron porque se recorren juntas sobre el mismo
+        // cliente, y la batería de movimientos funcionales se fue al paso 7.
+        case 6: {
+          const filaGrados=(it)=>(
+            <div key={it.k} style={{marginBottom:7,background:G1,borderRadius:5,padding:'6px 9px'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:11,fontWeight:700}}>{it.n?`${it.n}. `:''}{it.label}</div>
+                  {it.pos&&<div style={{fontSize:9,color:G3,marginTop:2,lineHeight:1.35}}>{it.pos}</div>}
+                  {it.bandas&&<div style={{fontSize:9,color:'#0E7490',fontWeight:600,marginTop:2}}>{it.bandas}</div>}
+                </div>
+                {(it.bilateral===false?['DBil']:['DBil','Izq']).map(side=>(
+                  <select key={side} value={sc[it.k+'_'+side]||''} onChange={e=>setSCK(it.k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
+                    <option value="">—</option>
+                    <option value="N">Óptimo</option>
+                    <option value="F">Funcional</option>
+                    <option value="L">Limitado</option>
+                    <option value="ML">Disfuncional</option>
+                    <option value="D">Dolor</option>
+                  </select>
+                ))}
+                {it.bilateral===false&&<div/>}
               </div>
-            ))}
-            <div style={{marginTop:10}}><span style={s.lbl}>Observaciones posturales adicionales</span><textarea value={sc.postura_hallazgos||''} onChange={e=>setSCK('postura_hallazgos',e.target.value)} rows={3} placeholder="Detalles relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
-          </div>
-        );
-        // ── PASO 7: MOVILIDAD Y CONTROL MOTOR ────────────────────────────
-        case 7: return(
+              <div style={{display:'grid',gridTemplateColumns:'1fr 70px',gap:6,marginTop:4,alignItems:'start'}}>
+                <input value={sc[it.k+'_grados']||''} onChange={e=>setSCK(it.k+'_grados',e.target.value)}
+                  placeholder={it.bilateral===false?'Grados — ej: 47°':'Grados — ej: Der 35° / Izq 28°'}
+                  style={{...s.inp,fontSize:10,padding:'4px 8px'}}/>
+                {it.pose
+                  ?<PoseROM movimiento={it.pose.mov} region={it.pose.region} onMedido={(grados,ladoM)=>{
+                      const label=ladoM==='right'?'Der':'Izq';
+                      setSCK(it.k+'_grados',(sc[it.k+'_grados']?sc[it.k+'_grados']+' / ':'')+`${label} ${grados}°`);
+                    }}/>
+                  :<div title={it.manual||'Medición manual con goniómetro.'} style={{fontSize:9,color:'#94A3B8',textAlign:'center',padding:'6px 2px',border:'1px dashed #E2E8F0',borderRadius:6}}>Manual</div>
+                }
+              </div>
+            </div>
+          );
+          const filaGrado=(it)=>(
+            <div key={it.k} style={{marginBottom:7,background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:5,padding:'6px 9px',display:'grid',gridTemplateColumns:'1fr 188px',gap:8,alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700}}>{it.n?`${it.n}. `:''}{it.label}</div>
+                {it.pos&&<div style={{fontSize:9,color:G3,marginTop:2,lineHeight:1.35}}>{it.pos}</div>}
+              </div>
+              <select value={sc[it.k]||''} onChange={e=>setSCK(it.k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                <option value="">— sin evaluar</option>
+                {it.opts.map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          );
+          const fila=(it)=>it.tipo==='grado'?filaGrado(it):filaGrados(it);
+          return(
           <div>
             <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
-              🩺 Marcá el estado de cada movimiento por lado. Dejá en <strong>—</strong> lo que no evalúes. Si medís los grados exactos, agregalos en el campo de cada fila.
+              🩺 <strong>Fase 2.</strong> Las 11 mediciones van en orden de recorrido: craneal → distal. Dejá en <strong>—</strong> lo que no evalúes.
+              Las filas <span style={{background:'#FEF3C7',padding:'1px 4px',borderRadius:3}}>ámbar</span> son hallazgos cualitativos: se gradúan, no se miden en grados.
             </div>
-            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',marginBottom:6}}>Screening de movilidad articular</div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:2}}>
-              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Movimiento · Referencia</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:3}}>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Medición · Posición · Bandas</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Der/Bil</div>
               <div style={{fontSize:9,color:G3,fontWeight:700,textAlign:'center'}}>Izq</div>
             </div>
-            {[
-              // El campo del tobillo cambió de clave a propósito. El anterior
-              // (mov_tobillo) medía rodilla-tobillo-dedos menos 90, que da
-              // 20-35° con el tobillo en neutro: lo que quedó registrado en los
-              // 30 clientes viejos no es dorsiflexión. Los dos métodos no son
-              // intercambiables, así que comparten ficha pero no campo: si
-              // compartieran clave, la primera reevaluación mostraría una
-              // mejora de 20° que sería solo el cambio de instrumento.
-              ['mov_tobillo_wblt','Dorsiflexión tobillo (lunge en carga)','Óptimo ≥35° · Limitado 30-35° · Disfunc <30° · asimetría ≥4°',{region:'tobillo',mov:'Dorsiflexión WBLT'}],
-              // La RI de cadera sola no se puede interpretar: 13-68° de rango
-              // en la base, CV 36%, que es versión femoral y no tejido blando.
-              // Con la RE al lado se calcula el arco total y recién ahí se
-              // distingue restricción real de retroversión.
-              ['mov_cad_rot','Rotación interna cadera (prono)','Prono, tibias hacia afuera · ref 45°',null],
-              ['mov_cad_rot_ext','Rotación externa cadera (prono)','Prono, tibias hacia la línea media · ref 45° · arco RI+RE ≥70°',null],
-              ['mov_cad_flex','Flexión de cadera activa','Normal 90-120° · Disfunc <70°',{region:'cadera',mov:'Flexión'}],
-              ['mov_tor_rot','Rotación torácica','Normal 45°/lado · Disfunc <30°',null],
-              ['mov_hombro_flex','Elevación hombro (flexión)','Normal 180° · Disfunc <150°',{region:'hombro',mov:'Flexión'}],
-              ['mov_hombro_ri','Rotación interna hombro','Normal 70° · Disfunc <45°',null],
-              ['mov_hombro_re','Rotación externa hombro','Normal 90° · Disfunc <60°',null],
-            ].map(([k,lbl,ref,poseDef])=>(
-              <div key={k} style={{marginBottom:6,background:G1,borderRadius:5,padding:'5px 8px'}}>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,alignItems:'center'}}>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:600}}>{lbl}</div>
-                    <div style={{fontSize:9,color:G3}}>{ref}</div>
-                  </div>
-                  {['DBil','Izq'].map(side=>(
-                    <select key={side} value={sc[k+'_'+side]||''} onChange={e=>setSCK(k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
-                      <option value="">—</option>
-                      <option value="N">Óptimo</option>
-                      <option value="L">Limitado</option>
-                      <option value="ML">Muy limitado</option>
-                      <option value="D">Dolor</option>
-                    </select>
-                  ))}
-                </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 70px',gap:6,marginTop:4,alignItems:'start'}}>
-                  <input value={sc[k+'_grados']||''} onChange={e=>setSCK(k+'_grados',e.target.value)} placeholder="Grados exactos (opcional) — ej: Der 35° / Izq 28°" style={{...s.inp,fontSize:10,padding:'4px 8px'}}/>
-                  {poseDef
-                    ?<PoseROM movimiento={poseDef.mov} region={poseDef.region} onMedido={(grados,ladoM)=>{
-                        const label=ladoM==='right'?'Der':'Izq';
-                        setSCK(k+'_grados',(sc[k+'_grados']?sc[k+'_grados']+' / ':'')+`${label} ${grados}°`);
-                      }}/>
-                    :<div title="Rotación: no medible con confianza desde una sola foto 2D. Medición manual con goniómetro." style={{fontSize:9,color:'#94A3B8',textAlign:'center',padding:'6px 2px',border:'1px dashed #E2E8F0',borderRadius:6}}>Manual</div>
-                  }
-                </div>
-              </div>
-            ))}
+            {PANEL_POSTURA_ROM.map(fila)}
+
+            <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'16px 0 4px'}}>Hallazgos complementarios</div>
+            <div style={{fontSize:9,color:G3,marginBottom:7}}>
+              Fuera de la secuencia ordenada, se siguen registrando: tienen histórico cargado y la rotación torácica alimenta los patrones de déficit del generador de planes.
+            </div>
+            {PANEL_SECUNDARIO.map(fila)}
+
+            <div style={{marginTop:12}}><span style={s.lbl}>Observaciones posturales y de movilidad</span><textarea value={sc.postura_hallazgos||''} onChange={e=>setSCK('postura_hallazgos',e.target.value)} rows={3} placeholder="Compensaciones, asimetrías, detalles relevantes..." style={{...s.inp,resize:'vertical'}}/></div>
+          </div>
+          );
+        }
+        // ── PASO 7: MOVIMIENTOS FUNCIONALES Y CONTROL MOTOR ──────────────
+        case 7: return(
+          <div>
+            <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
+              🩺 Batería de movimientos funcionales y balance dinámico. La postura y los rangos articulares se cargan en el paso anterior.
+            </div>
             <div style={{fontSize:11,fontWeight:700,color:G4,textTransform:'uppercase',margin:'14px 0 8px'}}>Estabilidad y control motor</div>
             {[
               ['cm_squat','Deep squat / Overhead squat',['Óptimo','Compensaciones leves','Compensaciones marcadas','No puede realizarlo']],
@@ -4457,7 +4572,7 @@ export default function App(){
                     const color=comparable?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
                     return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi||'—'}${vi&&unidad?' '+unidad:''} → <strong style="color:${color}">${vf||'—'}${vf&&unidad?' '+unidad:''}</strong></span></div>`;
                   };
-                  const MOVX=[['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_rot_ext','Rotación externa cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
+                  const MOVX=[['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)'],['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_rot_ext','Rotación externa cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
                   const PVFIX=[['pvfi_chair_stand','30s Chair Stand','reps'],['pvfi_dino_d','Dinamometría der','kg'],['pvfi_dino_i','Dinamometría izq','kg'],['pvfi_tug','TUG','seg'],['pvfi_plancha_elev','Plancha elevada','seg'],['pvfi_wallsit','Wall sit 90°','seg'],['pvfi_pushup_rod','Push-up rodillas','reps'],['pvfi_plancha_suelo','Plancha suelo','seg'],['pvfi_row_iso','Row isométrico','seg'],['pvfi_dino2','Dinamometría TS','kg']];
                   const movsComp=MOVX.filter(([k])=>scA[k+'_grados']||scB[k+'_grados']);
                   const pvfiComp=PVFIX.filter(([k])=>scA[k]||scB[k]);

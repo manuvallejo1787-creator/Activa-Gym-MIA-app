@@ -214,12 +214,39 @@ export function calcEva({ screening = {}, evaluacion = null, incidencias = [] } 
 // `maxPlausible` = techo anatómico. Un valor por encima no es una medición
 // fuera de rango: es una medición de otra cosa. Se excluye del promedio en vez
 // de aportar un 100% falso.
+// `bandas` = niveles clínicos. Solo se listan los que SON hallazgo (limitado
+// y disfuncional): por encima de la banda más alta no se emite nada. La ficha
+// muestra los cuatro niveles como referencia de lectura, el motor marca dos.
+// El esquema sale de las bandas que Manu definió para el tobillo.
+//
+// `noPromedia` = el valor se evalúa con sus bandas pero NO entra al promedio
+// de ROM global. Es para ángulos de alineación postural, que no son rangos
+// articulares: meter el ángulo craneovertebral en un "% del rango normativo"
+// diluiría la movilidad con un dato de otra naturaleza.
 export const ROM_GYM = [
-  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180, mdc: 8  },
-  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90,  mdc: 8  },
-  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70,  mdc: 8  },
+  // Ángulo craneovertebral: línea C7→trago contra la horizontal por C7.
+  // Bandas por percentiles de la distribución publicada — media 50,7° ± 6,3°
+  // en postura relajada, ICC inter 0,88 / intra 0,91 (Cote 2021,
+  // Int J Telerehabil, DOI 10.5195/ijt.2021.6346). No son cortes inventados.
+  // OJO: la media poblacional en reposo ES 50,7°, así que cerca de la mitad de
+  // cualquier población cae por debajo del "óptimo". Es un gradiente, no un
+  // diagnóstico.
+  { k: 'mov_cv_angulo',   label: 'Antepulsión cefálica (áng. craneovertebral)', ref: 50,
+    bandas: [{ bajo: 38, nivel: 'disfuncional' }, { bajo: 44, nivel: 'limitado' }],
+    noPromedia: true, mdc: 4 },
+
+  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180, mdc: 8,
+    bandas: [{ bajo: 120, nivel: 'disfuncional' }, { bajo: 150, nivel: 'limitado' }] },
+  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90,  mdc: 8,
+    bandas: [{ bajo: 60,  nivel: 'disfuncional' }, { bajo: 70,  nivel: 'limitado' }] },
+  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70,  mdc: 8,
+    bandas: [{ bajo: 45,  nivel: 'disfuncional' }, { bajo: 55,  nivel: 'limitado' }] },
   { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45,  mdc: 8  },
-  { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120, mdc: 10 },
+  { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120, mdc: 10,
+    // Posición corregida el 14/10/2026: SUPINO. En prono la cadera está
+    // extendida y lo que se mide es extensión. Los 32 registros existentes
+    // (90° a 132°) son flexión supina, así que el campo se conserva.
+    bandas: [{ bajo: 80, nivel: 'disfuncional' }, { bajo: 100, nivel: 'limitado' }] },
 
   // ─── Rotación de cadera ────────────────────────────────────────────────────
   // Protocolo: prono, rodillas a 90°, dejando caer las tibias. Hacia afuera =
@@ -241,7 +268,8 @@ export const ROM_GYM = [
   // El discriminador es el ARCO TOTAL (RI + RE): la cadera retrovertida tiene
   // RI baja, RE alta y arco normal; la restringida tiene el arco reducido.
   { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8,
-    arco: { par: 'mov_cad_rot_ext', min: 70, etiqueta: 'Arco de rotación de cadera' } },
+    arco: { par: 'mov_cad_rot_ext', min: 70, etiqueta: 'Arco de rotación de cadera',
+            bandas: [{ bajo: 60, nivel: 'disfuncional' }, { bajo: 70, nivel: 'restricción' }] } },
   { k: 'mov_cad_rot_ext', label: 'Rotación externa de cadera',   ref: 45,  mdc: 8  },
 
   // ─── Tobillo ───────────────────────────────────────────────────────────────
@@ -329,10 +357,10 @@ export function calcROMGym(screening = {}) {
       return;
     }
 
-    lados.forEach(v => { suma += Math.min(v / m.ref * 100, 100); n++; });
+    if (!m.noPromedia) lados.forEach(v => { suma += Math.min(v / m.ref * 100, 100); n++; });
     const peor = Math.min(...lados);
     const pct = Math.round(Math.min(peor / m.ref * 100, 100));
-    detalle.push({ mov: m.label, der, izq, ref: m.ref, pct });
+    detalle.push({ mov: m.label, der, izq, ref: m.ref, pct, noPromedia: !!m.noPromedia });
 
     // Bandas clínicas si el movimiento las tiene (se evalúa de peor a mejor);
     // si no, punto de corte absoluto; si no, 80% de la referencia.
@@ -396,7 +424,9 @@ export function calcROMGym(screening = {}) {
                      ref: m.arco.min, pct: Math.round(Math.min(arco / m.arco.min * 100, 100)), arco });
       const refRI = m.ref, refRE = otro?.ref ?? m.ref;
       if (arco < m.arco.min) {
-        limitados.push(`${m.arco.etiqueta} ${nombreLado}: ${arco}° (RI ${a[lado]}° + RE ${b[lado]}°, mínimo ${m.arco.min}°) — restricción real`);
+        const bandaArco = [...(m.arco.bandas || [])].sort((x, y) => x.bajo - y.bajo).find(x => arco < x.bajo);
+        const nivel = bandaArco ? bandaArco.nivel : 'restricción';
+        limitados.push(`${m.arco.etiqueta} ${nombreLado}: ${arco}° (RI ${a[lado]}° + RE ${b[lado]}°, mínimo ${m.arco.min}°) — ${nivel} real`);
       } else if (a[lado] < 0.8 * refRI && b[lado] >= refRE) {
         // Arco normal, RI baja y RE por encima de su referencia: la movilidad
         // total está y lo que cambia es el reparto. Eso es geometría del cuello
@@ -421,12 +451,22 @@ export function calcROMGym(screening = {}) {
     });
   });
 
-  if (n === 0) return { medido: false, pct: null, detalle: [], limitados: [], asimetrias: [], invalidos, estructurales, ambiguos };
+  // `n === 0` significa que no hay nada que promediar, NO que no haya
+  // hallazgos: un screening con solo el ángulo craneovertebral cargado (que
+  // tiene noPromedia) cae acá teniendo una limitación detectada. La versión
+  // anterior devolvía arrays vacíos y la perdía.
+  const hayHallazgos = !!(limitados.length || asimetrias.length || invalidos.length
+                       || estructurales.length || ambiguos.length);
+  if (n === 0) return {
+    medido: false, pct: null, n: 0, hayHallazgos,
+    detalle: detalle.sort((a, b) => a.pct - b.pct),
+    limitados, asimetrias, invalidos, estructurales, ambiguos,
+  };
   return {
     medido: true,
     pct: Math.round(suma / n),
     detalle: detalle.sort((a, b) => a.pct - b.pct),
-    limitados, asimetrias, invalidos, estructurales, ambiguos, n,
+    limitados, asimetrias, invalidos, estructurales, ambiguos, n, hayHallazgos,
   };
 }
 
@@ -624,7 +664,7 @@ export function resumenDeterminista(cliente, metricas, avance) {
   if (metricas.romPct != null) {
     L.push(`ROM: ${metricas.romPct}% del rango normativo (fuente: ${metricas.romOrigen})`);
     const rg = metricas.romGym;
-    if (rg?.medido) {
+    if (rg?.medido || rg?.hayHallazgos) {
       if (rg.limitados.length) L.push(`  · limitados: ${rg.limitados.join('; ')}`);
       if (rg.asimetrias.length) L.push(`  · asimetrías ≥15% y por encima del error de medición: ${rg.asimetrias.map(a => `${a.mov} D ${a.der}° / I ${a.izq}° (${a.difPct}%, ${a.dif}°, corto ${a.ladoCorto})`).join('; ')}`);
       if (rg.estructurales?.length) L.push(`  · déficit NO entrenable (arquitectura ósea): ${rg.estructurales.map(e => `${e.mov} ${e.lado} — ${e.nota}`).join(' | ')}`);
