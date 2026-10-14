@@ -85,6 +85,13 @@ where (screening->>'peso')  ~ '^[0-9]+\.?[0-9]*$'
   and abs((screening->>'imc')::numeric
           - round((screening->>'peso')::numeric / power((screening->>'talla')::numeric/100, 2), 1)) > 0.5;
 
+-- Pablo Hernández: peso = "67/85". Confirmado por Manu el 14/10: es 67,85 kg.
+-- Se escribe con punto porque es el formato de cálculo; la app lo muestra
+-- con coma.
+update gym_clients
+set screening = jsonb_set(screening, '{peso}', '"67.85"'::jsonb)
+where (screening->>'peso') = '67/85';
+
 -- Matías Dumas: dominadas con peso_levantado = -1.
 -- Las dominadas sin lastre van con 0; -1 no significa nada y ensucia
 -- cualquier promedio o ratio por peso corporal.
@@ -167,5 +174,7 @@ select 'registros huérfanos',
        (select count(*)::text from ejecucion_registros e
         where not exists (select 1 from gym_planes p where p.id=e.plan_id))
 union all
-select '— queda pendiente, decisión tuya —',
-       'peso "67/85" de Pablo Hernández: ambiguo, no se tocó';
+select 'pesos ambiguos sin resolver',
+       (select count(*)::text from gym_clients
+        where (screening->>'peso') is not null and (screening->>'peso') <> ''
+          and (screening->>'peso') !~ '^[0-9]+\.?[0-9]*$');

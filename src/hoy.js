@@ -276,6 +276,41 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
     porQue: 'Venía cargando y dejó. Suele ser la primera señal de que va a dejar de venir.',
   }));
 
+  // ── EVALUADO Y SIN PLAN ────────────────────────────────────────────────
+  //
+  // El agujero más caro del sistema, medido el 14/10/2026:
+  //   · 27 clientes con screening completo nunca recibieron un plan
+  //   · demora mediana entre evaluar y armar el plan: 33 días (máxima 112)
+  //   · ninguno el mismo día
+  //   · de los que esperaron sin plan, el 40% se dio de baja
+  //     contra el 11% de los que sí recibieron plan
+  //   · 9.000 $/mes ya perdidos en bajas, 15.150 $/mes todavía en riesgo
+  //
+  // No era un problema de velocidad: nadie tarda 33 días de trabajo en armar
+  // un plan. Era que nada mostraba la cola. La evaluación se guardaba, se
+  // cerraba la ficha, y el pendiente desaparecía de la vista.
+  //
+  // La ventana son los primeros días: alguien que se evaluó y todavía no
+  // tiene con qué entrenar está pagando por un producto que no recibe.
+  gym.filter(c => c.activo !== false && c.planes_activos === 0 && c.screening_fecha)
+    .forEach(c => {
+      const d = dias(c.screening_fecha);
+      if (d == null || d < 2) return;   // margen razonable para armarlo
+      add({
+        key: `sin_plan:${c.id}`,
+        sev: d > 7 ? 'critico' : 'atencion',
+        icono: '📋',
+        titulo: `${nom(c)} se evaluó hace ${plural(d, 'día', 'días')} y no tiene plan`,
+        detalle: `Evaluación del ${c.screening_fecha}` +
+          (c.test_ultimo ? ` · test de fuerza del ${c.test_ultimo}` : ' · sin test de fuerza'),
+        rank: 1000 + d,   // por encima de casi todo: es plata que se va
+        accion: { label: 'Armar el plan', tab: 'session', clienteId: c.id },
+        porQue: d > 30
+          ? 'Más de un mes esperando. De los clientes que quedaron sin plan, el 40% se dio de baja.'
+          : 'Está pagando y todavía no tiene con qué entrenar. Es la ventana en la que se decide si se queda.',
+      });
+    });
+
   // ── VENCIMIENTOS DEL GYM ───────────────────────────────────────────────
   // Todo aparece con AVISO PREVIO (7 días por defecto) y vuelve a aparecer,
   // con más peso, una vez vencido. Un vencimiento que solo se ve el día
