@@ -1870,7 +1870,7 @@ const FuerzaTab=({brand,clients,s,saveClientFn})=>{
           <span style={s.lbl}>Seleccionar cliente</span>
           <select value={selClientId} onChange={e=>setSelClientId(e.target.value)} style={{...s.sel,width:'100%'}}>
             <option value=''>— Seleccionar cliente —</option>
-            {clients.map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
+            {clients.filter(cl=>cl.activo!==false).map(cl=><option key={cl.id} value={cl.id}>{SF[cl.semaforo]?.emoji||'⚪'} {cl.nombre} {cl.apellido} · {NIVEL[cl.nivel]?.label}</option>)}
           </select>
         </div>
         {pac&&(
@@ -2583,11 +2583,11 @@ const RehabTab=({brand,clients,s})=>{
 
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12}}>
           <div><span style={s.lbl}>Paciente</span>
-            {clients.filter(c=>c.nivel==='restaura').length>0
+            {clients.filter(c=>c.nivel==='restaura'&&c.activo!==false).length>0
               ?<select value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} style={{...s.sel,width:'100%'}}>
                   <option value=''>Sin paciente vinculado</option>
-                  {clients.filter(c=>c.nivel==='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}
-                  {clients.filter(c=>c.nivel!=='restaura').length>0&&<optgroup label="── Otros ──">{clients.filter(c=>c.nivel!=='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}</optgroup>}
+                  {clients.filter(c=>c.nivel==='restaura'&&c.activo!==false).map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}
+                  {clients.filter(c=>c.nivel!=='restaura'&&c.activo!==false).length>0&&<optgroup label="── Otros ──">{clients.filter(c=>c.nivel!=='restaura').map(c=><option key={c.id} value={`${c.nombre} ${c.apellido}`}>{c.nombre} {c.apellido}</option>)}</optgroup>}
                 </select>
               :<input value={activeClientRehab} onChange={e=>setActiveClientRehab(e.target.value)} placeholder="Nombre del paciente" style={s.inp}/>}
           </div>
@@ -3154,7 +3154,7 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
                     <span style={s.lbl}>¿Quién lo recomendó?</span>
                     <input value={form.referidoPor||''} onChange={e=>set('referidoPor',e.target.value)} list="clientes-referido" style={s.inp} placeholder="Nombre del cliente que lo refirió"/>
                     <datalist id="clientes-referido">
-                      {clients.map(cl=><option key={cl.id} value={`${cl.nombre} ${cl.apellido}`}/>)}
+                      {clients.filter(cl=>cl.activo!==false).map(cl=><option key={cl.id} value={`${cl.nombre} ${cl.apellido}`}/>)}
                     </datalist>
                   </div>
                   <div>
@@ -4535,8 +4535,15 @@ export default function App(){
     const q=clienteSearch.trim().toLowerCase();
     // Los dados de baja se ocultan pero NO se borran: conservan planes, tests,
     // evaluaciones y todo el historial del portal, y se pueden reactivar.
+    const activos=clients.filter(c=>c.activo!==false);
     const dadosDeBaja=clients.filter(c=>c.activo===false);
-    const base=verBajas?clients:clients.filter(c=>c.activo!==false);
+    // La lista principal NUNCA mezcla dados de baja. Antes `verBajas` los
+    // metía intercalados en el mismo listado, como fichas completas: un
+    // cliente dado de baja seguía ocupando el mismo lugar visual que uno
+    // activo. Ahora van a un sector propio, al final y colapsado, con una
+    // fila por cliente en vez de la ficha entera. `verBajas` pasó a ser el
+    // abrir/cerrar de ese sector.
+    const base=activos;
     const clientesFiltrados=q?base.filter(c=>{
       const hay=[c.nombre,c.apellido,c.documento,c.celular,c.objetivo].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
@@ -4547,15 +4554,9 @@ export default function App(){
         <div>
           <div style={{fontSize:14,fontWeight:700}}>Directorio de clientes</div>
           <div style={{fontSize:11,color:G4}}>
-            {clients.filter(c=>c.activo!==false).length} activos
+            {activos.length} activos
             {dadosDeBaja.length>0&&<> · {dadosDeBaja.length} de baja</>} · Método Activa Integra v4.0
           </div>
-          {dadosDeBaja.length>0&&(
-            <button onClick={()=>setVerBajas(v=>!v)}
-              style={{marginTop:4,background:'none',border:`1px solid ${G2}`,color:verBajas?'#B45309':G4,borderRadius:6,padding:'3px 9px',fontSize:10,fontWeight:700,cursor:'pointer'}}>
-              {verBajas?`Ocultar los ${dadosDeBaja.length} dados de baja`:`Ver los ${dadosDeBaja.length} dados de baja`}
-            </button>
-          )}
         </div>
         <button onClick={()=>setClientWizard({cli:emptyCliente(),step:0})} style={{...s.btnR,background:brand.colorPrimary}}>+ Alta de cliente</button>
       </div>
@@ -4857,17 +4858,59 @@ export default function App(){
           </div>
         );
       })()}
+      {/* ── DADOS DE BAJA ──────────────────────────────────────────────
+          Sector propio, colapsado, una fila por cliente. No se borra nada:
+          planes, tests, evaluaciones y los registros del portal quedan
+          intactos y la reactivación los devuelve enteros. */}
+      {dadosDeBaja.length>0&&(
+        <div style={{marginTop:14,border:`1px solid ${G2}`,borderRadius:8,background:G1,overflow:'hidden'}}>
+          <button onClick={()=>setVerBajas(v=>!v)}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:8,background:'none',border:'none',
+                    padding:'10px 12px',cursor:'pointer',textAlign:'left'}}>
+            <span style={{fontSize:11,color:G3,width:10,display:'inline-block'}}>{verBajas?'\u25be':'\u25b8'}</span>
+            <span style={{fontSize:11,fontWeight:700,color:'#B45309',textTransform:'uppercase',letterSpacing:'.04em'}}>Dados de baja</span>
+            <span style={{fontSize:11,fontWeight:700,color:WH,background:'#B45309',borderRadius:10,padding:'1px 7px'}}>{dadosDeBaja.length}</span>
+            <span style={{fontSize:10,color:G3,marginLeft:'auto'}}>{verBajas?'ocultar':'no se borr\u00f3 nada \u2014 se pueden reactivar'}</span>
+          </button>
+          {verBajas&&(
+            <div style={{borderTop:`1px solid ${G2}`,background:WH}}>
+              {dadosDeBaja.slice().sort((a,b)=>(b.baja_fecha||'').localeCompare(a.baja_fecha||'')).map(c=>(
+                <div key={c.id} style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',padding:'8px 12px',borderBottom:`1px solid ${G1}`}}>
+                  <div style={{minWidth:0,flex:'1 1 180px'}}>
+                    <div style={{fontSize:12,fontWeight:700,color:G4}}>{c.nombre} {c.apellido}</div>
+                    <div style={{fontSize:10,color:G3}}>
+                      {c.baja_fecha?`Baja el ${c.baja_fecha}`:'Baja sin fecha registrada'}
+                      {c.baja_motivo?` \u00b7 ${c.baja_motivo}`:''}
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:G3,flex:'0 0 auto'}}>
+                    {(c.screeningHistorial||[]).length>0&&<>{(c.screeningHistorial||[]).length} screening{(c.screeningHistorial||[]).length===1?'':'s'} \u00b7 </>}
+                    {c.fechaIngreso?`desde ${c.fechaIngreso}`:''}
+                  </div>
+                  <div style={{display:'flex',gap:5,flex:'0 0 auto'}}>
+                    <button onClick={()=>setClientWizard({cli:c,step:0})} style={{...s.btnG,fontSize:10,padding:'4px 8px'}}>Ver ficha</button>
+                    <button onClick={()=>{
+                        if(!confirm(`\u00bfReactivar a ${c.nombre} ${c.apellido}? Vuelve al listado con todo su historial.`))return;
+                        saveClient({...c,activo:true,baja_fecha:null,baja_motivo:''})?.catch?.(e=>alert('No se pudo: '+e.message));
+                      }} style={{...s.btnG,fontSize:10,padding:'4px 8px',color:'#16A34A',borderColor:'#16A34A'}}>\u21a9 Reactivar</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {clients.length>0&&(
         <div style={{...s.card,marginTop:8,background:G1}}>
           <div style={{fontSize:11,fontWeight:700,marginBottom:8,color:G4}}>Resumen</div>
           <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-            {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{v.label}</div><div style={{fontSize:18,fontWeight:700,color:v.color}}>{n}</div></div>;})}
+            {Object.entries(NIVEL).map(([k,v])=>{const n=activos.filter(c=>c.nivel===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3,textTransform:'uppercase'}}>{v.label}</div><div style={{fontSize:18,fontWeight:700,color:v.color}}>{n}</div></div>;})}
             <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20,display:'flex',gap:14}}>
-              {Object.entries(SF).map(([k,v])=>{const n=clients.filter(c=>c.semaforo===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3}}>{v.emoji}</div><div style={{fontSize:16,fontWeight:700,color:v.color}}>{n}</div></div>;})}
+              {Object.entries(SF).map(([k,v])=>{const n=activos.filter(c=>c.semaforo===k).length;return n>0&&<div key={k}><div style={{fontSize:9,color:G3}}>{v.emoji}</div><div style={{fontSize:16,fontWeight:700,color:v.color}}>{n}</div></div>;})}
             </div>
             <div style={{borderLeft:`1px solid ${G2}`,paddingLeft:20}}>
               <div style={{fontSize:9,color:G3}}>Evaluaciones pendientes</div>
-              <div style={{fontSize:16,fontWeight:700,color:'#D97706'}}>{clients.filter(c=>!c.screeningCompleto).length}</div>
+              <div style={{fontSize:16,fontWeight:700,color:'#D97706'}}>{activos.filter(c=>!c.screeningCompleto).length}</div>
             </div>
           </div>
         </div>
@@ -4913,19 +4956,19 @@ export default function App(){
     if(!dia.obj)return(
       <div style={{padding:'16px 14px'}}>
         {DiaTabs()}
-        {clients.filter(c=>c.screeningCompleto).length>0&&(
+        {clients.filter(c=>c.screeningCompleto&&c.activo!==false).length>0&&(
           <div style={{...s.card,marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Vincular cliente a la sesión</div>
             <select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%',marginBottom:activeClient?8:0}}>
               <option value=''>Sin cliente vinculado</option>
-              {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
+              {clients.filter(c=>c.screeningCompleto&&c.activo!==false).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
             </select>
             {activeClient&&SemaforoBanner({cliente:activeClient,setSession,s})}
           </div>
         )}
-        {clients.filter(c=>!c.screeningCompleto).length>0&&(
+        {clients.filter(c=>!c.screeningCompleto&&c.activo!==false).length>0&&(
           <div style={{...s.card,marginBottom:16,background:'#FFFBEB',borderColor:'#FCD34D'}}>
-            <div style={{fontSize:11,color:'#92400E'}}>⏳ {clients.filter(c=>!c.screeningCompleto).length} cliente/s con evaluación pendiente — no disponibles para sesión hasta completar el screening.</div>
+            <div style={{fontSize:11,color:'#92400E'}}>⏳ {clients.filter(c=>!c.screeningCompleto&&c.activo!==false).length} cliente/s con evaluación pendiente — no disponibles para sesión hasta completar el screening.</div>
           </div>
         )}
         {/* PERIODIZACIÓN ACTIVA DEL CLIENTE — condiciona la elección */}
@@ -5199,10 +5242,10 @@ export default function App(){
             <div><span style={s.lbl}>Nombre del día {activeDiaIdx+1}</span><input value={dia.name} onChange={e=>setDia(d=>({...d,name:e.target.value}))} style={s.inp}/></div>
             <div>
               <span style={s.lbl}>Cliente</span>
-              {clients.filter(c=>c.screeningCompleto).length>0
+              {clients.filter(c=>c.screeningCompleto&&c.activo!==false).length>0
                 ?<select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%'}}>
                     <option value=''>Sin cliente</option>
-                    {clients.filter(c=>c.screeningCompleto).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido}</option>)}
+                    {clients.filter(c=>c.screeningCompleto&&c.activo!==false).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido}</option>)}
                   </select>
                 :<input value={session.cliente} onChange={e=>setSession(p=>({...p,cliente:e.target.value}))} placeholder="Nombre del cliente" style={s.inp}/>
               }
@@ -5753,17 +5796,17 @@ export default function App(){
             <div style={{color:WH,fontSize:12,fontWeight:700,letterSpacing:'.04em'}}>Método Activa Integra</div>
             {/* El sello de build visible permite distinguir en un segundo
                 "el código no se subió" de "el navegador tiene caché vieja". */}
-            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.length} clientes · build {typeof __BUILD_ID__!=='undefined'?__BUILD_ID__:'—'}</div>
+            <div style={{color:G3,fontSize:10,marginTop:2}}>{exs.length} ejercicios · {clients.filter(c=>c.activo!==false).length} clientes · build {typeof __BUILD_ID__!=='undefined'?__BUILD_ID__:'—'}</div>
           </div>
           <BotonSalir/>
           <div style={{width:2,height:36,background:brand.colorPrimary,borderRadius:99,flexShrink:0}}/>
           <div style={{display:'flex',flexDirection:'column',gap:2}}>
-            {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k).length;return(<div key={k} style={{display:'flex',gap:5,alignItems:'center',fontSize:10}}><span style={{color:v.color,fontWeight:700,minWidth:20}}>{v.badge}</span><span style={{color:G3}}>{n||'—'}</span></div>);})}
+            {Object.entries(NIVEL).map(([k,v])=>{const n=clients.filter(c=>c.nivel===k&&c.activo!==false).length;return(<div key={k} style={{display:'flex',gap:5,alignItems:'center',fontSize:10}}><span style={{color:v.color,fontWeight:700,minWidth:20}}>{v.badge}</span><span style={{color:G3}}>{n||'—'}</span></div>);})}
           </div>
         </div>
       </div>
       <div style={{...s.tabBar,background:'#141414',borderBottomColor:brand.colorPrimary}}>
-        {[['hoy',`📍 Hoy${hoyCriticos>0?` (${hoyCriticos})`:''}`],['clientes',`👥 Clientes${clients.length>0?` (${clients.length})`:''}`,],['riel',`⚠️ Sala${incPendientes>0?` (${incPendientes})`:''}`],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
+        {[['hoy',`📍 Hoy${hoyCriticos>0?` (${hoyCriticos})`:''}`],['clientes',`👥 Clientes${clients.filter(c=>c.activo!==false).length>0?` (${clients.filter(c=>c.activo!==false).length})`:''}`,],['riel',`⚠️ Sala${incPendientes>0?` (${incPendientes})`:''}`],['session','🏗️ Constructor'],['fuerza','💪 Fuerza'],['nutricion','🥗 Nutrición'],['rehab','🩹 Rehab'],['fisio','🏥 FisioActiva'],['export','📤 Exportar'],['db','📚 Ejercicios'],['brand','🎨 Centro']].map(([k,lbl])=>(
           <button key={k} onClick={()=>setTab(k)} style={s.tb(tab===k,brand.colorPrimary)}>{lbl}</button>
         ))}
       </div>

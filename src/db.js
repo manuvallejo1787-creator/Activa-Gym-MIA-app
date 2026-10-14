@@ -329,6 +329,12 @@ function mapClientFromDB(r) {
     periodizacionesHistorial: r.periodizaciones_historial||[],
     portal_token: r.portal_token||'',
     criterios_avance_estado: r.criterios_avance_estado||{},
+    // La otra mitad del bug de la baja: tampoco se leían. Incluso si el
+    // upsert los hubiera guardado, al recargar llegaban como undefined y
+    // `activo !== false` daba true, así que todos aparecían activos.
+    activo: r.activo !== false,
+    baja_fecha: r.baja_fecha||'',
+    baja_motivo: r.baja_motivo||'',
   }
 }
 function mapClientToDB(c) {
@@ -349,6 +355,18 @@ function mapClientToDB(c) {
     periodizacion_snapshot_inicio: c.periodizacionSnapshotInicio||null,
     periodizaciones_historial: c.periodizacionesHistorial||[],
     criterios_avance_estado: c.criterios_avance_estado||{},
+    // LA BAJA NO SE GUARDABA. Estos tres campos existen en gym_clients con
+    // sus tipos correctos (boolean default true, date, text) pero no estaban
+    // en el mapper, así que el upsert nunca los mandaba: el estado local se
+    // actualizaba, la ficha desaparecía un instante, y al refrescar el cliente
+    // volvía activo. Verificado en la base: 74 clientes, 0 dados de baja.
+    // Cada baja hecha desde la app se perdió.
+    //
+    // `!== false` y no `|| true`: un cliente viejo sin el campo tiene que
+    // quedar activo, pero un false explícito tiene que viajar como false.
+    activo: c.activo !== false,
+    baja_fecha: c.baja_fecha || null,       // columna date: '' la rechaza
+    baja_motivo: c.baja_motivo || '',
     ...(c.portal_token?{portal_token:c.portal_token}:{}),
   }
 }
