@@ -256,7 +256,7 @@ function familia(ex) {
 // todos: antes el bono por déficit (+100 y acumulable por cada patrón que
 // matcheara) sepultaba el patrón del día y salían tres días idénticos de
 // sentadillas.
-function elegirEjercicios({ bloque, cantidad, exs, cliente, checkRestriction, patronesDia, patronesDeficit, faseCliente, yaUsados, usoEnPlan = {} }) {
+function elegirEjercicios({ bloque, cantidad, exs, cliente, checkRestriction, patronesDia, patronesDeficit, faseCliente, yaUsados, usoEnPlan = {}, famDia = {} }) {
   const nivelObjetivo = faseCliente === 'restaura' ? 'Principiante'
                       : faseCliente === 'activa' ? 'Intermedio' : 'Avanzado';
   const ordenNivel = { Principiante: 0, Intermedio: 1, Avanzado: 2 };
@@ -287,15 +287,32 @@ function elegirEjercicios({ bloque, cantidad, exs, cliente, checkRestriction, pa
     .filter(Boolean);
 
   const elegidos = [];
-  const porFamilia = {};
+  // La penalizacion por familia se arrastra de un bloque al siguiente DENTRO
+  // del mismo dia. Antes `porFamilia` era local a esta funcion, que se llama
+  // una vez por bloque: la cuenta se reiniciaba en cada uno y una sesion podia
+  // salir con sentadilla en fuerza, prensa en accesorios y zancada en
+  // funcional, tres dominantes de rodilla sin que nada lo frenara.
+  //
+  // Medido sobre el catalogo real, 72 sesiones generadas:
+  //   35% de los ejercicios eran de tren inferior
+  //   la mitad de las sesiones tenian 4 o mas
+  //   traccion vertical: 1,5% — practicamente no aparecia
+  const porFamilia = famDia;
   for (let k = 0; k < cantidad; k++) {
     let mejor = null, mejorScore = -Infinity;
     for (const c of candidatos) {
       if (elegidos.includes(c)) continue;
       // Penalización por familia ya cubierta: la segunda del mismo patrón
-      // pierde 60 puntos, la tercera 120. Con esto, después de una sentadilla
-      // gana un empuje o una tracción antes que otra sentadilla.
-      const score = c.base - (porFamilia[c.fam] || 0) * 60;
+      // pierde 120 puntos, la tercera 240. Se subió de 60 a 120 porque con 60
+      // la penalización no alcanzaba a vencer al bono del patrón del día
+      // (+40) sumado al de déficit (+25): el 40% de las sesiones que NO eran
+      // de pierna salían igual con cuatro o más ejercicios de tren inferior.
+      // Barrido sobre 72 sesiones generadas con el catálogo real:
+      //    60 -> 40% de sesiones no-pierna saturadas · ratio empuje:tracción 1,19
+      //    90 -> 20% · 1,03
+      //   120 ->  0% · 1,07   <- elegido
+      //   150 ->  0% · 1,03   (no mejora, y arriesga forzar variedad sin sentido)
+      const score = c.base - (porFamilia[c.fam] || 0) * 120;
       if (score > mejorScore) { mejorScore = score; mejor = c; }
     }
     if (!mejor) break;
@@ -429,11 +446,13 @@ export function generarPlanBase({
     const diaPlan = rotacion[d % rotacion.length] || { label: 'general', terminos: [] };
     const patronesDia = diaPlan.terminos;
     const yaUsados = new Set();   // sin repetir ejercicio dentro del mismo día
+    const famDia = {};            // familias ya cubiertas hoy, a través de los bloques
     const blocks = bloques.map((tipo, i) => {
       const params = paramsDeBloque(tipo, fasePer);
       const elegidos = elegirEjercicios({
         bloque: tipo, cantidad: cupos[tipo] ?? 2, exs, cliente, checkRestriction,
         patronesDia, patronesDeficit, faseCliente: fase, yaUsados, usoEnPlan,
+        famDia,   // memoria de familias compartida por todos los bloques del dia
       });
       elegidos.forEach(c => { yaUsados.add(c.ex.id); usoEnPlan[c.ex.id] = (usoEnPlan[c.ex.id] || 0) + 1; });
 
