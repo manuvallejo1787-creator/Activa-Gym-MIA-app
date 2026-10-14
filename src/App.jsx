@@ -1209,13 +1209,16 @@ const MiniEvaluacionModal=({cliente,saveClient,onClose,brand,s})=>{
       <script>window.onload=()=>window.print()<\/script></body></html>`;
     const w=window.open('','_blank');w.document.write(html);w.document.close();
 
+    // No se cierra el overlay hasta saber que se guardó: cerrar antes perdía
+    // el cierre de ciclo en silencio si el upsert fallaba.
     saveClient({
       ...cliente,
       periodizacionesHistorial:[...(cliente.periodizacionesHistorial||[]),registro],
       // se cierra el ciclo — queda sin periodización asignada hasta que se elija la siguiente
       periodizacion:'',periodizacionInicio:'',periodizacionFin:'',periodizacionSnapshotInicio:null,
-    });
-    onClose();
+    })
+      .then(onClose)
+      .catch(e=>alert('El informe se abrió, pero el cierre de ciclo NO se guardó: '+(e?.message||'error desconocido')+'\nNo cierres esta ventana y probá de nuevo.'));
   };
 
   return OverlayWrap({children:(<>
@@ -2132,7 +2135,7 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
         notaPer=`⚠ ${PERIODIZACIONES[perId].nombre} no es compatible con ${NIVEL[upd.nivel]?.label||upd.nivel} ni con ${NIVEL[nivelDestino]?.label||nivelDestino}. No se asignó.`;
       }
       if(notaPer)upd._informeIA=(upd._informeIA||'')+`<br><br><strong>Periodización:</strong> ${notaPer}`;
-      saveClient(upd);
+      saveClient(upd)?.catch?.(e=>alert('El análisis se generó pero NO se guardó en la ficha: '+(e?.message||'error desconocido')));
       if(notaPer.startsWith('⚠'))alert(notaPer);
       if(faseBloqueada)alert(`La IA sugiere avanzar a ${NIVEL[ai.fase_sugerida]?.label}, pero eso se confirma desde "📈 Avance de fase" en el directorio — ahí vas a ver qué requisitos faltan.`);
       // Llevar al constructor de sesión con el cliente vinculado y la fase aplicada
@@ -2951,11 +2954,13 @@ const ExForm=({ex, onSave, onClose, exs, s})=>{
     );
   };
 
-const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
+const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
     if(!clientWizard)return null;
     const [step,setStep]=useState(clientWizard.step||0);
     const [form,setForm]=useState(()=>({...clientWizard.cli}));
     const [sc,setSc]=useState(()=>({...clientWizard.cli.screening}));
+    const [guardando,setGuardando]=useState(false);
+    const [errGuardar,setErrGuardar]=useState('');
     const set=(k,v)=>setForm(f=>({...f,[k]:v}));
     const setSCK=(k,v)=>setSc(f=>({...f,[k]:v}));
     const isNew=!clientWizard.cli.screeningCompleto;
@@ -2989,7 +2994,14 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
         screening:sc,
         screeningHistorial:[...(form.screeningHistorial||[]),snapshot],
       };
-      saveClient(saved);
+      // Se espera el guardado ANTES de cerrar. Si falla, el wizard queda
+      // abierto con los 12 pasos cargados y el error a la vista, en vez de
+      // cerrarse y perder todo.
+      setErrGuardar(''); setGuardando(true);
+      completarAlta(saved).catch(e=>{
+        setErrGuardar(e?.message||'No se pudo guardar el alta. Revisá la conexión y probá de nuevo.');
+        setGuardando(false);
+      });
     };
 
     const inp2=(k,placeholder='')=>(
@@ -3202,8 +3214,14 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
               <div style={{fontSize:12,color:G4,lineHeight:1.6,marginBottom:12}}>La ficha queda guardada con semáforo ⏳ PENDIENTE. El cliente aparece en el directorio pero no está disponible para construir sesiones hasta completar la evaluación funcional.</div>
               <button onClick={()=>{
                 const saved={...form,nivel:'activa',semaforo:'pendiente',restricciones:'',restricciones_flags:{impacto:false,overhead:false,cargaAxial:false},fechaEval:'',screeningCompleto:false,screening:{...emptyScreening(),...sc}};
-                saveClient(saved);
-              }} style={{...s.btnGreen,width:'100%',padding:'11px',fontSize:13}}>Guardar ficha — completar evaluación después</button>
+                // Mismo criterio que en el cierre del alta: no se cierra el
+                // modal hasta saber que se guardó. Acá no se navega al
+                // constructor porque la evaluación todavía está a medias.
+                setErrGuardar(''); setGuardando(true);
+                saveClient(saved)
+                  .then(()=>setClientWizard(null))
+                  .catch(e=>{ setErrGuardar(e?.message||'No se pudo guardar la ficha.'); setGuardando(false); });
+              }} disabled={guardando} style={{...s.btnGreen,width:'100%',padding:'11px',fontSize:13,opacity:guardando?.6:1}}>{guardando?'Guardando…':'Guardar ficha — completar evaluación después'}</button>
             </div>
             <div style={{...s.card,borderLeft:'4px solid #D97706',marginBottom:12,background:'#FFFBEB'}}>
               <div style={{fontWeight:700,fontSize:12,color:'#92400E',marginBottom:4}}>📅 Recordatorio</div>
@@ -3717,10 +3735,17 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
           <button onClick={()=>step>0&&setStep(p=>p-1)} disabled={step===0} style={{...s.btnG,opacity:step===0?.3:1}}>← Anterior</button>
           <span style={{fontSize:11,color:G3}}>{step+1} / {totalSteps}</span>
           {isLast
-            ?<button onClick={finalize} style={{...s.btnGreen,padding:'9px 20px'}}>✓ Completar alta</button>
+            ?<button onClick={finalize} disabled={guardando} style={{...s.btnGreen,padding:'9px 20px',opacity:guardando?.6:1}}>{guardando?'Guardando…':'✓ Completar alta'}</button>
             :<button onClick={()=>canNext&&setStep(p=>p+1)} disabled={!canNext} style={{...s.btnR,opacity:!canNext?.4:1}}>Siguiente →</button>
           }
         </div>
+        {errGuardar&&(
+          <div style={{marginTop:10,background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'9px 11px'}}>
+            <div style={{fontSize:11,fontWeight:700,color:'#B91C1C',marginBottom:2}}>No se guardó</div>
+            <div style={{fontSize:11,color:'#7F1D1D',lineHeight:1.5}}>{errGuardar}</div>
+            <div style={{fontSize:10,color:'#991B1B',marginTop:4}}>La ficha sigue cargada acá: no cierres esta ventana hasta que se guarde.</div>
+          </div>
+        )}
         {step===0&&(!form.nombre||!form.apellido||!form.documento||!form.celular)&&(
           <div style={{fontSize:10,color:'#D97706',textAlign:'center',marginTop:6}}>* Nombre, apellido, documento y celular son obligatorios para continuar</div>
         )}
@@ -4237,9 +4262,31 @@ export default function App(){
   };
 
   // ─── GUARDAR CLIENTE ────────────────────────────────────────────────────
-  const saveClient=(client)=>{
-    saveClientFn(client).catch(e=>console.error('Error guardando cliente:',e));
+  // DEVUELVE LA PROMESA, a propósito. Antes era:
+  //   saveClientFn(client).catch(e=>console.error(...)); setClientWizard(null);
+  // y eso tenía dos fallas que se tapaban entre sí:
+  //
+  // 1) Cerraba el wizard SIN ESPERAR el resultado, y el error solo iba a la
+  //    consola. Se completaban 12 pasos de screening, se apretaba "Completar
+  //    alta", el modal se cerraba y si el upsert fallaba se perdía todo sin un
+  //    solo aviso. Se vuelve más probable con el CHECK constraint sobre
+  //    fechaEvaluacion: Postgres rechaza la fila y el alta desaparece.
+  // 2) Cuatro llamadores hacen saveClient(...)?.catch?.(e=>alert(...)) —dar de
+  //    baja, reactivar, cambiar criterios, avanzar de fase— y recibían
+  //    `undefined`, así que esos manejadores de error nunca corrían.
+  //
+  // Ahora quien llama decide: espera, muestra el error y cierra si salió bien.
+  const saveClient=(client)=>saveClientFn(client);
+
+  // Cierre del alta: guarda, y SOLO si se guardó cierra el wizard y deja a la
+  // persona en el constructor con ese cliente ya elegido. El paso siguiente
+  // real después de un screening es armar el plan, y hasta ahora había que
+  // buscar al cliente de nuevo a mano.
+  const completarAlta=async(client)=>{
+    await saveClientFn(client);                       // lanza si falla
     setClientWizard(null);
+    setSession(p=>({...p,clienteId:client.id,cliente:`${client.nombre||''} ${client.apellido||''}`.trim()}));
+    setTab('session');
   };
   // Genera (si hace falta) y copia el link del portal personal del cliente
   const copiarPortalCliente=async(c)=>{
@@ -5686,7 +5733,7 @@ export default function App(){
 
   return(
     <div style={s.page}>
-      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
+      {clientWizard&&<ClientWizardModal clientWizard={clientWizard} saveClient={saveClient} completarAlta={completarAlta} setClientWizard={setClientWizard} brand={brand} NIVEL={NIVEL} SF={SF} OBJS={OBJS} s={s} emptyScreening={emptyScreening} clients={clients}/>}
       {informeCliente&&<InformeClienteModal cliente={informeCliente} onClose={()=>setInformeCliente(null)} saveClient={saveClient} exs={exs} s={s} brand={brand} setSession={setSession} setTab={setTab} iaReglas={iaReglas}/>}
       {miniEvalCliente&&<MiniEvaluacionModal cliente={miniEvalCliente} saveClient={saveClient} onClose={()=>setMiniEvalCliente(null)} brand={brand} s={s}/>}
       {dbLoading&&(
