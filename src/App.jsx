@@ -10,8 +10,9 @@ import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
-import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista } from "./motor.js";
-import { generarPlanBase, DIVISIONES } from "./generadorPlan.js";
+import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista,
+         sintetizarScreening, sintetizarPrioridades } from "./motor.js";
+import { generarPlanBase, DIVISIONES, derivarPatronesDeficit } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
 import Hoy from "./Hoy.jsx";
 import SalaDashboard from "./SalaDashboard.jsx";
@@ -3598,10 +3599,58 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
           );
         }
         // ── PASO 10: SÍNTESIS Y PLAN ─────────────────────────────────────
-        case 11: return(
+        // ── PASO 11: SÍNTESIS Y PLAN ──────────────────────────────────────
+        // Estos dos campos eran textarea vacíos con placeholder "1. 2. 3.", o
+        // sea que había que transcribir a mano lo que el motor ya tenía
+        // calculado: limitados, asimetrías, estructurales, ambiguos, banderas,
+        // EVA, Y-Balance y calidad de movimiento. Ahora el botón los trae.
+        //
+        // Las prioridades salen de derivarPatronesDeficit(), LA MISMA función
+        // que usa el generador para puntuar ejercicios. Antes el informe se
+        // escribía aparte y podía prometer una prioridad que el plan no
+        // aplicaba.
+        case 11: {
+          // Se calcula sobre el screening que se está editando, no sobre el
+          // guardado: el botón tiene que reflejar lo que acabás de cargar.
+          // tests va vacío a propósito — en el alta todavía no hay tests de
+          // fuerza cargados, y la asimetría de fuerza se lee de fuerza_tests.
+          const mWiz = computarMetricas({ ...form, screening: sc }, { tests: [], feedback: [] });
+          const sint = sintetizarScreening(mWiz);
+          const { patrones } = derivarPatronesDeficit(mWiz);
+          const prio = sintetizarPrioridades(patrones, mWiz);
+          const hayAlgo = sint.n > 0 && !/^1\. Sin hallazgos/.test(sint.hallazgos);
+          const traer = () => {
+            const ocupado = (sc.hallazgosPrincipales || '').trim() || (sc.prioridades || '').trim();
+            if (ocupado && !window.confirm('Ya hay texto escrito. ¿Reemplazarlo con la síntesis del motor?')) return;
+            setSCK('hallazgosPrincipales', sint.hallazgos);
+            setSCK('prioridades', prio);
+          };
+          return(
           <div>
-            <div><span style={s.lbl}>Hallazgos principales</span><textarea value={sc.hallazgosPrincipales||''} onChange={e=>setSCK('hallazgosPrincipales',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
-            <div style={{marginTop:10}}><span style={s.lbl}>Prioridades de trabajo</span><textarea value={sc.prioridades||''} onChange={e=>setSCK('prioridades',e.target.value)} rows={3} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical'}}/></div>
+            <div style={{background:hayAlgo?'#EFF6FF':'#F9FAFB',border:`1px solid ${hayAlgo?'#93C5FD':G2}`,borderRadius:8,padding:'10px 12px',marginBottom:12}}>
+              <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                <button type="button" onClick={traer} disabled={!hayAlgo}
+                  style={{...s.btnGreen,opacity:hayAlgo?1:.4,cursor:hayAlgo?'pointer':'default'}}>
+                  ⤓ Traer la síntesis del motor
+                </button>
+                <div style={{fontSize:11,color:G4,flex:1,minWidth:180}}>
+                  {hayAlgo
+                    ? <>El motor detecta <strong>{sint.n} hallazgo{sint.n===1?'':'s'}</strong> y <strong>{patrones.length} prioridad{patrones.length===1?'':'es'}</strong> con los datos cargados. Es un borrador: corregilo libremente.</>
+                    : <>Todavía no hay datos suficientes en los pasos anteriores para sintetizar nada.</>}
+                </div>
+              </div>
+              {(sint.tieneDeudaDeMedicion || sint.tieneNoEntrenables) && (
+                <div style={{fontSize:10,color:'#9A3412',marginTop:7,lineHeight:1.5}}>
+                  {sint.tieneDeudaDeMedicion && <div>· Hay hallazgos marcados <strong>FALTA MEDIR</strong>: no se puede afirmar restricción sin el dato que falta.</div>}
+                  {sint.tieneNoEntrenables && <div>· Hay hallazgos marcados <strong>NO ENTRENABLE</strong>: son arquitectura ósea y no entran a las prioridades.</div>}
+                </div>
+              )}
+              <div style={{fontSize:10,color:G3,marginTop:7}}>
+                La asimetría de fuerza no aparece acá porque se lee de los tests de fuerza, que se cargan después del alta.
+              </div>
+            </div>
+            <div><span style={s.lbl}>Hallazgos principales</span><textarea value={sc.hallazgosPrincipales||''} onChange={e=>setSCK('hallazgosPrincipales',e.target.value)} rows={Math.min(14,Math.max(3,(sc.hallazgosPrincipales||'').split('\n').length))} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical',fontSize:12,lineHeight:1.5}}/></div>
+            <div style={{marginTop:10}}><span style={s.lbl}>Prioridades de trabajo</span><textarea value={sc.prioridades||''} onChange={e=>setSCK('prioridades',e.target.value)} rows={Math.min(10,Math.max(3,(sc.prioridades||'').split('\n').length))} placeholder="1.&#10;2.&#10;3." style={{...s.inp,resize:'vertical',fontSize:12,lineHeight:1.5}}/></div>
             <div style={{marginTop:14,fontSize:11,fontWeight:700,marginBottom:8}}>Asignación de nivel — Método Activa Integra</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
               {Object.entries(NIVEL).map(([k,v])=>(
@@ -3626,7 +3675,8 @@ const ClientWizardModal=({clientWizard,saveClient,setClientWizard,brand,NIVEL,SF
               </div>
             </div>
           </div>
-        );
+          );
+        }
         default: return null;
       }
     };

@@ -269,7 +269,8 @@ export const ROM_GYM = [
   // RI baja, RE alta y arco normal; la restringida tiene el arco reducido.
   { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8,
     arco: { par: 'mov_cad_rot_ext', min: 70, etiqueta: 'Arco de rotación de cadera',
-            bandas: [{ bajo: 60, nivel: 'disfuncional' }, { bajo: 70, nivel: 'restricción' }] } },
+            bandas: [{ bajo: 60, nivel: 'restricción disfuncional' },
+                      { bajo: 70, nivel: 'restricción real' }] } },
   { k: 'mov_cad_rot_ext', label: 'Rotación externa de cadera',   ref: 45,  mdc: 8  },
 
   // ─── Tobillo ───────────────────────────────────────────────────────────────
@@ -425,8 +426,8 @@ export function calcROMGym(screening = {}) {
       const refRI = m.ref, refRE = otro?.ref ?? m.ref;
       if (arco < m.arco.min) {
         const bandaArco = [...(m.arco.bandas || [])].sort((x, y) => x.bajo - y.bajo).find(x => arco < x.bajo);
-        const nivel = bandaArco ? bandaArco.nivel : 'restricción';
-        limitados.push(`${m.arco.etiqueta} ${nombreLado}: ${arco}° (RI ${a[lado]}° + RE ${b[lado]}°, mínimo ${m.arco.min}°) — ${nivel} real`);
+        const nivel = bandaArco ? bandaArco.nivel : 'restricción real';
+        limitados.push(`${m.arco.etiqueta} ${nombreLado}: ${arco}° (RI ${a[lado]}° + RE ${b[lado]}°, mínimo ${m.arco.min}°) — ${nivel}`);
       } else if (a[lado] < 0.8 * refRI && b[lado] >= refRE) {
         // Arco normal, RI baja y RE por encima de su referencia: la movilidad
         // total está y lo que cambia es el reparto. Eso es geometría del cuello
@@ -582,6 +583,114 @@ export function computarMetricas(cliente = {}, { evaluacion = null, tests = [], 
       fuerzaAsimetria: fuerza.medido ? fuerza.pct : null,
     },
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6.b) SÍNTESIS DEL SCREENING
+//
+// El paso 11 del wizard pedía escribir a mano "Hallazgos principales" y
+// "Prioridades de trabajo" en dos textarea vacíos. El motor ya tenía todo eso
+// calculado: limitados, asimetrías, estructurales, ambiguos, banderas, EVA,
+// asimetría de fuerza, Y-Balance, calidad de movimiento. Se estaba
+// transcribiendo a mano lo que ya estaba en memoria.
+//
+// Devuelve TEXTO, no objetos: va a dos campos editables. Es un borrador para
+// corregir, no un veredicto. El evaluador puede reescribirlo entero.
+//
+// ORDEN: por lo que cambia la conducta, no por región anatómica. Banderas y
+// dolor primero porque condicionan todo lo demás; lo no entrenable y lo que
+// falta medir al final, porque son avisos y no objetivos.
+// ═══════════════════════════════════════════════════════════════════════════
+export function sintetizarScreening(metricas = {}) {
+  const H = [];
+  const m = metricas;
+
+  // calcBanderas devuelve { hay, activas, bloqueante } — no un array suelto.
+  const ETIQUETA_BANDERA = { roja: 'BANDERA ROJA', naranja: 'Bandera naranja', amarilla: 'Bandera amarilla' };
+  (m.banderas?.activas || []).forEach(b =>
+    H.push(`${ETIQUETA_BANDERA[b.nivel] || 'Bandera'}: ${b.texto}.`));
+
+  // calcEva no devuelve zona: solo eva, origen, fecha y a veces detalle.
+  if (m.eva?.medido && m.eva.eva > 0) {
+    H.push(`Dolor ${m.eva.eva}/10${m.eva.origen ? ` (${m.eva.origen})` : ''}.`);
+  }
+
+  const rg = m.romGym || {};
+  // Lo disfuncional antes que lo limitado: no es el mismo nivel de hallazgo.
+  const disf = (rg.limitados || []).filter(l => /disfuncional/i.test(l));
+  const lim  = (rg.limitados || []).filter(l => !/disfuncional/i.test(l));
+  disf.forEach(l => H.push(`${l}.`));
+  lim.forEach(l => H.push(`${l}.`));
+
+  // Sin toLowerCase: arruinaba los acrónimos — "(WBLT)" quedaba "(wblt)".
+  (rg.asimetrias || []).forEach(a =>
+    H.push(`Asimetría — ${a.mov}: der ${a.der}° / izq ${a.izq}° — ${a.difPct}%, ${a.dif}°, lado corto ${a.ladoCorto}.`));
+
+  // calcAsimetriaFuerza devuelve pct, izq y der — no un lado débil ya
+  // resuelto. Se deriva acá en vez de leer un campo que no existe.
+  if (m.fuerza?.medido && m.fuerza.pct >= 10) {
+    const debil = (m.fuerza.izq != null && m.fuerza.der != null)
+      ? (m.fuerza.izq < m.fuerza.der ? ', lado débil izquierdo' : ', lado débil derecho') : '';
+    H.push(`Asimetría de fuerza del ${m.fuerza.pct}%${debil} (1RM der ${m.fuerza.der} / izq ${m.fuerza.izq} kg).`);
+  }
+  if (m.ybalance?.medido && !m.ybalance.simetrico) {
+    H.push(`Y-Balance asimétrico: ${m.ybalance.difAntCm} cm de diferencia en dirección anterior (umbral 4 cm).`);
+  }
+  (m.calidad?.detalle || []).filter(d => d.puntos <= 2).forEach(d =>
+    H.push(`${d.patron}: ${d.puntos}/3 en calidad de movimiento.`));
+  (m.calidad?.asimetrias || []).forEach(a =>
+    H.push(`Falla unilateral en ${a.patron}, lado ${a.lado}.`));
+
+  if (m.romPct != null) H.push(`ROM global ${m.romPct}% del rango normativo (fuente: ${m.romOrigen}).`);
+
+  // No entrenable: va al informe como hallazgo, pero NO a las prioridades.
+  (rg.estructurales || []).forEach(e =>
+    H.push(`NO ENTRENABLE — ${e.mov} ${e.lado}: ${e.nota}`));
+
+  // Lo que falta medir, al final y marcado: es deuda de evaluación.
+  (rg.ambiguos || []).forEach(a => H.push(`FALTA MEDIR — ${a.motivo}`));
+  (rg.invalidos || []).forEach(i => H.push(`MEDICIÓN INVÁLIDA — ${i.mov}: ${i.motivo}.`));
+
+  if (!H.length) H.push('Sin hallazgos que requieran intervención específica en los datos cargados.');
+
+  return {
+    hallazgos: H.map((t, i) => `${i + 1}. ${t}`).join('\n'),
+    n: H.length,
+    // Hay hallazgos que no se pueden interpretar o que no son entrenables: eso
+    // cambia lo que el informe puede afirmar, así que se expone aparte.
+    tieneDeudaDeMedicion: !!((rg.ambiguos || []).length || (rg.invalidos || []).length),
+    tieneNoEntrenables: !!(rg.estructurales || []).length,
+  };
+}
+
+// Convierte los patrones de déficit del generador en el texto de prioridades.
+// Recibe los patrones ya derivados (derivarPatronesDeficit, en generadorPlan)
+// para que el informe no pueda decir una prioridad que el plan no aplica.
+// Cubre todo lo que DEFICIT_A_PATRON (generadorPlan) puede emitir, más los
+// patrones de movilidad. Sin esto el informe mostraba tokens crudos como
+// "rodilla" o "gluteo", que son etiquetas internas del generador y no
+// prioridades legibles.
+const ETIQUETA_PATRON = {
+  // movilidad articular
+  hombro:'Movilidad de hombro', cadera:'Movilidad de cadera',
+  tobillo:'Dorsiflexión de tobillo', 'torácica':'Movilidad torácica',
+  // patrones de movimiento
+  sentadilla:'Patrón de sentadilla', rodilla:'Fuerza de extensores de rodilla',
+  bisagra:'Patrón de bisagra de cadera', isquio:'Isquiotibiales',
+  zancada:'Patrón de zancada', estocada:'Patrón de estocada',
+  gluteo:'Fuerza de glúteo', empuje:'Empuje', traccion:'Tracción',
+  // control y estabilidad
+  unilateral:'Trabajo unilateral (corregir asimetría)',
+  propioc:'Propiocepción y equilibrio',
+  core:'Estabilidad de core', 'zona media':'Control de zona media',
+};
+export function sintetizarPrioridades(patrones = [], metricas = {}) {
+  const P = patrones.map(p => ETIQUETA_PATRON[p] || p);
+  if (metricas.eva?.medido && metricas.eva.eva >= 4) {
+    P.unshift('Control del dolor antes de progresar carga');
+  }
+  if (!P.length) return 'Sin déficits específicos detectados: plan de base.';
+  return P.map((t, i) => `${i + 1}. ${t}`).join('\n');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

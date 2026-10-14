@@ -24,9 +24,42 @@ export const genId = (prefix = 'id') =>
 // restauración de historial y cualquier camino futuro.
 
 const FECHAS_SCREENING = ['fechaEvaluacion', 'pvfi_proxima_eval', 'fechaNac', 'proximaEval'];
-const ANTROPOMETRIA = ['peso','talla','imc','pctGrasa','fcReposo','per_cintura','per_cadera',
-  'per_cintura_escapular','per_brazo_d','per_brazo_i','per_muslo_d','per_muslo_i',
-  'per_pantorrilla_d','per_pantorrilla_i'];
+// Rango plausible de cada campo, en su propia unidad. No es para validar la
+// carga —el evaluador escribe lo que mide— sino para decidir si una
+// TRANSFORMACIÓN del sanitizador es correcta.
+//
+// El caso que obligó a esto: "1,60" en talla. El sanitizador cambiaba la coma
+// por punto, quedaba "1.60", pasaba el chequeo de "es un número" y se guardaba.
+// La fórmula de IMC divide la talla por 100, así que leía 0,016 m y devolvía un
+// IMC de seis cifras. Un metro sesenta escrito como se escribe acá se convertía
+// en un dato numérico silenciosamente absurdo — peor que uno visiblemente roto,
+// porque el roto aparece en la verificación y el absurdo no.
+//
+// Regla: si el resultado de transformar cae fuera del rango del campo, NO se
+// transforma. El valor original queda como está y se ve como error.
+export const RANGO_PLAUSIBLE = {
+  peso: [25, 300],            // kg
+  talla: [100, 230],          // cm — NO metros
+  imc: [10, 60],
+  pctGrasa: [3, 60],
+  fcReposo: [30, 120],        // lpm
+  per_cintura: [40, 200],     // cm
+  per_cadera: [50, 200],
+  per_cintura_escapular: [60, 180],
+  per_brazo_d: [15, 60],   per_brazo_i: [15, 60],
+  per_muslo_d: [25, 100],  per_muslo_i: [25, 100],
+  per_pantorrilla_d: [20, 70], per_pantorrilla_i: [20, 70],
+};
+const ANTROPOMETRIA = Object.keys(RANGO_PLAUSIBLE);
+
+// ¿El resultado de transformar es creíble para este campo?
+// Sin rango definido se acepta: la tabla manda, no la ausencia de tabla.
+const plausible = (k, txt) => {
+  const r = RANGO_PLAUSIBLE[k];
+  if (!r) return true;
+  const n = parseFloat(txt);
+  return Number.isFinite(n) && n >= r[0] && n <= r[1];
+};
 
 const sanearScreening = (sc) => {
   if (!sc || typeof sc !== 'object') return sc;
@@ -48,15 +81,31 @@ const sanearScreening = (sc) => {
   ANTROPOMETRIA.forEach(k => {
     const v = out[k];
     if (v == null || v === '') return;
-    const s = String(v).trim().replace(',', '.');
-    if (/^[0-9]+\.?[0-9]*$/.test(s)) { out[k] = s; return; }
+    const crudo = String(v).trim();
+
+    // Ya es un número limpio: no se toca, ni siquiera si está fuera de rango.
+    // Si el evaluador midió 24 kg, ese es el dato; el sanitizador limpia
+    // basura, no corrige mediciones.
+    if (/^[0-9]+\.?[0-9]*$/.test(crudo)) { out[k] = crudo; return; }
+
+    // Coma decimal a punto. Solo si el resultado es creíble para el campo:
+    // "67,85" en peso da 67.85 y se aplica; "1,60" en talla daría 1.6 cm y no.
+    const conPunto = crudo.replace(',', '.');
+    if (/^[0-9]+\.?[0-9]*$/.test(conPunto)) {
+      if (plausible(k, conPunto)) out[k] = conPunto;
+      return; // creíble o no, acá se termina: no se le aplica el recorte de abajo.
+    }
+
     // Se limpia SOLO la basura de los extremos: "`160" -> "160".
     // Lo que separa dígitos NO se toca. Un peso "67/85" puede ser 67,85 o una
     // tensión arterial en el campo equivocado; sacarle la barra daría 6785 kg,
     // que es peor que dejarlo roto. Un dato clínico ambiguo lo resuelve una
     // persona, no una expresión regular.
-    const limpio = s.replace(/^[^0-9]+/, '').replace(/[^0-9]+$/, '');
-    if (/^[0-9]+(\.[0-9]+)?$/.test(limpio)) out[k] = limpio;
+    //
+    // Tampoco se recorta un signo menos del inicio: "-5" -> "5" es inventar.
+    if (/^[^0-9]*-/.test(crudo)) return;
+    const limpio = conPunto.replace(/^[^0-9]+/, '').replace(/[^0-9]+$/, '');
+    if (/^[0-9]+(\.[0-9]+)?$/.test(limpio) && plausible(k, limpio)) out[k] = limpio;
   });
   return out;
 };

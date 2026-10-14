@@ -346,6 +346,60 @@ function paramsDeBloque(bloque, fasePer) {
 // ═══════════════════════════════════════════════════════════════════════════
 // GENERADOR PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// PATRONES DE DÉFICIT — una sola fuente de verdad
+//
+// Esto lo usan DOS consumidores: el generador, para puntuar ejercicios, y la
+// síntesis del screening, para escribir las prioridades del informe. Estaba
+// solo adentro de generarPlanBase, así que el informe se escribía a mano y
+// podía decir algo distinto de lo que el plan realmente hacía.
+//
+// Devuelve { patrones, avisos }: `patrones` son las etiquetas que puntúan
+// ejercicios, `avisos` el texto que explica por qué.
+export function derivarPatronesDeficit(m) {
+  const patrones = [];
+  const avisos = [];
+  const add = (p) => { if (!patrones.includes(p)) patrones.push(p); };
+
+  (m.calidad?.detalle || []).filter(d => d.puntos <= 2).forEach(d => {
+    (DEFICIT_A_PATRON[d.patron] || []).forEach(add);
+  });
+  (m.calidad?.asimetrias || []).forEach(a => {
+    if (!patrones.includes('unilateral')) patrones.unshift('unilateral');
+    avisos.push(`Asimetría en ${a.patron} (lado ${a.lado}): se priorizan ejercicios unilaterales.`);
+  });
+  if (m.ybalance?.medido && !m.ybalance.simetrico) {
+    if (!patrones.includes('unilateral')) patrones.unshift('unilateral');
+    add('propioc');
+    avisos.push(`Y-Balance asimétrico: se agrega trabajo propioceptivo.`);
+  }
+
+  // Los hallazgos ambiguos (falta el componente opuesto para interpretarlos)
+  // SÍ alimentan los patrones: no afirmamos que haya restricción, pero
+  // tampoco dejamos de programar movilidad mientras falte el dato.
+  // Los `estructurales` NO entran: ahí hay evidencia positiva de que el
+  // déficit es arquitectura ósea, y forzar rango rotacional sobre una cadera
+  // retrovertida no mejora la cadera — carga el lumbar.
+  const fuentes = [
+    ...(m.romGym?.limitados || []),
+    ...(m.romGym?.ambiguos || []).map(a => `${a.mov}: sin interpretar`),
+  ];
+  fuentes.forEach(l => {
+    const mov = norm(l.split(':')[0]);
+    if (mov.includes('hombro'))  add('hombro');
+    if (mov.includes('cadera'))  add('cadera');
+    if (mov.includes('tobillo')) add('tobillo');
+    // `norm` saca los acentos, así que buscar 'torácica' con tilde nunca
+    // matcheaba: la cadena normalizada es 'rotacion toracica'. La limitación
+    // de rotación torácica venía quedando fuera de los patrones desde
+    // siempre, o sea que el generador nunca prescribió movilidad torácica
+    // por este criterio. El patrón de salida sí lleva tilde.
+    if (mov.includes('toracica')) add('torácica');
+  });
+
+  return { patrones, avisos };
+}
+
 export function generarPlanBase({
   cliente, exs = [], tests = [], incidencias = [], feedback = [], evaluacion = null,
   diasSemana = 3, periodizacionId = null, faseCicloIndex = 0,
@@ -400,40 +454,11 @@ export function generarPlanBase({
   } else avisos.push('Sin reportes de RPE desde el portal: la intensidad del plan sale de la prescripción, sin ajuste por percepción del cliente.');
 
   // ── 2) Patrones a priorizar, derivados de los déficits ──────────────────
-  const patronesDeficit = [];
-  (m.calidad.detalle || []).filter(d => d.puntos <= 2).forEach(d => {
-    (DEFICIT_A_PATRON[d.patron] || []).forEach(p => { if (!patronesDeficit.includes(p)) patronesDeficit.push(p); });
-  });
-  (m.calidad.asimetrias || []).forEach(a => {
-    if (!patronesDeficit.includes('unilateral')) patronesDeficit.unshift('unilateral');
-    avisos.push(`Asimetría en ${a.patron} (lado ${a.lado}): se priorizan ejercicios unilaterales.`);
-  });
-  if (m.ybalance.medido && !m.ybalance.simetrico) {
-    if (!patronesDeficit.includes('unilateral')) patronesDeficit.unshift('unilateral');
-    if (!patronesDeficit.includes('propioc')) patronesDeficit.push('propioc');
-  }
-  // Los hallazgos ambiguos (falta el componente opuesto para interpretarlos)
-  // SÍ alimentan los patrones de déficit: no afirmamos que haya restricción,
-  // pero tampoco dejamos de programar movilidad mientras falte el dato.
-  // Los `estructurales` NO entran: ahí hay evidencia positiva de que el
-  // déficit es arquitectura ósea, y forzar rango rotacional sobre una cadera
-  // retrovertida no mejora la cadera — carga el lumbar.
-  const fuentesDeficit = [
-    ...(m.romGym?.limitados || []),
-    ...(m.romGym?.ambiguos || []).map(a => `${a.mov}: sin interpretar`),
-  ];
-  fuentesDeficit.forEach(l => {
-    const mov = norm(l.split(':')[0]);
-    if (mov.includes('hombro')) patronesDeficit.push('hombro');
-    if (mov.includes('cadera')) patronesDeficit.push('cadera');
-    if (mov.includes('tobillo')) patronesDeficit.push('tobillo');
-    // `norm` saca los acentos, así que buscar 'torácica' con tilde nunca
-    // matcheaba: la cadena normalizada es 'rotacion toracica'. La limitación
-    // de rotación torácica venía quedando fuera de los patrones de déficit
-    // desde siempre, o sea que el generador nunca prescribió movilidad
-    // torácica por este criterio. El patrón de salida sí lleva tilde.
-    if (mov.includes('toracica')) patronesDeficit.push('torácica');
-  });
+  // La derivación vive en derivarPatronesDeficit() para que el informe del
+  // screening use exactamente la misma, y no pueda decir una prioridad que el
+  // plan no aplica.
+  const { patrones: patronesDeficit, avisos: avisosDeficit } = derivarPatronesDeficit(m);
+  avisosDeficit.forEach(a => avisos.push(a));
 
   // ── 3) Periodización ────────────────────────────────────────────────────
   let perId = periodizacionId || cliente.periodizacion || null;
