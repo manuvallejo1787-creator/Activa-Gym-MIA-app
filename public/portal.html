@@ -711,10 +711,25 @@ function render(){
       for(let s=1;s<=SEMANAS;s++){
         const esLaDeHoy = (s === semAbierta);
         if(!verTodas && !esLaDeHoy){ continue; }
-        // La fila de la FECHA que el cliente declara, no "la de la semana".
-        // Si volvió en la misma semana, la caja arranca VACÍA para la carga
-        // de hoy en vez de mostrarle la de la vez anterior ya tildada.
-        const lg = LOGMAP[keyF(d.id, be.exId, s, FECHA_ENTRENO)] || {};
+        // CADA CAJA TIENE SU PROPIA FECHA, Y NO ES SIEMPRE HOY.
+        // La semana en curso se indexa por la FECHA QUE EL CLIENTE DECLARA:
+        // si volvió en la misma semana, arranca VACÍA para la carga de hoy
+        // en vez de mostrarle la de la vez anterior ya tildada.
+        //
+        // Las demás semanas son historial y se indexan por SU fecha. Antes
+        // todas se buscaban con la de hoy, que en una semana pasada no existe:
+        // Evangelina tiene 61 registros con peso cargado y las 16 cajas salían
+        // vacías, incluida la semana 4 que tiene 40 kg × 30. Todo su historial
+        // quedaba invisible, que es exactamente el "entrené y no me figura"
+        // que esto venía a arreglar.
+        const fechaCaja = esLaDeHoy
+          ? FECHA_ENTRENO
+          : ((logSemana(d.id, be.exId, s) || {}).fecha || '');
+        const lg = fechaCaja ? (LOGMAP[keyF(d.id, be.exId, s, fechaCaja)] || {}) : {};
+        // La escritura viaja con la fecha de LA CAJA. Sin esto, corregir un
+        // peso de la semana 4 creaba una fila nueva fechada hoy dentro de la
+        // semana 4: un día de entrenamiento inventado en el calendario.
+        const fArg = fechaCaja || FECHA_ENTRENO;
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
         const det = Array.isArray(lg.series_detalle) ? lg.series_detalle : [];
@@ -724,28 +739,37 @@ function render(){
         const hecha = (peso!=='' || reps!=='');
         // Si ya entrenó esta sesión otro día de la misma semana, se muestra:
         // sin esto parecía que la carga anterior se hubiera perdido.
-        const otrasFechas = fechasConDatos(d.id, be.exId, s).filter(f => f !== FECHA_ENTRENO);
+        const otrasFechas = fechasConDatos(d.id, be.exId, s).filter(f => f !== fArg);
         body += `<div class="wkbox ${hecha?'hecha':''}">`+
-          `<div class="wktit"><span>Semana ${s}${esLaDeHoy?' · '+fechaCorta(FECHA_ENTRENO):''} ${hecha?'<span class="ok">✓</span>':''}</span>`+
+          `<div class="wktit"><span>Semana ${s}${fechaCaja?' · '+fechaCorta(fechaCaja):''} ${hecha?'<span class="ok">✓</span>':''}</span>`+
           `<button class="sertog ${abierta?'on':''}" onclick="toggleSeries('${sk}')">${abierta?'▾ por serie':'▸ series distintas'}</button></div>`;
         if(abierta){
           for(let i=1;i<=nSer;i++){
             const dd = det[i-1] || {};
             body += `<div class="serie"><span class="sn">${i}ª</span>`+
-              `<input inputmode="decimal" placeholder="kg" value="${esc(dd.peso??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'peso'))" onblur="guardarSerie(this,${args},${s},${i},'peso')"><span class="u2">kg</span>`+
-              `<input inputmode="numeric" placeholder="reps" value="${esc(dd.reps??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'reps'))" onblur="guardarSerie(this,${args},${s},${i},'reps')"><span class="u2">reps</span>`+
+              `<input inputmode="decimal" placeholder="kg" value="${esc(dd.peso??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'peso','${fArg}'))" onblur="guardarSerie(this,${args},${s},${i},'peso','${fArg}')"><span class="u2">kg</span>`+
+              `<input inputmode="numeric" placeholder="reps" value="${esc(dd.reps??'')}" oninput="alTipear(this,()=>guardarSerie(this,${args},${s},${i},'reps','${fArg}'))" onblur="guardarSerie(this,${args},${s},${i},'reps','${fArg}')"><span class="u2">reps</span>`+
               `</div>`;
           }
           body += `<div style="font-size:9px;color:#666;margin-top:4px">Se guarda solo. El resumen usa la serie más pesada y el total de repeticiones.</div>`;
         }else{
           body += `<div class="serie"><span class="sn" style="flex:0 0 46px;font-size:9px">TODAS</span>`+
-            `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'peso'))" onblur="guardar(this,${args},${s},'peso')"><span class="u2">kg</span>`+
-            `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'reps'))" onblur="guardar(this,${args},${s},'reps')"><span class="u2">reps</span>`+
+            `<input inputmode="decimal" placeholder="kg" value="${esc(peso)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'peso','${fArg}'))" onblur="guardar(this,${args},${s},'peso','${fArg}')"><span class="u2">kg</span>`+
+            `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'reps','${fArg}'))" onblur="guardar(this,${args},${s},'reps','${fArg}')"><span class="u2">reps</span>`+
             `</div>`;
         }
         if(otrasFechas.length){
+          // Con la fecha sola no se veía QUÉ se había cargado, y era el único
+          // lugar donde figuraba. Ahora va con el peso y las reps: el cliente
+          // ve que su carga está, sin tener que tocar nada.
           body += `<div class="vueltas">También cargaste esta sesión el `+
-            otrasFechas.map(f=>`<button class="vlt" onclick="setFechaEntreno('${f}')">${fechaCorta(f)}</button>`).join(' ')+
+            otrasFechas.map(f=>{
+              const o = LOGMAP[keyF(d.id, be.exId, s, f)] || {};
+              const p = (o.peso_real==null||o.peso_real==='') ? '' : `${o.peso_real} kg`;
+              const r = o.reps_real ? `${o.reps_real} reps` : '';
+              const v = [p,r].filter(Boolean).join(' × ');
+              return `<button class="vlt" onclick="setFechaEntreno('${f}')">${fechaCorta(f)}${v?' · '+esc(v):''}</button>`;
+            }).join(' ')+
             `</div>`;
         }
         body += `</div>`;
@@ -996,8 +1020,12 @@ function nSeries(p){
   return (!isNaN(n)&&n>0&&n<=10)?n:3;
 }
 
-window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo)=>{
-  const k=keyF(dia_id,ejercicio_id,semana,FECHA_ENTRENO);
+// `fecha` es la de LA CAJA que se está editando, no la de hoy: una caja de una
+// semana pasada corrige SU fila. Si no llega, cae en FECHA_ENTRENO, que es el
+// comportamiento de antes.
+window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo,fecha)=>{
+  const F=fecha||FECHA_ENTRENO;
+  const k=keyF(dia_id,ejercicio_id,semana,F);
   const prev=LOGMAP[k]||{};
   const det=Array.isArray(prev.series_detalle)?prev.series_detalle.map(x=>({...x})):[];
   while(det.length<idxSerie) det.push({s:det.length+1,peso:'',reps:''});
@@ -1015,7 +1043,7 @@ window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre
   // de cuando se escribió: si hubo dos series seguidas, viajan las dos.
   COLA_GUARDADO[k]=(COLA_GUARDADO[k]||Promise.resolve()).then(async()=>{
     const res=await enviarConReintento({token:TOKEN,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,
-      series_detalle:(LOGMAP[k]||{}).series_detalle||det});
+      fecha:F, series_detalle:(LOGMAP[k]||{}).series_detalle||det});
     PENDIENTES[k]--;
     if(res.ok){ inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'),1200); if(!PENDIENTES[k]) toast('Guardado ✓',true); }
     else{ inp.style.borderColor='#DC2626'; toast(mensajeFallo(res),false); }
@@ -1116,8 +1144,10 @@ async function enviarConReintento(payload, intentos = 3){
   return { ok:false, motivo:'red' };
 }
 
-window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
-  const k = keyF(dia_id, ejercicio_id, semana, FECHA_ENTRENO);
+// Igual que guardarSerie: `fecha` es la de la caja editada.
+window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo, fecha) => {
+  const F = fecha || FECHA_ENTRENO;
+  const k = keyF(dia_id, ejercicio_id, semana, F);
   const col = campo==='peso' ? 'peso_real' : 'reps_real';
   const val = inp.value.trim().replace(',', '.');
   const prev = LOGMAP[k] || {};
@@ -1130,7 +1160,7 @@ window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nomb
   PENDIENTES[k] = (PENDIENTES[k]||0) + 1;
 
   const payload = { token: TOKEN, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana,
-    campo, [col]: val };
+    fecha: F, campo, [col]: val };
 
   // 2) Cola por fila.
   COLA_GUARDADO[k] = (COLA_GUARDADO[k] || Promise.resolve()).then(async () => {
@@ -1142,11 +1172,11 @@ window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nomb
       // Sin comparar la fecha, una segunda vuelta pisaba en memoria la fila
       // de la primera y el calendario perdía ese día de entrenamiento.
       const idx = (DATA.logs||[]).findIndex(l=>l.dia_id===dia_id&&l.ejercicio_id===ejercicio_id
-                                              &&String(l.semana)===String(semana)&&l.fecha===FECHA_ENTRENO);
-      const fila = { dia_id, ejercicio_id, semana, fecha: FECHA_ENTRENO, ...LOGMAP[k] };
+                                              &&String(l.semana)===String(semana)&&l.fecha===F);
+      const fila = { dia_id, ejercicio_id, semana, fecha: F, ...LOGMAP[k] };
       if(idx>=0) DATA.logs[idx] = fila; else (DATA.logs = DATA.logs||[]).push(fila);
       const ks = key(dia_id, ejercicio_id, semana);
-      LOGS_SEM[ks] = (LOGS_SEM[ks]||[]).filter(l=>l.fecha!==FECHA_ENTRENO).concat([fila])
+      LOGS_SEM[ks] = (LOGS_SEM[ks]||[]).filter(l=>l.fecha!==F).concat([fila])
         .sort((x,y)=>String(x.fecha||'').localeCompare(String(y.fecha||'')));
     }else{
       inp.style.borderColor = '#DC2626';
