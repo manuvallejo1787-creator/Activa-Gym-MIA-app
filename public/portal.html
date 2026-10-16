@@ -130,7 +130,10 @@
 
   /* ── SERIES ───────────────────────────────────────────────────────── */
   .serieshead{display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px}
-  .sertog{background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer}
+  .semtog{display:block;width:100%;margin-top:6px;padding:7px 8px;background:transparent;
+  border:1px dashed var(--bd,#333);border-radius:6px;color:#9aa;font-size:11px;cursor:pointer}
+.semtog:active{background:rgba(255,255,255,.05)}
+.sertog{background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer}
   .sertog.on{background:var(--pri);color:#fff;border-color:var(--pri)}
   .serie{display:flex;align-items:center;gap:6px;margin-bottom:4px}
   .serie .sn{flex:0 0 26px;font-size:10px;color:#888;font-weight:800;text-align:center;background:#1A1A1A;border-radius:5px;padding:5px 0}
@@ -185,7 +188,44 @@
 // Fecha local del celular (Uruguay), no UTC. Con toISOString() lo cargado
 // después de las 21 h quedaba fechado al día siguiente.
 function isoLocal(d){ d=d||new Date(); const z=new Date(d.getTime()-d.getTimezoneOffset()*6e4); return z.toISOString().slice(0,10); }
-const SEMANAS = 8;
+// Cuántas cajas de semana se dibujan. ERA UNA CONSTANTE EN 8, y ese es el
+// bug de fondo del portal: medido el 16/10, de 53 planes activos 30 duran MÁS
+// de 8 semanas, 17 clientes ya pasaron la semana 8 de calendario y 5 estaban
+// clavados cargando en la semana 8 porque era la última que existía.
+// Florencia Meneses iba por la semana 12 de su plan y cargaba en la 8;
+// Arnaldo en la 10 cargando en la 8; Martina en la 11, igual. A esos clientes
+// se les acababan los casilleros: o sobrescribían la semana 8 para siempre o
+// dejaban de cargar, y en los dos casos el entrenamiento "no figuraba".
+//
+// Ahora sale de la duración real del plan, con un piso de 8 para no achicarle
+// la vista a nadie y un techo de 52 por sanidad.
+let SEMANAS = 8;
+
+// 'YYYY-MM-DD' -> Date local. new Date('2026-10-16') es medianoche UTC, que en
+// Montevideo es el 15 a las 21:00: todo se correría un día.
+function fechaLocal(f){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
+  return m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
+}
+
+// Semana del plan en la que cae una fecha. La semana 1 arranca el día de
+// inicio del plan.
+function semanaDe(fechaISO, plan){
+  const ini = fechaLocal(plan && plan.fecha_inicio);
+  const f   = fechaLocal(fechaISO);
+  if(!ini || !f) return 1;
+  return Math.max(1, Math.floor((f - ini) / (7*864e5)) + 1);
+}
+
+function calcularSemanas(plan){
+  if(!plan) return 8;
+  const ini = fechaLocal(plan.fecha_inicio), fin = fechaLocal(plan.fecha_fin_estimada);
+  let n = (ini && fin && fin > ini) ? Math.ceil((fin - ini) / (7*864e5)) : 0;
+  // Planes sin fecha de fin —hay varios— y planes que ya se pasaron de su
+  // fecha estimada: igual tiene que existir la caja de HOY y la siguiente.
+  const hoyN = semanaDe(isoLocal(), plan);
+  return Math.min(52, Math.max(n, hoyN + 1, 8));
+}
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
 let DATA = null;
@@ -218,6 +258,8 @@ async function cargar(){
     if(DATA.cliente && DATA.cliente.nivel && FASE_LABEL[DATA.cliente.nivel]){
       $('fasebadge').innerHTML = `<span class="fasebadge">${FASE_LABEL[DATA.cliente.nivel]}</span>`;
     }
+    // El plan ya está: recién acá se sabe cuántas semanas dibujar.
+    SEMANAS = calcularSemanas(DATA.plan);
     LOGMAP = {};
     (DATA.logs||[]).forEach(l => { LOGMAP[key(l.dia_id, l.ejercicio_id, l.semana)] = l; });
     render();
@@ -575,6 +617,9 @@ function render(){
       const uid = `${d.id}_${be.exId}_${exj}`.replace(/[^a-zA-Z0-9_]/g,'');
       let filled=0;
       for(let s=1;s<=SEMANAS;s++){const lg=LOGMAP[key(d.id,be.exId,s)]||{}; if((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)filled++;}
+      // Antes el denominador era el 8 fijo. Con SEMANAS derivado del plan,
+      // un plan de 16 semanas mostraba "3/8" y daba la idea de ir más
+      // adelantado de lo real.
       const estado = filled>0 ? `<span class="exdone">✓ ${filled}/${SEMANAS}</span>` : `<span class="exnone">${SEMANAS} sem.</span>`;
       const thumb = med && med.tipo!=='video' ? `<img class="exthumb" src="${esc(med.url)}" onerror="this.style.display='none'"/>` : '';
       const pesoSugTxt = (be.pesoSug!=null && be.pesoSug!=='') ? ` · <span class="sug">💡 sugerido ${esc(be.pesoSug)} kg</span>` : '';
@@ -603,7 +648,24 @@ function render(){
       body += barraProgreso(pr, 'Tu progreso en este ejercicio');
 
       const nSer = nSeries(p);
+      // ── SOLO LA SEMANA EN CURSO QUEDA ABIERTA ──────────────────────────
+      // Antes se dibujaban las 8 cajas abiertas y editables a la vez. En una
+      // sesión de 18 ejercicios eso son 144 pares de campos idénticos en
+      // pantalla, sin nada que indique en cuál va la carga de hoy. Esa era la
+      // superficie que dejaba caer datos en la semana equivocada: medido
+      // sobre octubre, de 273 sesiones tocadas 188 figuran parciales y 93 de
+      // esas tienen 1 o 2 ejercicios sueltos — derrames a una caja vecina.
+      // Caso de Ramiro del 16/10: Sesion 3 semana 3 completa 18 de 18, y
+      // semana 2 con el mismo valor creado 38 ms después.
+      //
+      // Ahora se abre la de la fecha declarada y el resto se pliega detrás de
+      // un toque. Las anteriores siguen siendo editables: el cliente corrige
+      // lo suyo sin pedir permiso, pero tiene que querer hacerlo.
+      const semAbierta = semanaActual();
+      const verTodas = SEM_DESPLEGADAS[d.id+'|'+be.exId];
       for(let s=1;s<=SEMANAS;s++){
+        const esLaDeHoy = (s === semAbierta);
+        if(!verTodas && !esLaDeHoy){ continue; }
         const lg = LOGMAP[key(d.id, be.exId, s)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
@@ -631,6 +693,22 @@ function render(){
             `</div>`;
         }
         body += `</div>`;
+      }
+      // Pie: cuántas semanas quedaron plegadas y cómo verlas.
+      {
+        const otras = SEMANAS - 1;
+        const cargadasOtras = (()=>{ let n=0; for(let s=1;s<=SEMANAS;s++){
+          if(s===semAbierta) continue;
+          const lg = LOGMAP[key(d.id, be.exId, s)];
+          if(lg && ((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)) n++;
+        } return n; })();
+        if(otras > 0){
+          body += `<button class="semtog" onclick="toggleSemanas('${d.id}|${be.exId}')">`+
+            (verTodas
+              ? `▾ ocultar las otras ${otras} semana${otras===1?'':'s'}`
+              : `▸ ver las otras ${otras} semana${otras===1?'':'s'}${cargadasOtras?` · ${cargadasOtras} con datos`:''}`)+
+            `</button>`;
+        }
       }
       html += `<div class="ex">`+
         `<div class="exhead" onclick="toggleEx('${uid}')">`+
@@ -754,10 +832,14 @@ function feedbackDe(diaId,sem,fecha){
 }
 
 function semanaActual(){
-  // La semana "en curso" es la última con algo cargado; si no hay nada, la 1.
-  let mx=0;
-  (DATA.logs||[]).forEach(l=>{ if((l.peso_real!=null&&l.peso_real!=='')||l.reps_real) mx=Math.max(mx,l.semana||0); });
-  return mx||1;
+  // Sale de la FECHA que el cliente declara haber entrenado, no de "la última
+  // semana con algo cargado". Lo anterior tenía dos efectos feos:
+  //   · el que no cargaba en una semana quedaba atrasado para siempre;
+  //   · un derrame a una semana alta arrastraba la "semana en curso" con él.
+  // Como se deriva de FECHA_ENTRENO, cambiar el selector "¿qué día
+  // entrenaste?" mueve la semana abierta: cargar el lunes una sesión del
+  // viernes anterior abre la semana de ese viernes.
+  return Math.min(SEMANAS, semanaDe(FECHA_ENTRENO, DATA.plan));
 }
 
 function renderRPE(dia){
@@ -834,6 +916,10 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
 // funciona del sistema.
 // ═══════════════════════════════════════════════════════════════════════
 const SERIES_ABIERTAS = {};
+// Qué ejercicios tienen desplegadas las semanas que no son la en curso.
+// Sobrevive a cada render(), igual que EX_ABIERTOS.
+const SEM_DESPLEGADAS = {};
+window.toggleSemanas = (k) => { SEM_DESPLEGADAS[k] = !SEM_DESPLEGADAS[k]; render(); };
 
 // Fecha de ENTRENAMIENTO que declara el cliente. Por defecto hoy.
 // Existe porque a veces carga al otro día por olvido, o repasa su seguimiento
