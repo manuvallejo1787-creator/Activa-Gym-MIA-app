@@ -117,7 +117,28 @@ export default async function handler(req, res) {
 
         // Las dos consultas restantes no dependen entre sí: van en paralelo.
         const [logsRes, ejs] = await Promise.all([
-          sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,series_detalle,updated_at&order=updated_at.desc&limit=600`),
+          // `fecha` NO se mandaba, y es el día que el cliente declara en
+          // "¿Qué día entrenaste?". Sin ese campo el calendario del portal no
+          // tenía más remedio que agrupar por updated_at, o sea por cuándo se
+          // TOCÓ el registro: el que entrenaba el miércoles y cargaba el
+          // jueves quedaba marcado el jueves, y el que corregía un peso viejo
+          // pintaba hoy como día de entrenamiento. Eso ensuciaba el registro
+          // de asistencias, que es lo que se exporta a Gestión-Activa.
+          sb(`ejecucion_registros?plan_id=in.(${idsList})          //
+          // LÍMITE: era 600 y el portal muestra 8 semanas. Un plan de 4 días
+          // con 18 ejercicios son 18×4×8 = 576 registros: el tope quedaba
+          // justo sobre el tamaño de un plan normal. Mónica Ortega ya va 590
+          // de 600, y al cruzarlo el portal le habría descartado registros en
+          // silencio — se le cortan días del calendario y la racha.
+          // 1500 cubre el plan más grande plausible (20 ej × 5 días × 8 sem =
+          // 800) con margen.
+          //
+          // ORDEN: por `fecha` y no por updated_at. Si alguna vez recorta,
+          // tiene que descartar lo más VIEJO que entrenó, no lo que hace más
+          // tiempo que nadie toca — con updated_at se podía descartar una
+          // sesión de la semana pasada por no haberla editado, y conservar
+          // una de hace meses porque se le corrigió un peso ayer.
+          sb(`ejecucion_registros?plan_id=in.(${idsList})&select=plan_id,dia_id,ejercicio_id,semana,peso_real,reps_real,rpe_real,series_detalle,fecha,updated_at&order=fecha.desc,updated_at.desc&limit=1500`),
           idsEjercicios.size
             ? sb(`ejercicios?id=in.(${[...idsEjercicios].map(i => `"${i}"`).join(",")})&select=id,nombre,media_url,media_tipo,media_desc`)
             : Promise.resolve([]),
