@@ -130,7 +130,13 @@
 
   /* ── SERIES ───────────────────────────────────────────────────────── */
   .serieshead{display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px}
-  .sertog{background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer}
+  .vueltas{margin-top:6px;font-size:10px;color:#9aa}
+.vlt{background:rgba(255,255,255,.07);border:1px solid var(--bd,#333);border-radius:5px;
+  color:inherit;font-size:10px;padding:2px 7px;margin:0 2px;cursor:pointer}
+.semtog{display:block;width:100%;margin-top:6px;padding:7px 8px;background:transparent;
+  border:1px dashed var(--bd,#333);border-radius:6px;color:#9aa;font-size:11px;cursor:pointer}
+.semtog:active{background:rgba(255,255,255,.05)}
+.sertog{background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer}
   .sertog.on{background:var(--pri);color:#fff;border-color:var(--pri)}
   .serie{display:flex;align-items:center;gap:6px;margin-bottom:4px}
   .serie .sn{flex:0 0 26px;font-size:10px;color:#888;font-weight:800;text-align:center;background:#1A1A1A;border-radius:5px;padding:5px 0}
@@ -184,16 +190,89 @@
 <script>
 // Fecha local del celular (Uruguay), no UTC. Con toISOString() lo cargado
 // después de las 21 h quedaba fechado al día siguiente.
+function fechaCorta(f){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
+  return m ? `${+m[3]}/${+m[2]}` : String(f||'');
+}
 function isoLocal(d){ d=d||new Date(); const z=new Date(d.getTime()-d.getTimezoneOffset()*6e4); return z.toISOString().slice(0,10); }
-const SEMANAS = 8;
+// Cuántas cajas de semana se dibujan. ERA UNA CONSTANTE EN 8, y ese es el
+// bug de fondo del portal: medido el 16/10, de 53 planes activos 30 duran MÁS
+// de 8 semanas, 17 clientes ya pasaron la semana 8 de calendario y 5 estaban
+// clavados cargando en la semana 8 porque era la última que existía.
+// Florencia Meneses iba por la semana 12 de su plan y cargaba en la 8;
+// Arnaldo en la 10 cargando en la 8; Martina en la 11, igual. A esos clientes
+// se les acababan los casilleros: o sobrescribían la semana 8 para siempre o
+// dejaban de cargar, y en los dos casos el entrenamiento "no figuraba".
+//
+// Ahora sale de la duración real del plan, con un piso de 8 para no achicarle
+// la vista a nadie y un techo de 52 por sanidad.
+let SEMANAS = 8;
+
+// 'YYYY-MM-DD' -> Date local. new Date('2026-10-16') es medianoche UTC, que en
+// Montevideo es el 15 a las 21:00: todo se correría un día.
+function fechaLocal(f){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
+  return m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
+}
+
+// Semana del plan en la que cae una fecha. La semana 1 arranca el día de
+// inicio del plan.
+function semanaDe(fechaISO, plan){
+  const ini = fechaLocal(plan && plan.fecha_inicio);
+  const f   = fechaLocal(fechaISO);
+  if(!ini || !f) return 1;
+  return Math.max(1, Math.floor((f - ini) / (7*864e5)) + 1);
+}
+
+function calcularSemanas(plan){
+  if(!plan) return 8;
+  const ini = fechaLocal(plan.fecha_inicio), fin = fechaLocal(plan.fecha_fin_estimada);
+  let n = (ini && fin && fin > ini) ? Math.ceil((fin - ini) / (7*864e5)) : 0;
+  // Planes sin fecha de fin —hay varios— y planes que ya se pasaron de su
+  // fecha estimada: igual tiene que existir la caja de HOY y la siguiente.
+  const hoyN = semanaDe(isoLocal(), plan);
+  return Math.min(52, Math.max(n, hoyN + 1, 8));
+}
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
 let DATA = null;
 let LOGMAP = {};
+// Todas las filas de una semana, ordenadas por fecha ascendente.
+let LOGS_SEM = {};
+// La fila representativa de una semana para contadores y gráficos: la más
+// reciente CON datos. Antes esto salía de LOGMAP, que guardaba una sola fila
+// por semana y —según el orden en que llegaran— podía ser la más vieja.
+function logSemana(d,e,s){
+  const arr = LOGS_SEM[key(d,e,s)];
+  if(!arr || !arr.length) return undefined;
+  for(let i=arr.length-1;i>=0;i--){
+    const l = arr[i];
+    if((l.peso_real!=null && l.peso_real!=='') || l.reps_real) return l;
+  }
+  return arr[arr.length-1];
+}
+// Fechas de una semana que YA tienen datos, para mostrar las vueltas previas.
+function fechasConDatos(d,e,s){
+  return (LOGS_SEM[key(d,e,s)]||[])
+    .filter(l => (l.peso_real!=null && l.peso_real!=='') || l.reps_real)
+    .map(l => l.fecha).filter(Boolean);
+}
 let activeDia = 0;
 
 const $ = id => document.getElementById(id);
-const key = (d,e,s) => `${d}|${e}|${s}`;
+const key  = (d,e,s)   => `${d}|${e}|${s}`;
+// Índice EXACTO, con la fecha. La base guarda una fila por fecha —el id del
+// registro es plan__dia__ejercicio__wN__fecha, o sea que la fecha ya está
+// adentro— pero el portal indexaba sin ella y colapsaba todas las cargas de
+// una semana en una sola caja. Alejandra Grosso tenía "Sesion 1 semana 2" con
+// registros de 5 fechas distintas (29/9, 8/10, 9/10, 14/10, 15/10) y el
+// portal mostraba una.
+//
+// Ese era el mecanismo de "entrené y no figura": el cliente que volvía en la
+// misma semana abría la caja y la veía YA CARGADA con ✓ de la vez anterior.
+// No tenía nada que completar, y si retipeaba el mismo valor guardar() cortaba
+// en `val === actual` y no mandaba nada. Cero escrituras, cero asistencia.
+const keyF = (d,e,s,f) => `${d}|${e}|${s}|${f||''}`;
 
 const FASE_LABEL = {restaura:'RESTAURA · Rehabilitación', activa:'ACTIVA · Base de movimiento', potencia:'POTENCIA · Desarrollo de capacidades', rinde:'RINDE · Alto rendimiento'};
 
@@ -218,8 +297,16 @@ async function cargar(){
     if(DATA.cliente && DATA.cliente.nivel && FASE_LABEL[DATA.cliente.nivel]){
       $('fasebadge').innerHTML = `<span class="fasebadge">${FASE_LABEL[DATA.cliente.nivel]}</span>`;
     }
-    LOGMAP = {};
-    (DATA.logs||[]).forEach(l => { LOGMAP[key(l.dia_id, l.ejercicio_id, l.semana)] = l; });
+    // El plan ya está: recién acá se sabe cuántas semanas dibujar.
+    SEMANAS = calcularSemanas(DATA.plan);
+    LOGMAP = {}; LOGS_SEM = {};
+    (DATA.logs||[]).forEach(l => {
+      LOGMAP[keyF(l.dia_id, l.ejercicio_id, l.semana, l.fecha)] = l;
+      const ks = key(l.dia_id, l.ejercicio_id, l.semana);
+      (LOGS_SEM[ks] = LOGS_SEM[ks] || []).push(l);
+    });
+    // Ascendente por fecha: los contadores y los gráficos leen el final.
+    Object.values(LOGS_SEM).forEach(a => a.sort((x,y)=>String(x.fecha||'').localeCompare(String(y.fecha||''))));
     render();
   }catch(e){ $('msg').textContent = 'No se pudo conectar (' + (e.message||'red') + '). Revisá tu internet y probá de nuevo.'; }
 }
@@ -239,37 +326,65 @@ function aplicarMarca(){
 }
 
 // Por cada día del mes en que hubo actividad, determina si la(s) sesión(es)
-// registradas ESE día quedaron completas (se cargó cada ejercicio de la
-// sesión) o incompletas (se cargó solo una parte). Se agrupa por fecha real
-// (updated_at), no por "semana" del plan — la semana no es una fecha.
+// registradas ESE día quedaron completas o incompletas.
+//
+// SE AGRUPA POR `fecha`, NO POR `updated_at`.
+// El comentario anterior decía que updated_at era "la fecha real". No lo es:
+// es cuándo se tocó el registro por última vez. `fecha` es el día que el
+// cliente declara en "¿Qué día entrenaste?", que es justamente el campo que
+// existe para esto. Con updated_at pasaban dos cosas:
+//   · el que entrenaba el miércoles y cargaba el jueves quedaba marcado el
+//     jueves;
+//   · el que entraba a corregir un peso de hace dos semanas pintaba HOY como
+//     día de entrenamiento.
+// Las dos ensucian el registro de asistencias.
+//
+// UN DÍA SE JUZGA POR SU MEJOR SESIÓN, NO POR LA PEOR.
+// Antes bastaba UNA sesión parcial tocada ese día para pintar el día entero
+// de incompleto, aunque la sesión real estuviera 18 de 18. Medido sobre
+// octubre: de 273 sesiones tocadas, 188 figuran parciales y 93 de esas tienen
+// apenas 1 o 2 ejercicios — derrames a otra caja de semana. Con la regla
+// anterior, cada uno de esos derrames pintaba de rojo un día completo.
 function diasEntrenadosMesConEstado(){
   const hoy = new Date();
   const totalPorDia = {};
   (DATA.plan?.dias||[]).forEach(d=>{
     totalPorDia[d.id] = (d.blocks||[]).reduce((n,b)=>n+(b.exercises||[]).length,0);
   });
+
+  // 'YYYY-MM-DD' se parsea a mano. new Date('2026-10-16') lo interpreta como
+  // medianoche UTC, que en Montevideo es el 15 a las 21:00: getDate() daría
+  // 15 y todo el calendario se correría un día hacia atrás.
+  const partesFecha = (f)=>{
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f||''));
+    return m ? {a:+m[1], m:+m[2]-1, d:+m[3]} : null;
+  };
+
   const sesionesPorFecha = {}; // dayNum -> Set "dia_id|semana"
   (DATA.logs||[]).forEach(l=>{
-    if(!l.updated_at) return;
-    const dt = new Date(l.updated_at);
-    if(dt.getFullYear()!==hoy.getFullYear() || dt.getMonth()!==hoy.getMonth()) return;
     const hecho = (l.peso_real!=null && l.peso_real!=='') || l.reps_real;
     if(!hecho) return;
-    const dn = dt.getDate();
-    (sesionesPorFecha[dn] = sesionesPorFecha[dn] || new Set()).add(l.dia_id+'|'+l.semana);
+    // Si un registro viejo no tiene `fecha`, se cae a updated_at antes que
+    // perder el día: es menos exacto, pero no deja de contar la asistencia.
+    const p = partesFecha(l.fecha) ||
+              (l.updated_at ? (dt=>({a:dt.getFullYear(), m:dt.getMonth(), d:dt.getDate()}))(new Date(l.updated_at)) : null);
+    if(!p) return;
+    if(p.a!==hoy.getFullYear() || p.m!==hoy.getMonth()) return;
+    (sesionesPorFecha[p.d] = sesionesPorFecha[p.d] || new Set()).add(l.dia_id+'|'+l.semana);
   });
+
   const estado = {}; // dayNum -> 'completo'|'incompleto'
   Object.entries(sesionesPorFecha).forEach(([dn, sesiones])=>{
-    let completo = true;
+    let algunaCompleta = false;
     sesiones.forEach(sk=>{
       const [diaId, semana] = sk.split('|');
       let hechos = 0;
       (DATA.logs||[]).forEach(l=>{
         if(l.dia_id===diaId && String(l.semana)===semana && ((l.peso_real!=null&&l.peso_real!=='')||l.reps_real)) hechos++;
       });
-      if(hechos < (totalPorDia[diaId]||1)) completo = false;
+      if(hechos >= (totalPorDia[diaId]||1)) algunaCompleta = true;
     });
-    estado[dn] = completo ? 'completo' : 'incompleto';
+    estado[dn] = algunaCompleta ? 'completo' : 'incompleto';
   });
   return estado;
 }
@@ -284,7 +399,7 @@ function sesionesCompletasVsIncompletas(){
     for(let s=1;s<=SEMANAS;s++){
       let hechos=0;
       (d.blocks||[]).forEach(b=>(b.exercises||[]).forEach(be=>{
-        const lg = LOGMAP[key(d.id,be.exId,s)];
+        const lg = logSemana(d.id,be.exId,s);
         if(lg && ((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)) hechos++;
       }));
       if(hechos===0) continue;
@@ -546,7 +661,10 @@ function render(){
       const gtag = be.grupo ? `<span style="background:${GC[be.grupo.id]||'#7C3AED'};color:#fff;font-size:9px;font-weight:800;border-radius:99px;padding:1px 7px;margin-right:5px;">🔗 ${GL[be.grupo.tipo]||''} ${be.grupo.id}</span>` : '';
       const uid = `${d.id}_${be.exId}_${exj}`.replace(/[^a-zA-Z0-9_]/g,'');
       let filled=0;
-      for(let s=1;s<=SEMANAS;s++){const lg=LOGMAP[key(d.id,be.exId,s)]||{}; if((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)filled++;}
+      for(let s=1;s<=SEMANAS;s++){const lg=logSemana(d.id,be.exId,s)||{}; if((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)filled++;}
+      // Antes el denominador era el 8 fijo. Con SEMANAS derivado del plan,
+      // un plan de 16 semanas mostraba "3/8" y daba la idea de ir más
+      // adelantado de lo real.
       const estado = filled>0 ? `<span class="exdone">✓ ${filled}/${SEMANAS}</span>` : `<span class="exnone">${SEMANAS} sem.</span>`;
       const thumb = med && med.tipo!=='video' ? `<img class="exthumb" src="${esc(med.url)}" onerror="this.style.display='none'"/>` : '';
       const pesoSugTxt = (be.pesoSug!=null && be.pesoSug!=='') ? ` · <span class="sug">💡 sugerido ${esc(be.pesoSug)} kg</span>` : '';
@@ -575,8 +693,28 @@ function render(){
       body += barraProgreso(pr, 'Tu progreso en este ejercicio');
 
       const nSer = nSeries(p);
+      // ── SOLO LA SEMANA EN CURSO QUEDA ABIERTA ──────────────────────────
+      // Antes se dibujaban las 8 cajas abiertas y editables a la vez. En una
+      // sesión de 18 ejercicios eso son 144 pares de campos idénticos en
+      // pantalla, sin nada que indique en cuál va la carga de hoy. Esa era la
+      // superficie que dejaba caer datos en la semana equivocada: medido
+      // sobre octubre, de 273 sesiones tocadas 188 figuran parciales y 93 de
+      // esas tienen 1 o 2 ejercicios sueltos — derrames a una caja vecina.
+      // Caso de Ramiro del 16/10: Sesion 3 semana 3 completa 18 de 18, y
+      // semana 2 con el mismo valor creado 38 ms después.
+      //
+      // Ahora se abre la de la fecha declarada y el resto se pliega detrás de
+      // un toque. Las anteriores siguen siendo editables: el cliente corrige
+      // lo suyo sin pedir permiso, pero tiene que querer hacerlo.
+      const semAbierta = semanaActual();
+      const verTodas = SEM_DESPLEGADAS[d.id+'|'+be.exId];
       for(let s=1;s<=SEMANAS;s++){
-        const lg = LOGMAP[key(d.id, be.exId, s)] || {};
+        const esLaDeHoy = (s === semAbierta);
+        if(!verTodas && !esLaDeHoy){ continue; }
+        // La fila de la FECHA que el cliente declara, no "la de la semana".
+        // Si volvió en la misma semana, la caja arranca VACÍA para la carga
+        // de hoy en vez de mostrarle la de la vez anterior ya tildada.
+        const lg = LOGMAP[keyF(d.id, be.exId, s, FECHA_ENTRENO)] || {};
         const peso = (lg.peso_real ?? '') === null ? '' : (lg.peso_real ?? '');
         const reps = lg.reps_real ?? '';
         const det = Array.isArray(lg.series_detalle) ? lg.series_detalle : [];
@@ -584,8 +722,11 @@ function render(){
         // Si ya hay detalle cargado, la vista por serie se abre sola.
         const abierta = SERIES_ABIERTAS[sk] || det.length > 0;
         const hecha = (peso!=='' || reps!=='');
+        // Si ya entrenó esta sesión otro día de la misma semana, se muestra:
+        // sin esto parecía que la carga anterior se hubiera perdido.
+        const otrasFechas = fechasConDatos(d.id, be.exId, s).filter(f => f !== FECHA_ENTRENO);
         body += `<div class="wkbox ${hecha?'hecha':''}">`+
-          `<div class="wktit"><span>Semana ${s} ${hecha?'<span class="ok">✓</span>':''}</span>`+
+          `<div class="wktit"><span>Semana ${s}${esLaDeHoy?' · '+fechaCorta(FECHA_ENTRENO):''} ${hecha?'<span class="ok">✓</span>':''}</span>`+
           `<button class="sertog ${abierta?'on':''}" onclick="toggleSeries('${sk}')">${abierta?'▾ por serie':'▸ series distintas'}</button></div>`;
         if(abierta){
           for(let i=1;i<=nSer;i++){
@@ -602,7 +743,28 @@ function render(){
             `<input inputmode="numeric" placeholder="reps" value="${esc(reps)}" oninput="alTipear(this,()=>guardar(this,${args},${s},'reps'))" onblur="guardar(this,${args},${s},'reps')"><span class="u2">reps</span>`+
             `</div>`;
         }
+        if(otrasFechas.length){
+          body += `<div class="vueltas">También cargaste esta sesión el `+
+            otrasFechas.map(f=>`<button class="vlt" onclick="setFechaEntreno('${f}')">${fechaCorta(f)}</button>`).join(' ')+
+            `</div>`;
+        }
         body += `</div>`;
+      }
+      // Pie: cuántas semanas quedaron plegadas y cómo verlas.
+      {
+        const otras = SEMANAS - 1;
+        const cargadasOtras = (()=>{ let n=0; for(let s=1;s<=SEMANAS;s++){
+          if(s===semAbierta) continue;
+          const lg = logSemana(d.id, be.exId, s);
+          if(lg && ((lg.peso_real!=null&&lg.peso_real!=='')||lg.reps_real)) n++;
+        } return n; })();
+        if(otras > 0){
+          body += `<button class="semtog" onclick="toggleSemanas('${d.id}|${be.exId}')">`+
+            (verTodas
+              ? `▾ ocultar las otras ${otras} semana${otras===1?'':'s'}`
+              : `▸ ver las otras ${otras} semana${otras===1?'':'s'}${cargadasOtras?` · ${cargadasOtras} con datos`:''}`)+
+            `</button>`;
+        }
       }
       html += `<div class="ex">`+
         `<div class="exhead" onclick="toggleEx('${uid}')">`+
@@ -631,7 +793,7 @@ function render(){
 function progresoEjercicio(diaId, exId, be){
   const pts=[];
   for(let s=1;s<=SEMANAS;s++){
-    const lg=LOGMAP[key(diaId,exId,s)]||{};
+    const lg=logSemana(diaId,exId,s)||{};
     const p=parseFloat(lg.peso_real);
     if(!isNaN(p)&&p>0) pts.push({semana:s,peso:p});
   }
@@ -726,10 +888,14 @@ function feedbackDe(diaId,sem,fecha){
 }
 
 function semanaActual(){
-  // La semana "en curso" es la última con algo cargado; si no hay nada, la 1.
-  let mx=0;
-  (DATA.logs||[]).forEach(l=>{ if((l.peso_real!=null&&l.peso_real!=='')||l.reps_real) mx=Math.max(mx,l.semana||0); });
-  return mx||1;
+  // Sale de la FECHA que el cliente declara haber entrenado, no de "la última
+  // semana con algo cargado". Lo anterior tenía dos efectos feos:
+  //   · el que no cargaba en una semana quedaba atrasado para siempre;
+  //   · un derrame a una semana alta arrastraba la "semana en curso" con él.
+  // Como se deriva de FECHA_ENTRENO, cambiar el selector "¿qué día
+  // entrenaste?" mueve la semana abierta: cargar el lunes una sesión del
+  // viernes anterior abre la semana de ese viernes.
+  return Math.min(SEMANAS, semanaDe(FECHA_ENTRENO, DATA.plan));
 }
 
 function renderRPE(dia){
@@ -806,6 +972,10 @@ window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
 // funciona del sistema.
 // ═══════════════════════════════════════════════════════════════════════
 const SERIES_ABIERTAS = {};
+// Qué ejercicios tienen desplegadas las semanas que no son la en curso.
+// Sobrevive a cada render(), igual que EX_ABIERTOS.
+const SEM_DESPLEGADAS = {};
+window.toggleSemanas = (k) => { SEM_DESPLEGADAS[k] = !SEM_DESPLEGADAS[k]; render(); };
 
 // Fecha de ENTRENAMIENTO que declara el cliente. Por defecto hoy.
 // Existe porque a veces carga al otro día por olvido, o repasa su seguimiento
@@ -827,7 +997,7 @@ function nSeries(p){
 }
 
 window.guardarSerie=(inp,plan_id,dia_id,dia_nombre,ejercicio_id,ejercicio_nombre,semana,idxSerie,campo)=>{
-  const k=key(dia_id,ejercicio_id,semana);
+  const k=keyF(dia_id,ejercicio_id,semana,FECHA_ENTRENO);
   const prev=LOGMAP[k]||{};
   const det=Array.isArray(prev.series_detalle)?prev.series_detalle.map(x=>({...x})):[];
   while(det.length<idxSerie) det.push({s:det.length+1,peso:'',reps:''});
@@ -947,7 +1117,7 @@ async function enviarConReintento(payload, intentos = 3){
 }
 
 window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nombre, semana, campo) => {
-  const k = key(dia_id, ejercicio_id, semana);
+  const k = keyF(dia_id, ejercicio_id, semana, FECHA_ENTRENO);
   const col = campo==='peso' ? 'peso_real' : 'reps_real';
   const val = inp.value.trim().replace(',', '.');
   const prev = LOGMAP[k] || {};
@@ -969,9 +1139,15 @@ window.guardar = (inp, plan_id, dia_id, dia_nombre, ejercicio_id, ejercicio_nomb
     if(res.ok){
       inp.classList.add('saved'); setTimeout(()=>inp.classList.remove('saved'), 1200);
       if(!PENDIENTES[k] && !auto) toast('Guardado ✓', true);
-      const idx = (DATA.logs||[]).findIndex(l=>l.dia_id===dia_id&&l.ejercicio_id===ejercicio_id&&l.semana===semana);
-      const fila = { dia_id, ejercicio_id, semana, ...LOGMAP[k] };
+      // Sin comparar la fecha, una segunda vuelta pisaba en memoria la fila
+      // de la primera y el calendario perdía ese día de entrenamiento.
+      const idx = (DATA.logs||[]).findIndex(l=>l.dia_id===dia_id&&l.ejercicio_id===ejercicio_id
+                                              &&String(l.semana)===String(semana)&&l.fecha===FECHA_ENTRENO);
+      const fila = { dia_id, ejercicio_id, semana, fecha: FECHA_ENTRENO, ...LOGMAP[k] };
       if(idx>=0) DATA.logs[idx] = fila; else (DATA.logs = DATA.logs||[]).push(fila);
+      const ks = key(dia_id, ejercicio_id, semana);
+      LOGS_SEM[ks] = (LOGS_SEM[ks]||[]).filter(l=>l.fecha!==FECHA_ENTRENO).concat([fila])
+        .sort((x,y)=>String(x.fecha||'').localeCompare(String(y.fecha||'')));
     }else{
       inp.style.borderColor = '#DC2626';
       toast(mensajeFallo(res), false);
