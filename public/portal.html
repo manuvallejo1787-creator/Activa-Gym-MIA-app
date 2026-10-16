@@ -224,14 +224,28 @@ function semanaDe(fechaISO, plan){
   return Math.max(1, Math.floor((f - ini) / (7*864e5)) + 1);
 }
 
+// CUÁNTAS CAJAS DE SEMANA DIBUJA EL PORTAL
+// El techo de método son 10 semanas: un plan no se diseña más largo que eso.
+// Pero un plan se ESTIRA por decisión (se deja correr), por atraso en entregar
+// el siguiente o porque el cliente faltó, y esa extensión es un hecho: medido
+// el 16/10, 12 de 54 planes activos ya pasaron la semana 10 de calendario y el
+// máximo iba por la 17. Con un techo duro esos 12 se quedaban sin caja donde
+// cargar, que es el mismo "entrené y no me figura" con otro número.
+//
+// Entonces: 10 por defecto, y si el cliente ya está más adelante, se extiende
+// sola hasta la semana en la que está. La extensión queda a la vista como
+// extensión en vez de recortada en silencio.
+const SEMANAS_PLAN = 10;
 function calcularSemanas(plan){
-  if(!plan) return 8;
+  if(!plan) return SEMANAS_PLAN;
   const ini = fechaLocal(plan.fecha_inicio), fin = fechaLocal(plan.fecha_fin_estimada);
-  let n = (ini && fin && fin > ini) ? Math.ceil((fin - ini) / (7*864e5)) : 0;
-  // Planes sin fecha de fin —hay varios— y planes que ya se pasaron de su
-  // fecha estimada: igual tiene que existir la caja de HOY y la siguiente.
+  const porFechas = (ini && fin && fin > ini) ? Math.ceil((fin - ini) / (7*864e5)) : 0;
+  // Nunca más de 10 por la fecha de fin: un plan cargado hasta enero no tiene
+  // que dibujar 16 cajas vacías.
+  const n = Math.min(SEMANAS_PLAN, porFechas || SEMANAS_PLAN);
+  // Nunca menos que la semana en la que está parado hoy.
   const hoyN = semanaDe(isoLocal(), plan);
-  return Math.min(52, Math.max(n, hoyN + 1, 8));
+  return Math.min(52, Math.max(n, hoyN));
 }
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
