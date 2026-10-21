@@ -12,7 +12,7 @@ import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista,
          sintetizarScreening, sintetizarPrioridades,
-         bandaTexto, romPorClave } from "./motor.js";
+         bandaTexto, romPorClave, cualitativaPorClave } from "./motor.js";
 import { generarPlanBase, DIVISIONES, derivarPatronesDeficit } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
 import Hoy from "./Hoy.jsx";
@@ -3330,10 +3330,26 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
                 <div style={{fontSize:11,fontWeight:700}}>{it.n?`${it.n}. `:''}{it.label}</div>
                 {it.pos&&<div style={{fontSize:9,color:G3,marginTop:2,lineHeight:1.35}}>{it.pos}</div>}
               </div>
-              <select value={sc[it.k]||''} onChange={e=>setSCK(it.k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
-                <option value="">— sin evaluar</option>
-                {it.opts.map(o=><option key={o}>{o}</option>)}
-              </select>
+              {/* Las opciones salen de la tabla cuando la medición está ahí;
+                  `it.opts` queda de respaldo, igual que ROM_GYM con las bandas.
+                  Y si lo que el cliente tiene guardado NO está en la lista, se
+                  agrega marcado en vez de dejar el desplegable vacío: un valor
+                  huérfano que se ve en blanco se pierde al siguiente guardado.
+                  Medido el 20/10: 2 clientes con `postura_pelvis` en
+                  "Retroversión", sin el grado, que ninguna lista contempla. */}
+              {(()=>{
+                const base=cualitativaPorClave(it.k)?.opciones||it.opts||[];
+                const actual=sc[it.k];
+                const opts=actual&&!base.includes(actual)?[...base,actual]:base;
+                return(
+                  <select value={actual||''} onChange={e=>setSCK(it.k,e.target.value)} style={{...s.sel,width:'100%',fontSize:11}}>
+                    <option value="">— sin evaluar</option>
+                    {opts.map(o=>(
+                      <option key={o} value={o}>{base.includes(o)?o:`${o} · valor anterior, reclasificar`}</option>
+                    ))}
+                  </select>
+                );
+              })()}
             </div>
           );
           const fila=(it)=>it.tipo==='grado'?filaGrado(it):filaGrados(it);
