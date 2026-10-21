@@ -215,13 +215,38 @@ function fechaLocal(f){
   return m ? new Date(+m[1], +m[2]-1, +m[3]) : null;
 }
 
-// Semana del plan en la que cae una fecha. La semana 1 arranca el día de
-// inicio del plan.
+// Lunes de la semana que contiene esa fecha. Semana de calendario, de lunes a
+// domingo, que es como habla el cliente y como se arma la rutina.
+function lunesDe(d){
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));   // getDay: 0=domingo
+  return x;
+}
+
+// Semana del plan en la que cae una fecha.
+//
+// SE CUENTA POR SEMANAS DE CALENDARIO, NO EN BLOQUES DE 7 DÍAS (21/10/2026).
+// Antes se contaba `floor((fecha - fecha_inicio)/7)`, o sea bloques de siete
+// días corridos desde el día de inicio del plan. Si el plan arrancaba un
+// miércoles, el corte de semana caía los miércoles: el cliente entraba el
+// lunes y veía "semana 7", volvía el miércoles y veía "semana 8", en la misma
+// semana de entrenamiento. Cargaba pesos en dos semanas distintas sin
+// haberse movido de la suya.
+//
+// Medido sobre la base el 21/10: de 55 planes activos, 33 NO empiezan un
+// lunes, y 19 clientes cambiaban de número de semana en el medio de ESTA
+// semana. Antonela, Maicol y Daiana leyeron 7 el lunes y 8 el miércoles.
+//
+// Ahora la semana 1 es la semana de calendario que CONTIENE la fecha de
+// inicio, y el número solo cambia los lunes. Para los 22 planes que ya
+// empezaban un lunes no cambia nada.
 function semanaDe(fechaISO, plan){
   const ini = fechaLocal(plan && plan.fecha_inicio);
   const f   = fechaLocal(fechaISO);
   if(!ini || !f) return 1;
-  return Math.max(1, Math.floor((f - ini) / (7*864e5)) + 1);
+  // Math.round y no floor: una semana que cruza un cambio de hora dura
+  // 7×24±1 h y floor la contaría de menos.
+  return Math.max(1, Math.round((lunesDe(f) - lunesDe(ini)) / (7*864e5)) + 1);
 }
 
 // CUÁNTAS CAJAS DE SEMANA DIBUJA EL PORTAL
