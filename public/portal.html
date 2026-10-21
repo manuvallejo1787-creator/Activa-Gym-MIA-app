@@ -261,16 +261,22 @@ function semanaDe(fechaISO, plan){
 // sola hasta la semana en la que está. La extensión queda a la vista como
 // extensión en vez de recortada en silencio.
 const SEMANAS_PLAN = 10;
-function calcularSemanas(plan){
+function calcularSemanas(plan, logs){
   if(!plan) return SEMANAS_PLAN;
   const ini = fechaLocal(plan.fecha_inicio), fin = fechaLocal(plan.fecha_fin_estimada);
   const porFechas = (ini && fin && fin > ini) ? Math.ceil((fin - ini) / (7*864e5)) : 0;
   // Nunca más de 10 por la fecha de fin: un plan cargado hasta enero no tiene
   // que dibujar 16 cajas vacías.
   const n = Math.min(SEMANAS_PLAN, porFechas || SEMANAS_PLAN);
-  // Nunca menos que la semana en la que está parado hoy.
-  const hoyN = semanaDe(isoLocal(), plan);
-  return Math.min(52, Math.max(n, hoyN));
+  // Nunca menos que la semana que está ejecutando.
+  const hoyN = semanasEjecutadasAntesDe(isoLocal()) + 1;
+  // Y NUNCA menos que la semana más alta que ya tenga algo cargado. Al pasar
+  // de calendario a ejecución el número baja —Héctor va de 15 a 6— y sin este
+  // piso las cajas por encima del nuevo tope desaparecerían con los registros
+  // adentro. Él tiene 3 registros en la semana 14: esos siguen alcanzables.
+  let maxGuardada = 0;
+  (logs || []).forEach(l => { const s = parseInt(l.semana, 10); if(s > maxGuardada) maxGuardada = s; });
+  return Math.min(52, Math.max(n, hoyN, maxGuardada));
 }
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
@@ -336,8 +342,10 @@ async function cargar(){
     if(DATA.cliente && DATA.cliente.nivel && FASE_LABEL[DATA.cliente.nivel]){
       $('fasebadge').innerHTML = `<span class="fasebadge">${FASE_LABEL[DATA.cliente.nivel]}</span>`;
     }
-    // El plan ya está: recién acá se sabe cuántas semanas dibujar.
-    SEMANAS = calcularSemanas(DATA.plan);
+    // El plan y los registros ya están: recién acá se sabe cuántas semanas
+    // dibujar, porque el tope depende de cuántas EJECUTÓ y de la más alta que
+    // ya tenga algo cargado.
+    SEMANAS = calcularSemanas(DATA.plan, DATA.logs);
     LOGMAP = {}; LOGS_SEM = {};
     (DATA.logs||[]).forEach(l => {
       LOGMAP[keyF(l.dia_id, l.ejercicio_id, l.semana, l.fecha)] = l;
@@ -950,15 +958,41 @@ function feedbackDe(diaId,sem,fecha){
   return (DATA.feedback||[]).find(f=>f.dia_id===diaId&&f.semana===sem&&f.fecha===(fecha||FECHA_ENTRENO))||null;
 }
 
+// SEMANAS DE EJECUCIÓN, NO DE CALENDARIO (21/10/2026)
+//
+// El calendario corre aunque el cliente no venga. El que falta dos semanas
+// vuelve y el portal le abre la semana 9 cuando él viene ejecutando la 7:
+// se saltea dos semanas de plan que nunca hizo.
+//
+// Medido sobre la base el 21/10, comparando cada método contra la semana en
+// la que el cliente efectivamente cargó la última vez:
+//     por ejecución   acierta en 31 de 46 planes   error medio 1,26 semanas
+//     por calendario  acierta en 19 de 46          error medio 2,98 semanas
+// El caso extremo es Héctor: por calendario iba por la 15 y cargaba en la 6,
+// que es exactamente lo que da contar ejecución.
+//
+// La semana en curso es "la siguiente a las que ya ejecutó", contando una
+// sola vez cada semana de calendario con actividad. Si volvió hoy después de
+// faltar, retoma donde dejó en vez de saltar.
+function semanasEjecutadasAntesDe(fechaISO){
+  const corte = fechaLocal(fechaISO);
+  if(!corte) return 0;
+  const lunCorte = +lunesDe(corte);
+  const vistos = new Set();
+  (DATA.logs || []).forEach(l => {
+    const f = fechaLocal(l.fecha);
+    if(!f) return;
+    const lun = +lunesDe(f);
+    if(lun < lunCorte) vistos.add(lun);      // estrictamente ANTERIORES
+  });
+  return vistos.size;
+}
+
 function semanaActual(){
-  // Sale de la FECHA que el cliente declara haber entrenado, no de "la última
-  // semana con algo cargado". Lo anterior tenía dos efectos feos:
-  //   · el que no cargaba en una semana quedaba atrasado para siempre;
-  //   · un derrame a una semana alta arrastraba la "semana en curso" con él.
-  // Como se deriva de FECHA_ENTRENO, cambiar el selector "¿qué día
-  // entrenaste?" mueve la semana abierta: cargar el lunes una sesión del
-  // viernes anterior abre la semana de ese viernes.
-  return Math.min(SEMANAS, semanaDe(FECHA_ENTRENO, DATA.plan));
+  // Se cuenta contra FECHA_ENTRENO y no contra hoy, así que cambiar el
+  // selector "¿qué día entrenaste?" sigue moviendo la semana abierta: cargar
+  // el lunes una sesión del viernes anterior abre la semana de ese viernes.
+  return Math.min(SEMANAS, semanasEjecutadasAntesDe(FECHA_ENTRENO) + 1);
 }
 
 function renderRPE(dia){
