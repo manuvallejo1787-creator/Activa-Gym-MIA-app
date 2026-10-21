@@ -11,6 +11,7 @@ import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista,
+         sellarMetodos, comparables, metodoDe,
          sintetizarScreening, sintetizarPrioridades,
          bandaTexto, romPorClave, cualitativaPorClave } from "./motor.js";
 import { generarPlanBase, DIVISIONES, derivarPatronesDeficit } from "./generadorPlan.js";
@@ -2976,7 +2977,12 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
       // Antes cada re-evaluación PISABA la anterior (un solo objeto screening,
       // sin historial) — no había con qué comparar un "antes y después" real.
       // Ahora cada finalización queda como snapshot fechado en el historial.
-      const snapshot={id:genId('scr'),fecha:fechaEval,screening:sc,nivel:sc.nivelAsignado,semaforo:sc.semaforoAsignado};
+      // Cada medición con valor queda sellada con su metodo_id antes de
+      // guardar, así el sello viaja también dentro del snapshot del historial.
+      // Sin esto, el checkpoint compara números de métodos distintos y pinta
+      // de verde un cambio de instrumento.
+      const scSellado=sellarMetodos(sc);
+      const snapshot={id:genId('scr'),fecha:fechaEval,screening:scSellado,nivel:sc.nivelAsignado,semaforo:sc.semaforoAsignado};
       const saved={
         ...form,
         nivel:sc.nivelAsignado,
@@ -2985,7 +2991,7 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
         restricciones_flags:flags,
         fechaEval,
         screeningCompleto:true,
-        screening:sc,
+        screening:scSellado,
         screeningHistorial:[...(form.screeningHistorial||[]),snapshot],
       };
       // Se espera el guardado ANTES de cerrar. Si falla, el wizard queda
@@ -4693,10 +4699,24 @@ export default function App(){
                   if(!snA||!snB||snA.id===snB.id)return;
                   if(snA.fecha>snB.fecha)[snA,snB]=[snB,snA];
                   const scA=snA.screening||{},scB=snB.screening||{};
-                  const filaComp=(label,vi,vf,unidad='')=>{
+                  // `clave` es opcional: cuando viene, se consulta si las dos
+                  // tomas comparten método antes de pintar una mejora o un
+                  // retroceso. Hasta hoy este informe pintaba de verde
+                  // cualquier número más alto que el anterior, sin saber si
+                  // venía del mismo instrumento, de la misma posición ni del
+                  // mismo punto de reparo. Un cambio de método produce saltos
+                  // de hasta 20°, y esto se imprime en papel con el logo y se
+                  // le entrega al cliente.
+                  const filaComp=(label,vi,vf,unidad='',clave=null)=>{
                     const numA=parseFloat(vi),numB=parseFloat(vf);
-                    const comparable=!isNaN(numA)&&!isNaN(numB);
-                    const color=comparable?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
+                    const hayNumeros=!isNaN(numA)&&!isNaN(numB);
+                    const cmp=clave?comparables(scA,scB,clave):{ok:true,motivo:null};
+                    if(hayNumeros&&!cmp.ok){
+                      return `<div class="fila"><span class="fila-label">${label}</span>`+
+                        `<span class="fila-val">${vi} → ${vf}${unidad?' '+unidad:''} `+
+                        `<em style="color:#B45309;font-size:9px">no comparable · ${cmp.motivo}</em></span></div>`;
+                    }
+                    const color=hayNumeros?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
                     return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi||'—'}${vi&&unidad?' '+unidad:''} → <strong style="color:${color}">${vf||'—'}${vf&&unidad?' '+unidad:''}</strong></span></div>`;
                   };
                   // Derivada del motor, igual que las otras.
@@ -4711,7 +4731,7 @@ export default function App(){
                       ${filaComp('Fase del método',NIVEL[snA.nivel]?.label,NIVEL[snB.nivel]?.label)}
                       ${c.objetivo?`<div class="fila"><span class="fila-label">Objetivo</span><span class="fila-val">${c.objetivo}</span></div>`:''}
                     </div></div>
-                    ${movsComp.length>0?`<div class="sec"><div class="sec-title">Movilidad — grados registrados</div><div class="sec-body filas">${movsComp.map(([k,l])=>filaComp(l,scA[k+'_grados'],scB[k+'_grados'])).join('')}</div></div>`:''}
+                    ${movsComp.length>0?`<div class="sec"><div class="sec-title">Movilidad — grados registrados</div><div class="sec-body filas">${movsComp.map(([k,l])=>filaComp(l,scA[k+'_grados'],scB[k+'_grados'],'',k)).join('')}</div></div>`:''}
                     ${pvfiComp.length>0?`<div class="sec"><div class="sec-title">Capacidades físicas (PVFI)</div><div class="sec-body filas">${pvfiComp.map(([k,l,u])=>filaComp(l,scA[k],scB[k],u)).join('')}</div></div>`:''}
                     ${footerHTML({centro:brand.gymName,pieTexto:'Método Activa Integra'})}
                     <script>window.onload=()=>window.print()<\/script></body></html>`;

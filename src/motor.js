@@ -493,6 +493,64 @@ export function aplicarBandasDeTabla(filas) {
   return res;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// IDENTIDAD DE MÉTODO
+//
+// La "regla madre" del manual dejó de depender de que el evaluador la recuerde.
+// Cada medición guarda con qué método se tomó, y el sistema se niega solo a
+// comparar dos métodos distintos.
+//
+// QUÉ PASA CON LO YA CARGADO
+// Las mediciones anteriores al 21/10/2026 no tienen método escrito. NO se les
+// inventa uno: se las deja sin sellar y se las trata como "del método vigente
+// antes de esa fecha". Dos mediciones sin sellar son comparables entre sí
+// —comparten la misma suposición— y una sin sellar es comparable con una
+// sellada del método actual, porque para cada clave viva el método no cambió:
+//   · la rotación de cadera ya se medía en prono (confirmado por Manu el 20/10)
+//   · el tobillo con el protocolo viejo vive en OTRA clave, `mov_tobillo`, así
+//     que nunca se cruza con el WBLT
+// El único cambio de método real de esta tanda fue el ancla del porcentaje, y
+// ese no afecta a los grados: afecta a lo derivado de ellos.
+export const METODO_SIN_SELLAR = null;
+
+// Todas las claves de medición que el sistema conoce, angulares y cualitativas.
+const clavesConocidas = () => [
+  ...ROM_GYM.map(m => ({ k: m.k, metodoId: m.metodoId, angular: true })),
+  ...[...CUALITATIVAS.values()].map(m => ({ k: m.k, metodoId: m.metodoId, angular: false })),
+];
+
+const tieneValor = (v) => v != null && String(v).trim() !== '';
+
+// Sella el método en cada medición que tenga valor. Se llama al guardar, así
+// que el sello queda también dentro del snapshot del historial.
+export function sellarMetodos(screening = {}) {
+  const out = { ...screening };
+  for (const { k, metodoId, angular } of clavesConocidas()) {
+    if (!metodoId) continue;
+    const medida = angular
+      ? (tieneValor(out[k + '_grados']) || tieneValor(out[k + '_DBil']) || tieneValor(out[k + '_Izq']))
+      : tieneValor(out[k]);
+    if (medida) out[k + '_metodo'] = metodoId;
+  }
+  return out;
+}
+
+export const metodoDe = (screening = {}, k) => screening[k + '_metodo'] || METODO_SIN_SELLAR;
+
+// ¿Se pueden comparar estas dos tomas de la misma medición?
+// Devuelve { ok, motivo }. `ok:false` NO significa que una esté mal: significa
+// que la diferencia entre los dos números no es atribuible al cliente.
+export function comparables(scA = {}, scB = {}, k) {
+  const a = metodoDe(scA, k), b = metodoDe(scB, k);
+  if (a === b) return { ok: true, motivo: null };
+  // Una sin sellar contra una sellada: comparables si la sellada usa el método
+  // vigente, porque es el mismo con el que se venía midiendo.
+  const vigente = (romPorClave(k) || cualitativaPorClave(k) || {}).metodoId;
+  if ((a === METODO_SIN_SELLAR && b === vigente) || (b === METODO_SIN_SELLAR && a === vigente))
+    return { ok: true, motivo: null };
+  return { ok: false, motivo: `cambió el método (${a || 'sin registrar'} → ${b || 'sin registrar'})` };
+}
+
 // Los grados vienen como texto libre y sin formato uniforme.
 // Verificado contra los 13 formatos presentes en la base.
 export function parseGrados(t) {
