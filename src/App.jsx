@@ -5,13 +5,14 @@ import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { aNumero, aTexto, aGuardar, normalizarTipeo, avisoRango, calcularIMC } from "./num.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, useBandasScreening, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista,
-         sintetizarScreening, sintetizarPrioridades } from "./motor.js";
+         sintetizarScreening, sintetizarPrioridades,
+         bandaTexto, romPorClave } from "./motor.js";
 import { generarPlanBase, DIVISIONES, derivarPatronesDeficit } from "./generadorPlan.js";
 import { describirEjercicio } from "./descripciones.js";
 import Hoy from "./Hoy.jsx";
@@ -996,7 +997,6 @@ export const PANEL_POSTURA_ROM = [
   { n:1, k:'mov_cv_angulo', tipo:'grados', bilateral:false,
     label:'Antepulsión cefálica — ángulo craneovertebral',
     pos:'De pie, de perfil. Adhesivo en el proceso espinoso de C7. Ángulo entre la línea C7→trago del pabellón auricular y la horizontal que pasa por C7.',
-    bandas:'Óptimo ≥50° · Funcional 44–50° · Limitado 38–44° · Disfuncional <38°',
     pose:null,
     // Bandas derivadas de la distribución publicada: media 50,7° ± 6,3° en
     // postura relajada, ICC inter 0,88 / intra 0,91 (Cote 2021, Int J
@@ -1023,19 +1023,16 @@ export const PANEL_POSTURA_ROM = [
   { n:4, k:'mov_hombro_flex', tipo:'grados',
     label:'Flexión de hombro',
     pos:'Supino en camilla, rodillas flexionadas para bloquear la compensación lumbar. Elevación del brazo en el plano sagital.',
-    bandas:'Óptimo ≥170° · Funcional 150–170° · Limitado 120–150° · Disfuncional <120°',
     pose:{region:'hombro',mov:'Flexión'} },
 
   { n:5, k:'mov_hombro_ri', tipo:'grados',
     label:'Rotación interna de hombro',
     pos:'Supino, hombro a 90° de abducción, codo a 90°. Antebrazo rotando hacia los pies. Estabilizar la escápula.',
-    bandas:'Óptimo ≥65° · Funcional 55–65° · Limitado 45–55° · Disfuncional <45°',
     pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
 
   { n:6, k:'mov_hombro_re', tipo:'grados',
     label:'Rotación externa de hombro',
     pos:'Misma posición que la RI. Antebrazo rotando hacia la cabeza.',
-    bandas:'Óptimo ≥85° · Funcional 70–85° · Limitado 60–70° · Disfuncional <60°',
     pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
 
   { n:7, k:'postura_pelvis', tipo:'grado',
@@ -1049,25 +1046,21 @@ export const PANEL_POSTURA_ROM = [
     // cadera está extendida y lo que se mide es extensión. Los 32 registros
     // existentes de este campo van de 90° a 132°, que es flexión supina.
     pos:'SUPINO en camilla. Flexión activa de cadera con rodilla flexionada. La pelvis no debe despegar.',
-    bandas:'Óptimo ≥120° · Funcional 100–120° · Limitado 80–100° · Disfuncional <80°',
     pose:{region:'cadera',mov:'Flexión'} },
 
   { n:9, k:'mov_cad_rot', tipo:'grados',
     label:'Rotación interna de cadera',
     pos:'PRONO en camilla, rodillas a 90°. Dejar caer las tibias HACIA AFUERA. En prono se mide más rango rotacional que en sedestación o supino: las posiciones no son intercambiables.',
-    bandas:'Se juzga por el arco RI+RE, no por el valor aislado · ref 45°',
     pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
 
   { n:10, k:'mov_cad_rot_ext', tipo:'grados',
     label:'Rotación externa de cadera',
     pos:'Misma posición de prono. Dejar caer las tibias HACIA LA LÍNEA MEDIA, cruzando.',
-    bandas:'Arco RI+RE: Óptimo ≥80° · Funcional 70–80° · Restricción <70° · ref 45°',
     pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
 
   { n:11, k:'mov_tobillo_wblt', tipo:'grados',
     label:'Dorsiflexión de tobillo (lunge en carga)',
     pos:'De pie frente a la pared, pie de prueba adelante, talón apoyado. Regla desde el maléolo externo hasta la rodilla: ángulo del segmento tibial contra la vertical. Foto de perfil, cámara perpendicular.',
-    bandas:'Óptimo ≥35° · Funcional pero limitado 30–35° · Disfuncional <30° · asimetría relevante ≥4°',
     pose:{region:'tobillo',mov:'Dorsiflexión WBLT'} },
 ];
 
@@ -1077,7 +1070,7 @@ export const PANEL_POSTURA_ROM = [
 export const PANEL_SECUNDARIO = [
   { k:'mov_tor_rot', tipo:'grados', label:'Rotación torácica',
     pos:'Sentado a horcajadas en el banco con palo en los hombros, o en cuadrupedia con mano en la nuca.',
-    bandas:'ref 45°/lado · Disfuncional <30°', pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
+    pose:null, manual:'Rotación: no resoluble desde una sola foto 2D.' },
   { k:'postura_columna_lat', tipo:'grado', label:'Curva lumbar (perfil)',
     opts:['Normal','Hiperlordosis','Rectificación'] },
   { k:'postura_columna_tor', tipo:'grado', label:'Curva torácica',
@@ -2211,18 +2204,14 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
         <div style="font-size:9px;color:#999;margin-bottom:14px;font-style:italic">Diferencia entre lados: verde &lt;2% · ámbar 2–5% · rojo ≥5%. Es un dato descriptivo para seguimiento, no un diagnóstico — la asimetría de perímetro no implica por sí sola asimetría de fuerza.</div>`:'';
 
       // ─── RANGOS DE MOVIMIENTO ARTICULAR ───────────────────────────────────
-      const MOVPDF=[
-        ['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)',50],
-        ['mov_hombro_flex','Flexión de hombro',180],
-        ['mov_hombro_re','Rotación externa de hombro',90],
-        ['mov_hombro_ri','Rotación interna de hombro',70],
-        ['mov_tor_rot','Rotación torácica',45],
-        ['mov_cad_flex','Flexión de cadera',120],
-        ['mov_cad_rot','Rotación interna de cadera',45],
-        ['mov_cad_rot_ext','Rotación externa de cadera',45],
-        ['mov_tobillo_wblt','Dorsiflexión de tobillo (WBLT)',38],
-        ['mov_tobillo','Dorsiflexión de tobillo (protocolo anterior)',20],
-      ];
+      // Derivada del motor, no escrita a mano. La columna de referencia también
+      // alimentaba un `pct = v/ref*100` propio de este informe, con los anclas
+      // viejas (180, 90, 70, 38): el porcentaje impreso no coincidía con el que
+      // calculaba el motor para el mismo cliente.
+      const MOVPDF=['mov_cv_angulo','mov_hombro_flex','mov_hombro_re','mov_hombro_ri',
+        'mov_tor_rot','mov_cad_flex','mov_cad_rot','mov_cad_rot_ext',
+        'mov_tobillo_wblt','mov_tobillo']
+        .map(k=>{const m=romPorClave(k);return m?[k,m.label,m.ref]:null}).filter(Boolean);
       const GM={N:'Óptimo',L:'Limitado',ML:'Muy limitado',D:'Dolor'};
       const GCOL={N:'#16A34A',L:'#D97706',ML:'#DC2626',D:'#DC2626'};
       // Los grados se cargan como texto libre: "Der 180 / Izq 180", "der 90/izq 90", "Der 13 / Izq18"
@@ -2393,7 +2382,12 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
     const posturaRows=Object.keys(POSTURA_LBL).filter(k=>sc[k]).map(k=>`${POSTURA_LBL[k]}: ${sc[k]}${sc[k]===POSTURA_DEF[k]?' (normal)':''}`);
     const posturaTxt=posturaRows.length?posturaRows.join('; '):'NO REGISTRADA';
     // ── Movilidad articular / ángulos (N/L/ML/D con referencias) ──
-    const MOV=[['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)','Óptimo ≥50° · Funcional 44-50° · Limitado 38-44° · Disfunc <38°'],['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)','ref ≥38° · limitado <35°'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)','campo histórico — no comparable'],['mov_cad_rot','Rotación interna cadera (prono)','ref 45°'],['mov_cad_rot_ext','Rotación externa cadera (prono)','ref 45° · arco RI+RE ≥70°'],['mov_cad_flex','Flexión cadera','ref 90-120°'],['mov_tor_rot','Rotación torácica','ref 45°/lado'],['mov_hombro_flex','Flexión hombro','ref 180°'],['mov_hombro_ri','Rot. interna hombro','ref 70°'],['mov_hombro_re','Rot. externa hombro','ref 90°']];
+    // Derivada del motor: etiqueta y bandas salen de la misma fuente que el
+    // resto. Acá estaba la peor desincronización: el texto que recibía la IA
+    // decía "ref >=38 · limitado <35" para el tobillo mientras el panel del
+    // evaluador decía "Óptimo >=35".
+    const MOV=['mov_cv_angulo','mov_tobillo_wblt','mov_tobillo','mov_cad_rot','mov_cad_rot_ext','mov_cad_flex','mov_tor_rot','mov_hombro_flex','mov_hombro_ri','mov_hombro_re']
+      .map(k=>{const m=romPorClave(k);return m?[k,m.label,bandaTexto(m,{corto:true})]:null}).filter(Boolean);
     const GMAP={N:'Óptimo',L:'Limitado (leve)',ML:'Muy limitado (severo)',D:'Dolor'};
     const movRows=MOV.map(([k,lbl,ref])=>{
       const d=sc[k+'_DBil'],i=sc[k+'_Izq'],g=sc[k+'_grados'];
@@ -3296,7 +3290,13 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
                 <div>
                   <div style={{fontSize:11,fontWeight:700}}>{it.n?`${it.n}. `:''}{it.label}</div>
                   {it.pos&&<div style={{fontSize:9,color:G3,marginTop:2,lineHeight:1.35}}>{it.pos}</div>}
-                  {it.bandas&&<div style={{fontSize:9,color:'#0E7490',fontWeight:600,marginTop:2}}>{it.bandas}</div>}
+                  {/* El texto de las bandas se GENERA desde los números del
+                      motor, que a su vez salen de `screening_bandas`. Antes
+                      estaba escrito a mano acá y en otros cuatro lugares, y
+                      ya se había desincronizado. */}
+                  {(()=>{const b=bandaTexto(romPorClave(it.k));return b?(
+                    <div style={{fontSize:9,color:'#0E7490',fontWeight:600,marginTop:2}}>{b}</div>
+                  ):null})()}
                 </div>
                 {(it.bilateral===false?['DBil']:['DBil','Izq']).map(side=>(
                   <select key={side} value={sc[it.k+'_'+side]||''} onChange={e=>setSCK(it.k+'_'+side,e.target.value)} style={{...s.sel,fontSize:10,textAlign:'center'}}>
@@ -3342,6 +3342,16 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
             <div style={{background:'#F0FDF4',border:'1px solid #86EFAC',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:10}}>
               🩺 <strong>Fase 2.</strong> Las 11 mediciones van en orden de recorrido: craneal → distal. Dejá en <strong>—</strong> lo que no evalúes.
               Las filas <span style={{background:'#FEF3C7',padding:'1px 4px',borderRadius:3}}>ámbar</span> son hallazgos cualitativos: se gradúan, no se miden en grados.
+              {/* El manual dice: "si la versión no coincide con la que muestra
+                  la app, manda la app y el ejemplar impreso está vencido".
+                  Para poder cumplirlo, la app tiene que mostrarla. */}
+              <div style={{marginTop:5,fontSize:9,color:G3}}>
+                {bandasRef.origen==='tabla'
+                  ? <>Valores de referencia: <strong>tabla {bandasRef.version||'—'}</strong>. Si el manual impreso dice otra versión, manda esta.</>
+                  : bandasRef.listo
+                    ? <>Valores de referencia: <strong>los del código</strong> — no se pudo leer la tabla{bandasRef.detalle?` (${bandasRef.detalle})`:''}. Son los mismos con los que se sembró, pero una recalibración reciente no estaría aplicada.</>
+                    : <>Cargando los valores de referencia…</>}
+              </div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 92px 92px',gap:4,marginBottom:3}}>
               <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',paddingLeft:4}}>Medición · Posición · Bandas</div>
@@ -3828,6 +3838,9 @@ export default function App(){
     faseIdx:0, // qué fase de la periodización se está armando (no siempre la inicial — se puede adelantar trabajo)
   });
   // ── DATOS EN TIEMPO REAL (Supabase) ──────────────────────────────────────
+  // Trae screening_bandas y la aplica sobre ROM_GYM una vez al arrancar. Si
+  // falla, quedan los valores del código: nunca deja la app sin referencias.
+  const bandasRef = useBandasScreening();
   const { clients: dbClients, loading: dbLoading, error: dbError, saveClient: dbSaveClient, deleteClient: dbDeleteClient, updateClient: dbUpdateClient } = useGymClients();
   const [clients, setClientsLocal] = useState([]);
 
@@ -4670,7 +4683,9 @@ export default function App(){
                     const color=comparable?(numB>numA?'#16A34A':numB<numA?'#DC2626':'#666'):'#666';
                     return `<div class="fila"><span class="fila-label">${label}</span><span class="fila-val">${vi||'—'}${vi&&unidad?' '+unidad:''} → <strong style="color:${color}">${vf||'—'}${vf&&unidad?' '+unidad:''}</strong></span></div>`;
                   };
-                  const MOVX=[['mov_cv_angulo','Antepulsión cefálica (áng. craneovertebral)'],['mov_tobillo_wblt','Dorsiflexión tobillo (WBLT)'],['mov_tobillo','Dorsiflexión tobillo (protocolo anterior)'],['mov_cad_rot','Rotación interna cadera'],['mov_cad_rot_ext','Rotación externa cadera'],['mov_cad_flex','Flexión cadera'],['mov_tor_rot','Rotación torácica'],['mov_hombro_flex','Flexión hombro'],['mov_hombro_ri','Rot. interna hombro'],['mov_hombro_re','Rot. externa hombro']];
+                  // Derivada del motor, igual que las otras.
+                  const MOVX=['mov_cv_angulo','mov_tobillo_wblt','mov_tobillo','mov_cad_rot','mov_cad_rot_ext','mov_cad_flex','mov_tor_rot','mov_hombro_flex','mov_hombro_ri','mov_hombro_re']
+                    .map(k=>{const m=romPorClave(k);return m?[k,m.label]:null}).filter(Boolean);
                   const PVFIX=[['pvfi_chair_stand','30s Chair Stand','reps'],['pvfi_dino_d','Dinamometría der','kg'],['pvfi_dino_i','Dinamometría izq','kg'],['pvfi_tug','TUG','seg'],['pvfi_plancha_elev','Plancha elevada','seg'],['pvfi_wallsit','Wall sit 90°','seg'],['pvfi_pushup_rod','Push-up rodillas','reps'],['pvfi_plancha_suelo','Plancha suelo','seg'],['pvfi_row_iso','Row isométrico','seg'],['pvfi_dino2','Dinamometría TS','kg']];
                   const movsComp=MOVX.filter(([k])=>scA[k+'_grados']||scB[k+'_grados']);
                   const pvfiComp=PVFIX.filter(([k])=>scA[k]||scB[k]);

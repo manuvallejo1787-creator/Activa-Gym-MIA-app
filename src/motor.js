@@ -368,6 +368,13 @@ export function bandaTexto(m, { corto = false } = {}) {
         + `Restricción <${a.min}${u} · Disfuncional <${a.bandas?.[0]?.bajo ?? a.min}${u} · ref ${m.ref}${u}`;
   }
   if (m.legacy) return corto ? 'campo histórico' : 'Campo histórico — no comparable con el protocolo actual';
+  // El componente opuesto de un arco tampoco tiene veredicto propio: muestra el
+  // del arco, igual que su par. Sin esto, la rotación EXTERNA de cadera decía
+  // "Óptimo ≥45°", que es la referencia del componente y no un criterio.
+  if (!m.arco) {
+    const duenio = ROM_GYM.find(x => x.arco && x.arco.par === m.k);
+    if (duenio) return bandaTexto({ ...duenio, k: m.k, ref: m.ref }, { corto });
+  }
   if (!m.bandas || !m.bandas.length) {
     return corto ? `ref ${m.ref}${u}` : `Óptimo ≥${m.ref}${u}`;
   }
@@ -398,6 +405,93 @@ export function bandaTexto(m, { corto = false } = {}) {
 
 // Acceso por clave, para que las pantallas no tengan que recorrer el array.
 export const romPorClave = (k) => ROM_GYM.find(m => m.k === k) || null;
+
+// ════════════════════════════════════════════════════════════════════════════
+// LA TABLA DE LA BASE MANDA, EL CÓDIGO ES EL RESPALDO
+//
+// `screening_bandas` existe para que recalibrar una banda sea editar un número
+// y no desplegar. ROM_GYM de arriba queda como valor por defecto: si la
+// consulta falla o la tabla está vacía, la app funciona exactamente igual que
+// antes en vez de quedarse sin referencias.
+//
+// Se MUTAN los objetos de ROM_GYM en lugar de reemplazar el array, porque
+// media docena de módulos ya tienen la referencia importada. La primera
+// pintura usa los valores del código y se actualiza cuando llega la consulta;
+// hoy son idénticos —la tabla se sembró desde acá— así que no hay parpadeo.
+// El día que se edite una banda, el cambio se ve en la carga siguiente.
+//
+// El `nivel` de cada banda no está en la tabla como texto libre: se deriva.
+// `banda_funcional_nivel` es lo único que distingue al tobillo (el tramo
+// 30–35 ES hallazgo y se llama "funcional pero limitado") de la rotación
+// torácica (su tramo 30–45 está bajo el óptimo y no se reporta).
+// Mediciones cualitativas (antepulsión de hombros, simetría, pelvis): no
+// tienen bandas, pero sí identidad de método y opciones de registro.
+export const CUALITATIVAS = new Map();
+export const cualitativaPorClave = (k) => CUALITATIVAS.get(k) || null;
+
+export function filaABanda(fila) {
+  const n = (v) => (v == null ? null : Number(v));
+  const m = {
+    k: fila.k,
+    label: fila.label,
+    ref: n(fila.piso_optimo),
+    mdc: n(fila.mdc) ?? 0,
+    metodoId: fila.metodo_id,
+    version: fila.version,
+  };
+  if (fila.techo_optimo != null)  m.techoOptimo = n(fila.techo_optimo);
+  if (fila.asim_abs != null)      m.asimAbs = n(fila.asim_abs);
+  if (fila.max_plausible != null) m.maxPlausible = n(fila.max_plausible);
+  if (fila.no_promedia)           m.noPromedia = true;
+  if (fila.legacy)                m.legacy = true;
+  if (fila.unidad === 'cualitativo') m.cualitativo = true;
+  if (Array.isArray(fila.opciones)) m.opciones = fila.opciones;
+
+  const bandas = [];
+  if (fila.piso_limitado != null)
+    bandas.push({ bajo: n(fila.piso_limitado), nivel: 'disfuncional' });
+  if (fila.piso_funcional != null)
+    bandas.push({ bajo: n(fila.piso_funcional),
+                  nivel: fila.piso_limitado != null ? 'limitado' : 'disfuncional' });
+  // El tramo [funcional, óptimo) solo se reporta si la tabla le puso nombre.
+  if (fila.banda_funcional_nivel)
+    bandas.push({ bajo: m.ref, nivel: fila.banda_funcional_nivel });
+  if (bandas.length) m.bandas = bandas.sort((a, b) => a.bajo - b.bajo);
+
+  if (fila.arco_restriccion != null) {
+    m.arco = {
+      par: fila.arco_par, min: n(fila.arco_restriccion),
+      optimo: n(fila.arco_optimo), etiqueta: 'Arco de rotación de cadera',
+      bandas: [{ bajo: n(fila.arco_disfuncional), nivel: 'restricción disfuncional' },
+               { bajo: n(fila.arco_restriccion),  nivel: 'restricción real' }],
+    };
+  }
+  return m;
+}
+
+export function aplicarBandasDeTabla(filas) {
+  const res = { aplicadas: 0, nuevas: 0, descartadas: [] };
+  if (!Array.isArray(filas) || !filas.length) return res;
+  for (const fila of filas) {
+    if (!fila?.k || fila.piso_optimo == null && fila.unidad !== 'cualitativo') {
+      res.descartadas.push(fila?.k || '(sin clave)');
+      continue;
+    }
+    const nuevo = filaABanda(fila);
+    // Las cualitativas no entran al motor de ROM: solo aportan su método y sus
+    // opciones a las pantallas, y se consultan por clave.
+    if (nuevo.cualitativo) { CUALITATIVAS.set(nuevo.k, nuevo); res.aplicadas++; continue; }
+    const i = ROM_GYM.findIndex(m => m.k === fila.k);
+    if (i < 0) { ROM_GYM.push(nuevo); res.nuevas++; continue; }
+    // Se borran las claves derivadas antes de reescribir, para que una banda
+    // que la tabla ya no define no quede colgada del valor viejo.
+    for (const campo of ['bandas', 'arco', 'asimAbs', 'techoOptimo', 'maxPlausible',
+                         'noPromedia', 'legacy', 'opciones']) delete ROM_GYM[i][campo];
+    Object.assign(ROM_GYM[i], nuevo);
+    res.aplicadas++;
+  }
+  return res;
+}
 
 // Los grados vienen como texto libre y sin formato uniforme.
 // Verificado contra los 13 formatos presentes en la base.
