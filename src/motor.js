@@ -235,13 +235,35 @@ export const ROM_GYM = [
     bandas: [{ bajo: 38, nivel: 'disfuncional' }, { bajo: 44, nivel: 'limitado' }],
     noPromedia: true, mdc: 4 },
 
-  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 180, mdc: 8,
+  // `ref` ES EL UMBRAL DE ÓPTIMO, NO EL MÁXIMO ANATÓMICO (cambio del 20/10/2026).
+  // Los valores anteriores —180, 90, 70, 38— salían de `rom_normas`, que es una
+  // tabla de normas goniométricas generales: máximos de rango, no umbrales de
+  // óptimo del centro. Con ese ancla, un cliente que llegaba justo al óptimo
+  // leía 92% o 94% y NINGÚN cliente sano alcanzaba nunca el 100%.
+  //
+  // El cambio de ancla es, él mismo, un cambio de método, así que el histórico
+  // de ese porcentaje queda partido en esta fecha. Los grados no cambian; lo
+  // derivado de ellos, sí.
+  //
+  // MAGNITUD, medida el 20/10/2026 sobre los 36 clientes con ángulos cargados:
+  // el porcentaje promedio por cliente sube 1,6 puntos (máximo 4, mínimo 0) y
+  // nadie baja. En un movimiento aislado el salto llega a ~6 puntos —una
+  // flexión de hombro de 150° pasa de 83% a 88%— pero en el promedio del
+  // cliente se diluye, porque la mayoría de los movimientos ya topeaba en 100.
+  // Clientes que leen 100%: eran 6, pasan a 7.
+  { k: 'mov_hombro_flex', label: 'Flexión de hombro',            ref: 170, mdc: 8,
     bandas: [{ bajo: 120, nivel: 'disfuncional' }, { bajo: 150, nivel: 'limitado' }] },
-  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 90,  mdc: 8,
+  { k: 'mov_hombro_re',   label: 'Rotación externa de hombro',   ref: 85,  mdc: 8,
     bandas: [{ bajo: 60,  nivel: 'disfuncional' }, { bajo: 70,  nivel: 'limitado' }] },
-  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 70,  mdc: 8,
+  { k: 'mov_hombro_ri',   label: 'Rotación interna de hombro',   ref: 65,  mdc: 8,
     bandas: [{ bajo: 45,  nivel: 'disfuncional' }, { bajo: 55,  nivel: 'limitado' }] },
-  { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45,  mdc: 8  },
+  // El manual publica "ref 45°/lado · disfuncional <30°", pero sin bandas el
+  // motor caía en el 80% de la referencia y marcaba limitación por debajo de
+  // 36°. Manda el manual. Medido el 20/10 sobre la base: los 5 clientes con
+  // rotación torácica cargada están todos en 36° o más, así que nadie cambia
+  // de veredicto con esto.
+  { k: 'mov_tor_rot',     label: 'Rotación torácica',            ref: 45,  mdc: 8,
+    bandas: [{ bajo: 30, nivel: 'disfuncional' }] },
   { k: 'mov_cad_flex',    label: 'Flexión de cadera',            ref: 120, mdc: 10,
     // Posición corregida el 14/10/2026: SUPINO. En prono la cadera está
     // extendida y lo que se mide es extensión. Los 32 registros existentes
@@ -267,8 +289,12 @@ export const ROM_GYM = [
   //
   // El discriminador es el ARCO TOTAL (RI + RE): la cadera retrovertida tiene
   // RI baja, RE alta y arco normal; la restringida tiene el arco reducido.
+  // `min` es el umbral de RESTRICCIÓN (por debajo entra al plan) y `optimo` es
+  // el ancla del 100%. Hasta el 20/10/2026 `min` hacía las dos cosas, así que
+  // un arco de 70° —que el manual llama restricción justa, no óptimo— leía
+  // 100%. El óptimo del manual es 80° con los dos componentes normales.
   { k: 'mov_cad_rot',     label: 'Rotación interna de cadera',   ref: 45,  mdc: 8,
-    arco: { par: 'mov_cad_rot_ext', min: 70, etiqueta: 'Arco de rotación de cadera',
+    arco: { par: 'mov_cad_rot_ext', min: 70, optimo: 80, etiqueta: 'Arco de rotación de cadera',
             bandas: [{ bajo: 60, nivel: 'restricción disfuncional' },
                       { bajo: 70, nivel: 'restricción real' }] } },
   { k: 'mov_cad_rot_ext', label: 'Rotación externa de cadera',   ref: 45,  mdc: 8  },
@@ -294,7 +320,10 @@ export const ROM_GYM = [
   // WBLT sube a 4,6-4,7° (Powden 2015, DOI 10.1016/j.math.2015.01.004). Un
   // cambio de 4° entre una evaluación y la siguiente NO es distinguible del
   // error si se midió a mano; medido por pose, sí (MDC 1,7°).
-  { k: 'mov_tobillo_wblt', label: 'Dorsiflexión de tobillo (WBLT)', ref: 38,
+  // ref 38 -> 35: el óptimo del protocolo es 35–40°, así que el ancla del 100%
+  // es 35. Con 38 un cliente en 35° —óptimo por su propio criterio— leía 92%.
+  { k: 'mov_tobillo_wblt', label: 'Dorsiflexión de tobillo (WBLT)', ref: 35,
+    techoOptimo: 40,
     bandas: [{ bajo: 30, nivel: 'disfuncional' }, { bajo: 35, nivel: 'funcional pero limitado' }],
     asimAbs: 4, mdc: 2 },
 
@@ -314,6 +343,61 @@ export const ROM_GYM = [
   { k: 'mov_tobillo', label: 'Dorsiflexión de tobillo (protocolo anterior)',
     ref: 20, mdc: 5, legacy: true, maxPlausible: 25 },
 ];
+
+// ════════════════════════════════════════════════════════════════════════════
+// TEXTO DE LAS BANDAS — fuente única
+//
+// Hasta el 20/10/2026 el texto de referencia de cada movimiento estaba escrito
+// a mano en SEIS lugares: la tabla de arriba, los dos paneles del wizard, la
+// tabla del informe impreso, el prompt que recibe la IA y las etiquetas del
+// checkpoint. Ya se habían desincronizado: el panel decía "Óptimo ≥35°" para
+// el tobillo y el texto que viajaba a la IA decía "ref ≥38° · limitado <35°".
+//
+// Ahora el texto se GENERA desde los números. Cambiar una banda es cambiar un
+// número en un solo lugar, y las seis pantallas siguen.
+const NIV_ORDEN = ['disfuncional', 'funcional pero limitado', 'limitado'];
+export function bandaTexto(m, { corto = false } = {}) {
+  if (!m) return '';
+  const u = m.unidad || '°';
+  // Las rotaciones de cadera no tienen veredicto propio: manda el arco.
+  if (m.arco) {
+    const a = m.arco;
+    return corto
+      ? `arco RI+RE ≥${a.optimo ?? a.min}${u}`
+      : `Se juzga por el arco RI+RE · Óptimo ≥${a.optimo ?? a.min}${u} · `
+        + `Restricción <${a.min}${u} · Disfuncional <${a.bandas?.[0]?.bajo ?? a.min}${u} · ref ${m.ref}${u}`;
+  }
+  if (m.legacy) return corto ? 'campo histórico' : 'Campo histórico — no comparable con el protocolo actual';
+  if (!m.bandas || !m.bandas.length) {
+    return corto ? `ref ${m.ref}${u}` : `Óptimo ≥${m.ref}${u}`;
+  }
+  // SEMÁNTICA DE `bandas`, que es la que usa calcROMGym: ordenadas de menor a
+  // mayor, `bandas[i].nivel` aplica al tramo [bandas[i-1].bajo, bandas[i].bajo).
+  // O sea que el `bajo` de cada banda es su TECHO, no su piso, y el piso se lo
+  // pone la banda de abajo. Por encima de la banda más alta no hay hallazgo:
+  // ahí `ref` separa funcional de óptimo.
+  const bs = [...m.bandas].sort((x, y) => x.bajo - y.bajo);
+  const alta = bs[bs.length - 1];
+  const nom = (n) => n === 'funcional pero limitado'
+    ? 'Funcional limitado' : n.charAt(0).toUpperCase() + n.slice(1);
+  const techo = m.techoOptimo ? `${m.ref}–${m.techoOptimo}${u}` : `≥${m.ref}${u}`;
+  if (corto) return `óptimo ${techo} · disfunc <${bs[0].bajo}${u}`;
+
+  const partes = [`Óptimo ${techo}`];
+  // Tramo funcional: existe solo si la banda más alta termina por debajo de ref.
+  if (alta.bajo < m.ref) partes.push(`Funcional ${alta.bajo}–${m.ref}${u}`);
+  // Las bandas intermedias, de arriba hacia abajo.
+  for (let i = bs.length - 1; i >= 1; i--) {
+    partes.push(`${nom(bs[i].nivel)} ${bs[i - 1].bajo}–${bs[i].bajo}${u}`);
+  }
+  // La más baja no tiene piso.
+  partes.push(`${nom(bs[0].nivel)} <${bs[0].bajo}${u}`);
+  if (m.asimAbs) partes.push(`asimetría ≥${m.asimAbs}${u}`);
+  return partes.join(' · ');
+}
+
+// Acceso por clave, para que las pantallas no tengan que recorrer el array.
+export const romPorClave = (k) => ROM_GYM.find(m => m.k === k) || null;
 
 // Los grados vienen como texto libre y sin formato uniforme.
 // Verificado contra los 13 formatos presentes en la base.
@@ -422,7 +506,11 @@ export function calcROMGym(screening = {}) {
       }
       const arco = a[lado] + b[lado];
       detalle.push({ mov: `${m.arco.etiqueta} (${nombreLado})`, der: null, izq: null,
-                     ref: m.arco.min, pct: Math.round(Math.min(arco / m.arco.min * 100, 100)), arco });
+                     // El porcentaje ancla en el ÓPTIMO del arco, no en el
+                     // umbral de restricción: un arco de 70° es el piso de lo
+                     // aceptable, no el techo.
+                     ref: m.arco.optimo ?? m.arco.min,
+                     pct: Math.round(Math.min(arco / (m.arco.optimo ?? m.arco.min) * 100, 100)), arco });
       const refRI = m.ref, refRE = otro?.ref ?? m.ref;
       if (arco < m.arco.min) {
         const bandaArco = [...(m.arco.bandas || [])].sort((x, y) => x.bajo - y.bajo).find(x => arco < x.bajo);
