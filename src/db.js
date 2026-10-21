@@ -1,6 +1,7 @@
 // db.js — Capa de datos con fallback a estado local si Supabase no está disponible
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, isSupabaseReady } from './supabase.js'
+import { aplicarBandasDeTabla } from './motor.js'
 
 export const genId = (prefix = 'id') =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
@@ -1332,4 +1333,47 @@ export function useSalaDatos(ids = []) {
   },[clave])
   useEffect(()=>{fetch()},[fetch])
   return{tests,planes,feedback,loading,refetch:fetch}
+}
+
+// ─── HOOK: Bandas del screening ───────────────────────────────────────────
+// Trae `screening_bandas` una vez al arrancar y la aplica sobre ROM_GYM. Si
+// la consulta falla o la tabla está vacía, NO se toca nada: quedan los valores
+// del código, que son los mismos con los que se sembró la tabla. Nunca deja
+// a la app sin referencias.
+//
+// No devuelve estado porque nadie re-renderiza por esto: las pantallas leen
+// ROM_GYM al pintar. El `listo` sirve para no pintar el panel de ROM antes de
+// que la tabla llegue, y así evitar que el evaluador lea un valor y lo vea
+// cambiar bajo la mano.
+export function useBandasScreening(){
+  const [estado,setEstado]=useState({listo:false,origen:null,detalle:null})
+  useEffect(()=>{
+    let vivo=true
+    ;(async()=>{
+      if(!isSupabaseReady){
+        if(vivo) setEstado({listo:true,origen:'codigo',detalle:'sin conexión'})
+        return
+      }
+      try{
+        const {data,error}=await supabase.from('screening_bandas').select('*')
+        if(error) throw error
+        if(!vivo) return
+        if(!data || !data.length){
+          setEstado({listo:true,origen:'codigo',detalle:'tabla vacía'})
+          return
+        }
+        const r=aplicarBandasDeTabla(data)
+        if(r.descartadas.length)
+          console.warn('bandas: filas descartadas por incompletas →',r.descartadas.join(', '))
+        setEstado({listo:true,origen:'tabla',
+          detalle:`${r.aplicadas} aplicadas${r.nuevas?`, ${r.nuevas} nuevas`:''}`,
+          version:data[0]?.version||null})
+      }catch(e){
+        console.error('bandas: no se pudo leer screening_bandas, quedan los valores del código →',e.message)
+        if(vivo) setEstado({listo:true,origen:'codigo',detalle:e.message})
+      }
+    })()
+    return()=>{vivo=false}
+  },[])
+  return estado
 }
