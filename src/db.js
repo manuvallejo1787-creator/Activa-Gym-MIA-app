@@ -1345,34 +1345,37 @@ export function useSalaDatos(ids = []) {
 // ROM_GYM al pintar. El `listo` sirve para no pintar el panel de ROM antes de
 // que la tabla llegue, y así evitar que el evaluador lea un valor y lo vea
 // cambiar bajo la mano.
+// La consulta se hace UNA vez por sesión aunque varios componentes usen el
+// hook: el resultado vive en una promesa de módulo. Sin esto, el panel del
+// wizard y la pantalla principal pedían la tabla cada uno por su lado.
+let promesaBandas=null
+function traerBandas(){
+  if(promesaBandas) return promesaBandas
+  promesaBandas=(async()=>{
+    if(!isSupabaseReady) return {listo:true,origen:'codigo',detalle:'sin conexión'}
+    try{
+      const {data,error}=await supabase.from('screening_bandas').select('*')
+      if(error) throw error
+      if(!data || !data.length) return {listo:true,origen:'codigo',detalle:'tabla vacía'}
+      const r=aplicarBandasDeTabla(data)
+      if(r.descartadas.length)
+        console.warn('bandas: filas descartadas por incompletas →',r.descartadas.join(', '))
+      return {listo:true,origen:'tabla',
+        detalle:`${r.aplicadas} aplicadas${r.nuevas?`, ${r.nuevas} nuevas`:''}`,
+        version:data[0]?.version||null}
+    }catch(e){
+      console.error('bandas: no se pudo leer screening_bandas, quedan los valores del código →',e.message)
+      return {listo:true,origen:'codigo',detalle:e.message}
+    }
+  })()
+  return promesaBandas
+}
+
 export function useBandasScreening(){
   const [estado,setEstado]=useState({listo:false,origen:null,detalle:null})
   useEffect(()=>{
     let vivo=true
-    ;(async()=>{
-      if(!isSupabaseReady){
-        if(vivo) setEstado({listo:true,origen:'codigo',detalle:'sin conexión'})
-        return
-      }
-      try{
-        const {data,error}=await supabase.from('screening_bandas').select('*')
-        if(error) throw error
-        if(!vivo) return
-        if(!data || !data.length){
-          setEstado({listo:true,origen:'codigo',detalle:'tabla vacía'})
-          return
-        }
-        const r=aplicarBandasDeTabla(data)
-        if(r.descartadas.length)
-          console.warn('bandas: filas descartadas por incompletas →',r.descartadas.join(', '))
-        setEstado({listo:true,origen:'tabla',
-          detalle:`${r.aplicadas} aplicadas${r.nuevas?`, ${r.nuevas} nuevas`:''}`,
-          version:data[0]?.version||null})
-      }catch(e){
-        console.error('bandas: no se pudo leer screening_bandas, quedan los valores del código →',e.message)
-        if(vivo) setEstado({listo:true,origen:'codigo',detalle:e.message})
-      }
-    })()
+    traerBandas().then(r=>{ if(vivo) setEstado(r) })
     return()=>{vivo=false}
   },[])
   return estado

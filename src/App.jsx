@@ -2950,9 +2950,18 @@ const ExForm=({ex, onSave, onClose, exs, s})=>{
   };
 
 const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,brand,NIVEL,SF,OBJS,s,emptyScreening,clients})=>{
-    if(!clientWizard)return null;
+    // No lleva `if(!clientWizard) return null` adelante: el padre ya monta
+    // este componente solo cuando hay wizard ({clientWizard&&<ClientWizard…>}),
+    // así que ese guard era código muerto Y dejaba los seis hooks de abajo
+    // detrás de un return temprano. Si alguna vez se hubiera alcanzado, React
+    // tiraba "Rendered more hooks than during the previous render" — el mismo
+    // error #310 que ya rompió esta pantalla una vez.
     const [step,setStep]=useState(clientWizard.step||0);
     const [form,setForm]=useState(()=>({...clientWizard.cli}));
+    // El panel de ROM muestra de dónde salieron los valores de referencia.
+    // Va acá y no en App(): son componentes distintos y este es el que lo
+    // pinta. La consulta se comparte, así que no se pide la tabla dos veces.
+    const bandasRef=useBandasScreening();
     const [sc,setSc]=useState(()=>({...clientWizard.cli.screening}));
     const [guardando,setGuardando]=useState(false);
     const [errGuardar,setErrGuardar]=useState('');
