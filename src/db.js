@@ -434,7 +434,10 @@ export function useEjercicios(initialExercises=[]) {
   const [exs, setExs]     = useState(initialExercises)
   const [loading, setLoading] = useState(true)
   const [dbMode, setDbMode]   = useState(isSupabaseReady)
-  const initialized           = useState(false)
+  // Si el canal de Realtime no logra suscribirse, esto queda en false y la
+  // pantalla puede avisarlo. Antes el .subscribe() no miraba su resultado:
+  // el websocket podía no establecerse nunca y nadie se enteraba.
+  const [rtOk, setRtOk]       = useState(null)
 
   const fetchEjercicios = useCallback(async () => {
     if (!isSupabaseReady) {
@@ -479,40 +482,63 @@ export function useEjercicios(initialExercises=[]) {
     const ch = supabase.channel('ejercicios_rt_'+Math.random().toString(36).slice(2,6))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ejercicios' },
         payload => {
+          // El INSERT dedupe por id: ahora el guardado también actualiza la
+          // lista por su cuenta, así que el eco de Realtime llega cuando el
+          // ejercicio YA está. Sin este chequeo aparecería dos veces.
           if (payload.eventType === 'INSERT')
-            setExs(p => [...p, mapEjFromDB(payload.new)])
+            setExs(p => p.some(e => e.id === payload.new.id)
+              ? p.map(e => e.id === payload.new.id ? mapEjFromDB(payload.new) : e)
+              : [...p, mapEjFromDB(payload.new)])
           if (payload.eventType === 'UPDATE')
             setExs(p => p.map(e => e.id === payload.new.id ? mapEjFromDB(payload.new) : e))
           if (payload.eventType === 'DELETE')
             setExs(p => p.filter(e => e.id !== payload.old.id))
         })
-      .subscribe()
+      .subscribe(estado => {
+        setRtOk(estado === 'SUBSCRIBED')
+        if (estado !== 'SUBSCRIBED')
+          console.warn('Realtime ejercicios:', estado, '— la lista se actualiza igual, sin tiempo real')
+      })
     return () => supabase.removeChannel(ch)
   }, [fetchEjercicios])
 
+  // Guardar NO puede depender de que vuelva el evento de Realtime.
+  //
+  // POR QUÉ
+  // Antes esta función escribía en Supabase y no tocaba `exs`: la pantalla se
+  // actualizaba sólo si llegaba el postgres_changes por websocket. Cuando ese
+  // websocket no se establece —red que bloquea wss, pestaña suspendida, canal
+  // que falla el subscribe— el ejercicio queda guardado y la lista no cambia.
+  // El usuario ve que no pasó nada y vuelve a guardar, y como el id nuevo se
+  // genera en cada alta, el segundo intento crea OTRO registro. En la tabla
+  // quedaron los duplicados a 3 minutos de distancia que lo prueban:
+  // "Face pull isometrico con banda" (04/09 02:34 y 02:37) y "Sentadilla
+  // bulgara ipsilateral" (30/05 07:35 y 07:38).
+  //
+  // Ahora la lista se actualiza DESPUÉS de que la escritura confirmó —nunca se
+  // muestra algo que no se guardó— y Realtime pasa a ser confirmación
+  // redundante en lugar del único camino.
   const saveEjercicio = useCallback(async (ex) => {
     if (dbMode && isSupabaseReady) {
       const { error } = await supabase
         .from('ejercicios')
         .upsert(mapEjToDB(ex), { onConflict: 'id' })
       if (error) throw error
-    } else {
-      setExs(p => p.find(e => e.id === ex.id)
-        ? p.map(e => e.id === ex.id ? ex : e)
-        : [...p, ex])
     }
+    setExs(p => p.some(e => e.id === ex.id)
+      ? p.map(e => e.id === ex.id ? ex : e)
+      : [...p, ex])
   }, [dbMode])
 
   const deleteEjercicio = useCallback(async (id) => {
     if (dbMode && isSupabaseReady) {
       const { error } = await supabase.from('ejercicios').delete().eq('id', id)
       if (error) throw error
-    } else {
-      setExs(p => p.filter(e => e.id !== id))
     }
+    setExs(p => p.filter(e => e.id !== id))
   }, [dbMode])
 
-  return { exs, loading, dbMode, saveEjercicio, deleteEjercicio, setExs }
+  return { exs, loading, dbMode, rtOk, saveEjercicio, deleteEjercicio, setExs }
 }
 
 function mapEjFromDB(r) {

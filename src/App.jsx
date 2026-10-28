@@ -2818,19 +2818,38 @@ const DBTab=({exs,dbSaveEjercicio,dbDeleteEjercicio,brand,s})=>{
     const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
     const [editingExLocal,setEditingExLocal]=useState(null);
     const [showExFormLocal,setShowExFormLocal]=useState(false);
-    const saveExLocal=(ex)=>{
+    const [guardando,setGuardando]=useState(false);
+    // Normaliza para comparar nombres: sin acentos, sin signos, sin mayúsculas.
+    const clave=n=>(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9]/g,'').toLowerCase();
+    const saveExLocal=async(ex)=>{
       // Antes esto nunca marcaba custom:true en un ejercicio nuevo — quedaban
       // indistinguibles de los 272 nativos de fábrica. Ahora, si no tiene id
       // (alta nueva), se marca explícitamente.
       const toSave=ex.id?ex:{...ex,id:genId('ex'),custom:true};
-      dbSaveEjercicio(toSave).catch(e=>console.error('Error guardando ejercicio:',e));
-      setShowExFormLocal(false);setEditingExLocal(null);
+      // Guarda contra el duplicado por reintento: si ya existe un ejercicio con
+      // el mismo nombre y este es un alta nueva, se pregunta antes de crear otro.
+      if(!ex.id){
+        const repe=exs.find(e=>clave(e.nombre)===clave(toSave.nombre));
+        if(repe&&!confirm(`Ya existe "${repe.nombre}" en el bloque ${repe.bloque}.\n\n¿Crear otro igual?`))return;
+      }
+      // Antes el error sólo iba a la consola y el formulario se cerraba igual:
+      // si la escritura fallaba, no quedaba ninguna señal en pantalla.
+      setGuardando(true);
+      try{
+        await dbSaveEjercicio(toSave);
+        setShowExFormLocal(false);setEditingExLocal(null);
+      }catch(e){
+        console.error('Error guardando ejercicio:',e);
+        alert('No se pudo guardar el ejercicio: '+(e?.message||e)+'\n\nEl formulario queda abierto para reintentar.');
+      }finally{
+        setGuardando(false);
+      }
     };
     return(
       <div style={{padding:'12px 14px'}}>
         {showExFormLocal&&<ExForm ex={editingExLocal} onSave={saveExLocal} onClose={()=>{setShowExFormLocal(false);setEditingExLocal(null);}} exs={exs} s={s}/>}
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
-          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{exs.length} registros · 11 bloques</div></div>
+          <div><div style={{fontSize:14,fontWeight:700}}>Base de ejercicios</div><div style={{fontSize:11,color:G4}}>{guardando?'Guardando…':`${exs.length} registros · 11 bloques`}</div></div>
           <button onClick={()=>{setEditingExLocal(null);setShowExFormLocal(true);}} style={{...s.btnR,background:brand.colorPrimary}}>+ Nuevo ejercicio</button>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:8,marginBottom:12}}>
