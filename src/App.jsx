@@ -2812,15 +2812,27 @@ const BrandingTab=({brand,setBrand,s})=>{
     );
   };
 
+// Normaliza un texto para buscar y comparar: sin acentos, sin signos, sin
+// mayúsculas. "Curl bíceps en banco Scott" → "curlbicepsenbancoscott".
+//
+// POR QUÉ
+// El buscador comparaba texto crudo, así que escribir "biceps" no encontraba
+// "Curl bíceps en banco Scott con mancuernas" y daba la impresión de que el
+// ejercicio no existía. Así se creó `ex_1787184383981_i3tsn`, duplicado del
+// nativo `ac12`: hoy la progresión de ese ejercicio está partida en dos ids,
+// 31 ejecuciones en uno y 10 en el otro.
+const clave=n=>(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9]/g,'').toLowerCase();
+
 const DBTab=({exs,dbSaveEjercicio,dbDeleteEjercicio,brand,s})=>{
     const [dbFilter,setDbFilter]=useState('all');
     const [dbSearch,setDbSearch]=useState('');
-    const filteredExs=useMemo(()=>exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!dbSearch||e.nombre.toLowerCase().includes(dbSearch.toLowerCase())||e.musculos.toLowerCase().includes(dbSearch.toLowerCase()))),[exs,dbFilter,dbSearch]);
+    const filteredExs=useMemo(()=>{
+      const q=clave(dbSearch);
+      return exs.filter(e=>(dbFilter==='all'||e.bloque===dbFilter)&&(!q||clave(e.nombre).includes(q)||clave(e.musculos).includes(q)));
+    },[exs,dbFilter,dbSearch]);
     const [editingExLocal,setEditingExLocal]=useState(null);
     const [showExFormLocal,setShowExFormLocal]=useState(false);
     const [guardando,setGuardando]=useState(false);
-    // Normaliza para comparar nombres: sin acentos, sin signos, sin mayúsculas.
-    const clave=n=>(n||'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9]/g,'').toLowerCase();
     const saveExLocal=async(ex)=>{
       // Antes esto nunca marcaba custom:true en un ejercicio nuevo — quedaban
       // indistinguibles de los 272 nativos de fábrica. Ahora, si no tiene id
