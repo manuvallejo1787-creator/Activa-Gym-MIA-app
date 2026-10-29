@@ -278,6 +278,25 @@ function calcularSemanas(plan, logs){
   (logs || []).forEach(l => { const s = parseInt(l.semana, 10); if(s > maxGuardada) maxGuardada = s; });
   return Math.min(52, Math.max(n, hoyN, maxGuardada));
 }
+// ── VERSIÓN DEL PORTAL ────────────────────────────────────────────────────
+// POR QUÉ EXISTE
+// `portal.html` no pasa por el build de Vite, así que no recibe el
+// __BUILD_ID__ ni el cartel de versión vieja que tiene la app. Un cliente con
+// el portal cacheado sigue usando el formulario anterior, que no manda
+// `naturaleza` — y sin naturaleza el riel sale de entrada y su molestia NO SE
+// RUTEA. Nadie se entera: ni él, que no sabe que el formulario cambió, ni el
+// centro, que no ve la incidencia que debería haberse creado.
+//
+// Es el mismo problema que hizo creer que se había borrado un screening
+// entero, pero del lado del cliente y peor, porque un cliente no reporta que
+// una pantalla se ve distinta.
+//
+// Sin build que estampe la versión, la declara el archivo y la API devuelve la
+// que espera. Si no coinciden, el portal está viejo. SE BUMPEAN LAS DOS cada
+// vez que cambia lo que el formulario manda; `npm run salud` verifica que
+// estén iguales, así que no se puede olvidar una.
+const PORTAL_V = '2026-10-29-a';
+
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
 let DATA = null;
@@ -337,6 +356,23 @@ async function cargar(){
     if(r.status === 403){ $('msg').textContent = 'Acceso no válido. Revisá el link con tu entrenador.'; return; }
     if(!r.ok){ $('msg').textContent = 'Error del servidor: ' + ((body && body.error) || ('HTTP ' + r.status)) + '. Avisale a tu entrenador.'; return; }
     DATA = body;
+    // ¿Este portal está viejo? La API dice qué versión del formulario espera.
+    // Si no coincide, el navegador tiene el archivo cacheado y el formulario
+    // que se va a mostrar no manda `naturaleza`: la molestia que cargue este
+    // cliente no se rutea y nadie se entera. Se recarga sola una vez — acá no
+    // hay nada a medio escribir que se pueda perder, a diferencia de la app.
+    if(body.portalV && body.portalV !== PORTAL_V){
+      if(!params.get('_v')){
+        const u = new URL(location.href);
+        u.searchParams.set('_v', Date.now());
+        location.replace(u.toString());
+        return;
+      }
+      // Ya se recargó una vez y sigue sin coincidir: no entrar en un bucle.
+      // Se avisa y se deja usar, que es mejor que una pantalla en blanco.
+      $('msg').innerHTML = '<div style="background:#3a1010;border:1px solid #DC2626;border-radius:8px;padding:10px;margin:10px 0;color:#FCA5A5;font-size:12px">'
+        + 'Tu portal está desactualizado. Si algo no funciona bien, cerrá la pestaña y volvé a abrir el link que te mandó tu entrenador.</div>';
+    }
     aplicarMarca();
     $('cli').textContent = DATA.cliente ? `Hola, ${DATA.cliente.nombre} 💪` : '';
     if(DATA.cliente && DATA.cliente.nivel && FASE_LABEL[DATA.cliente.nivel]){

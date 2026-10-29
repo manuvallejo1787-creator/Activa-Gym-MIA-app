@@ -1,3 +1,10 @@
+// Versión del formulario del portal que este backend espera.
+// Tiene que ser IGUAL a PORTAL_V en public/portal.html. Se bumpean las dos
+// juntas cada vez que cambia lo que el formulario manda, y `npm run salud`
+// verifica que coincidan — si no, un portal cacheado mandaría el formulario
+// viejo, sin `naturaleza`, y el riel no rutearía esa molestia.
+const PORTAL_V = '2026-10-29-a';
+
 // api/portal.js — Portal del cliente (frontera de seguridad)
 // El portal del cliente NUNCA toca Supabase directo. Pasa por acá.
 // Esta función valida el token personal del cliente y usa la SERVICE ROLE KEY
@@ -314,6 +321,12 @@ export default async function handler(req, res) {
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
         criterios, metas, medidas, brand, plan, logs: logs || [], nombres, media, clinico,
+        // Versión que este backend espera del portal. Si el cliente trae una
+        // distinta, su portal.html está cacheado y manda el formulario viejo:
+        // sin `naturaleza` el riel no rutea su molestia y nadie se entera.
+        // Se bumpea junto con PORTAL_V en public/portal.html; salud verifica
+        // que las dos coincidan.
+        portalV: PORTAL_V,
       });
     }
 

@@ -1095,7 +1095,8 @@ export function useIncidencias(){
     return inc
   },[fetch])
   // Conducta del profesional sobre una incidencia.
-  // estado: 'abierta' | 'seguimiento' | 'derivada' | 'resuelta'
+  // Los estados válidos y qué transición se puede hacer desde cada uno están
+  // definidos en incidencias.js, no acá: esta función sólo escribe.
   // El trigger de la base mantiene `resuelto` y `derivado_fisio` sincronizados
   // y pone fecha de revisión por defecto a 7 días si es seguimiento.
   const setEstadoIncidencia=useCallback(async(inc,estado,extra={})=>{
@@ -1112,7 +1113,38 @@ export function useIncidencias(){
   // Compatibilidad con el llamado anterior
   const marcarResuelta=useCallback((inc)=>setEstadoIncidencia(inc,'resuelta'),[setEstadoIncidencia])
 
-  return{incidencias,loading,saveIncidencia,marcarResuelta,setEstadoIncidencia,refetch:fetch}
+  // MARCAR UN CRÓNICO CONOCIDO COMO LÍNEA DE BASE
+  //
+  // Cambiar el estado no alcanza: el disparador de la base consulta
+  // `gym_linea_base` para decidir si silencia un reporte, así que sin la fila
+  // la incidencia diría "línea de base" en la pantalla y el riel seguiría
+  // disparando igual. Las dos cosas van juntas o no van.
+  //
+  // El basal sale de la propia incidencia, que ya trae zona, naturaleza y
+  // estado al parar. La intensidad se deduce de `banda`, que es lo que el riel
+  // viejo guardaba y lo que el disparador escribe derivado.
+  const marcarLineaBase=useCallback(async(inc,{veredicto,autor,dias=90}={})=>{
+    if(!inc.zona) throw new Error('La incidencia no tiene zona: no se puede marcar una línea de base sin saber de qué zona es.')
+    const intensidad=({severo:'mucho',moderado:'bastante',leve:'apenas'})[inc.banda]||'apenas'
+    const fila={
+      id:'lb_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      gym_client_id:inc.gym_client_id, zona:inc.zona,
+      naturaleza_basal:inc.naturaleza||'muscular',
+      intensidad_basal:intensidad,
+      ahora_basal:inc.ahora||'se_fue',
+      revision_vence:new Date(Date.now()+dias*864e5).toISOString().slice(0,10),
+      autor:autor||'sala', veredicto, incidencia_origen:inc.id, activa:true,
+    }
+    if(isSupabaseReady){
+      // onConflict por cliente+zona: volver a marcarla actualiza el basal en
+      // lugar de fallar, que es lo que se quiere si el crónico cambió de nivel.
+      const{error}=await supabase.from('gym_linea_base').upsert(fila,{onConflict:'gym_client_id,zona'})
+      if(error)throw error
+    }
+    await setEstadoIncidencia(inc,'linea_base',{notas_seguimiento:veredicto,revision_vence:fila.revision_vence})
+  },[setEstadoIncidencia])
+
+  return{incidencias,loading,saveIncidencia,marcarResuelta,setEstadoIncidencia,marcarLineaBase,refetch:fetch}
 }
 
 // ─── HOOK: Planes clínicos a largo plazo (multi-región) ───────────────────
@@ -1305,11 +1337,12 @@ export function useSalaDatos(ids = []) {
   const [tests,setTests]=useState({})
   const [planes,setPlanes]=useState({})
   const [feedback,setFeedback]=useState({})
+  const [lineasBase,setLineasBase]=useState({})
   const [loading,setLoading]=useState(false)
   const clave=(ids||[]).slice().sort().join(',')
   const fetch=useCallback(async()=>{
     const lista=clave?clave.split(','):[]
-    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});setFeedback({});return}
+    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});setFeedback({});setLineasBase({});return}
     setLoading(true)
     try{
       // Las columnas reales son peso_levantado y reps_realizadas: pedir
@@ -1318,7 +1351,7 @@ export function useSalaDatos(ids = []) {
       // se llevaba también los planes: en sala no aparecía ninguna de las dos
       // cosas por un solo nombre de columna mal escrito.
       // Ahora cada consulta falla por separado y se informa cuál falló.
-      const[t,p,fb]=await Promise.allSettled([
+      const[t,p,fb,lb]=await Promise.allSettled([
         supabase.from('fuerza_tests')
           .select('gym_client_id,test_id,test_nombre,fecha,rm1_real,rm1_calculado,peso_levantado,reps_realizadas,nivel_resultado,formula')
           .in('gym_client_id',lista).order('fecha',{ascending:false}),
@@ -1329,12 +1362,21 @@ export function useSalaDatos(ids = []) {
         // (lo carga él mismo al terminar de entrenar) y hasta ahora no se veía
         // en ninguna pantalla.
         supabase.from('gym_sesion_feedback')
-          .select('gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,nota')
+          .select('gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota,llegada,molestia,naturaleza,momento,ahora,intensidad')
           .in('gym_client_id',lista).order('fecha',{ascending:false}).limit(200),
+        // Líneas de base de crónicos conocidos. Sin leerlas, marcar una era
+        // una escritura ciega: el riel dejaba de disparar esa zona y en la app
+        // no quedaba forma de ver que existía ni de saber cuándo vence su
+        // revisión a los 90 días. Un criterio que nadie puede ver es un
+        // criterio que nadie va a revisar.
+        supabase.from('gym_linea_base')
+          .select('gym_client_id,zona,naturaleza_basal,intensidad_basal,ahora_basal,desde,revision_vence,autor,veredicto')
+          .in('gym_client_id',lista).eq('activa',true),
       ]).then(rs=>rs.map(r=>r.status==='fulfilled'?r.value:{error:r.reason,data:null}))
       if(t.error)console.error('sala/tests:',t.error.message||t.error)
       if(p.error)console.error('sala/planes:',p.error.message||p.error)
       if(fb.error)console.error('sala/feedback:',fb.error.message||fb.error)
+      if(lb.error)console.error('sala/lineaBase:',lb.error.message||lb.error)
       // Un test por patrón, el más reciente
       const porCli={}
       ;(t.data||[]).forEach(r=>{
@@ -1353,12 +1395,14 @@ export function useSalaDatos(ids = []) {
       })
       const fbCli={}
       ;(fb.data||[]).forEach(r=>{(fbCli[r.gym_client_id]=fbCli[r.gym_client_id]||[]).push(r)})
-      setTests(porCli);setPlanes(pl);setFeedback(fbCli)
+      const lbCli={}
+      ;(lb.data||[]).forEach(r=>{(lbCli[r.gym_client_id]=lbCli[r.gym_client_id]||[]).push(r)})
+      setTests(porCli);setPlanes(pl);setFeedback(fbCli);setLineasBase(lbCli)
     }catch(e){console.error('useSalaDatos:',e.message)}
     finally{setLoading(false)}
   },[clave])
   useEffect(()=>{fetch()},[fetch])
-  return{tests,planes,feedback,loading,refetch:fetch}
+  return{tests,planes,feedback,lineasBase,loading,refetch:fetch}
 }
 
 // ─── HOOK: Bandas del screening ───────────────────────────────────────────

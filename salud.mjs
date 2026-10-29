@@ -172,7 +172,20 @@ etapa(5, 'interconexión: nada suelto')
   if (ciegas.length) mal(`tabla(s) que se escriben y nadie lee: ${ciegas.join(', ')}`)
   else bien(`las ${Object.keys(tablas).length} tablas referenciadas se leen y se escriben de forma coherente`)
 
-  // 5c. build.json: sin él, el aviso de versión vieja no puede funcionar.
+  // 5c. PORTAL_V declarado en dos lados tiene que coincidir.
+  // Si se bumpea uno y se olvida el otro, el portal se recarga en loop (si
+  // sobra en la API) o deja de detectar portales viejos (si sobra en el HTML),
+  // y un portal viejo manda el formulario sin `naturaleza`: la molestia del
+  // cliente no se rutea y nadie se entera.
+  {
+    const vHtml = (fs.readFileSync('public/portal.html', 'utf8').match(/const PORTAL_V\s*=\s*['"]([^'"]+)['"]/) || [])[1]
+    const vApi  = (fs.readFileSync('api/portal.js', 'utf8').match(/const PORTAL_V\s*=\s*['"]([^'"]+)['"]/) || [])[1]
+    if (!vHtml || !vApi) mal(`falta PORTAL_V en ${!vHtml ? 'public/portal.html' : 'api/portal.js'}`)
+    else if (vHtml !== vApi) mal(`PORTAL_V no coincide: portal.html "${vHtml}" vs api/portal.js "${vApi}"`)
+    else bien(`PORTAL_V coincide en el portal y la api (${vHtml})`)
+  }
+
+  // 5d. build.json: sin él, el aviso de versión vieja no puede funcionar.
   if (fs.existsSync('dist/build.json')) {
     const b = JSON.parse(fs.readFileSync('dist/build.json', 'utf8'))
     if (b?.build) bien(`dist/build.json emitido (build ${b.build})`)
