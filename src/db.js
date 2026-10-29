@@ -1266,7 +1266,7 @@ export function useHoy(){
         // Cada reporte de dolor del portal por separado: la vista agregada
         // solo daba el conteo, y con un conteo no se puede hacer nada.
         supabase.from('gym_sesion_feedback')
-          .select('id,gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota')
+          .select('id,gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota,llegada,molestia,naturaleza,momento,ahora,intensidad')
           .gt('dolor',0).order('fecha',{ascending:false}).limit(120),
       ])
       if(g.error)throw g.error; if(f.error)throw f.error

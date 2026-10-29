@@ -305,7 +305,7 @@ export default async function handler(req, res) {
       // lado, el motor y la IA cuando se arma el plan siguiente.
       let feedback = [];
       try {
-        feedback = await sb(`gym_sesion_feedback?gym_client_id=eq.${cli.id}&select=dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota&order=fecha.desc&limit=60`) || [];
+        feedback = await sb(`gym_sesion_feedback?gym_client_id=eq.${cli.id}&select=dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota,llegada,molestia,naturaleza,momento,ahora,intensidad&order=fecha.desc&limit=60`) || [];
       } catch {}
 
       return res.status(200).json({
@@ -381,6 +381,21 @@ export default async function handler(req, res) {
           const x = parseInt(v);
           return isNaN(x) ? null : Math.max(min, Math.min(max, x));
         };
+        // Lo que manda el cliente no se valida solo. Estos campos los consume
+        // el riel para decidir una conducta clínica, así que un valor fuera de
+        // la lista no puede entrar: el trigger compara texto exacto, y un
+        // 'nerviosaa' pasaría silenciosamente por la rama equivocada.
+        const unoDe = (v, lista) => lista.includes(String(v || "")) ? String(v) : null;
+        const naturaleza = unoDe(b.naturaleza, ["muscular", "articular", "nerviosa"]);
+        const momento    = unoDe(b.momento,    ["nueva", "previa"]);
+        const ahora      = unoDe(b.ahora,      ["se_fue", "sigue"]);
+        const intensidad = unoDe(b.intensidad, ["apenas", "bastante", "mucho"]);
+        const llegada    = unoDe(b.llegada,    ["pilas", "medio", "cansado"]);
+        // Una molestia sin naturaleza o sin zona no es ruteable: el riel la
+        // descarta. Se guarda como "sin molestia" en lugar de dejar una fila a
+        // medias que nadie puede leer ni el riel usar.
+        const zonaOk = /^[a-z]+(_(izq|der|ambos))?$/.test(String(b.dolor_zona || ""));
+        const molestia = !!b.molestia && !!naturaleza && zonaOk;
         const fila = {
           // La clave lleva semana Y fecha: si el cliente repite la misma
           // sesión dos veces en la semana, son dos encuestas, no una que pisa
@@ -393,11 +408,24 @@ export default async function handler(req, res) {
           semana: parseInt(b.semana),
           fecha: fechaEntreno,
           cargado_el: new Date().toISOString(),
+          // RPE de sesión: intensidad del ENTRENAMIENTO, 1-10. No se tocó.
           rpe_sesion: n(b.rpe_sesion, 1, 10),
-          energia: n(b.energia, 1, 5),
-          dolor: n(b.dolor, 0, 10),
-          // La zona solo tiene sentido si hay dolor.
-          dolor_zona: n(b.dolor, 0, 10) ? (b.dolor_zona || "").toString().slice(0, 40) : "",
+          // Los campos nuevos, que son los que el riel consume.
+          llegada,
+          molestia,
+          naturaleza: molestia ? naturaleza : null,
+          momento:    molestia ? momento    : null,
+          ahora:      molestia ? ahora      : null,
+          intensidad: molestia ? intensidad : null,
+          // La zona solo tiene sentido si hay molestia.
+          dolor_zona: molestia ? String(b.dolor_zona).slice(0, 40) : "",
+          // `dolor` y `energia` se siguen escribiendo DERIVADOS de los campos
+          // nuevos. No es redundancia: el panel de Hoy, el informe de IA y el
+          // riel de sala ya leen esas dos columnas, y dejarlas en null los
+          // rompería en silencio. Mapeo explícito para que la equivalencia
+          // quede documentada donde se hace, y no haya que deducirla.
+          dolor:   molestia ? ({ apenas: 2, bastante: 5, mucho: 8 })[intensidad] ?? 2 : 0,
+          energia: ({ cansado: 1, medio: 3, pilas: 5 })[llegada] ?? null,
           nota: (b.nota || "").toString().slice(0, 500),
           updated_at: new Date().toISOString(),
         };
