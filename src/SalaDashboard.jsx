@@ -3,6 +3,7 @@ import { computarMetricas } from "./motor.js";
 import { faseActual, diasDesde, PLAZOS } from "./hoy.js";
 import { PERIODIZACIONES, TESTS_FUERZA } from "./planificacion.js";
 import AsistenciaManual from "./AsistenciaManual.jsx";
+import { esVigente, etiquetaEstado, escalonDe, ordenarIncidencias, accionesDe, bloqueaPatron } from "./incidencias.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SalaDashboard — la información que el profe necesita EN EL MOMENTO
@@ -43,7 +44,7 @@ function chipVenc(label, restan, fecha) {
   return { label, c, txt, fecha };
 }
 
-export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, feedback = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, onEstadoIncidencia, incidencias = [] }) {
+export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, feedback = {}, lineasBase = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, onEstadoIncidencia, incidencias = [] }) {
   const [sel, setSel] = useState(() => {
     try { return JSON.parse(localStorage.getItem('sala_clientes') || '[]'); } catch { return []; }
   });
@@ -87,7 +88,13 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
     };
     const fReeval = h.reeval_prevista || sumarSeguro(h.screening_fecha, vencScr);
     const restanScr = fReeval ? diasDesde(hoy, fReeval) : null;
-    const abiertas = incidencias.filter(i => i.gym_client_id === id && ['abierta', 'seguimiento'].includes(i.estado || 'abierta'));
+    // Antes esto era `['abierta','seguimiento'].includes(i.estado||'abierta')`:
+    // una lista blanca que no conocía los estados que el riel agregó el 29/10,
+    // así que las incidencias nuevas no aparecían en el panel de sala. La
+    // pregunta la responde ahora incidencias.js. Una línea de base queda
+    // fuera a propósito: es un crónico conocido, no un hallazgo abierto.
+    const abiertas = ordenarIncidencias(
+      incidencias.filter(i => i.gym_client_id === id && esVigente(i)));
     return {
       c, h, m, plan, f, per,
       vencimientos: [
@@ -97,6 +104,12 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
       ],
       tests: tests[id] || {},
       abiertas,
+      // `vencida` se resuelve acá y no en la tarjeta: `hoy` vive en este
+      // alcance, y hacer que el componente de presentación vuelva a derivar
+      // fechas es cómo se terminan teniendo dos definiciones de "vencido".
+      bases: (lineasBase[id] || []).map(lb => ({
+        ...lb, vencida: !!(lb.revision_vence && lb.revision_vence <= hoy),
+      })),
       fb: (feedback[id] || []).slice().sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '')),
     };
   }).filter(Boolean), [sel, clients, hoyGym, planes, tests, feedback, incidencias, config, hoy]);
@@ -319,6 +332,34 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
         );
       })()}
 
+      {/* ── Líneas de base: crónicos conocidos de este cliente ───────────
+          No son hallazgos abiertos —el riel no dispara por ellos— pero quien
+          atiende tiene que saber que existen: si no, descubre de nuevo cada
+          semana una molestia que ya está evaluada y seguida. Y la revisión
+          vencida se marca en rojo, porque un criterio de hace tres meses
+          gobernando una decisión de hoy es justo lo que la fecha evita. */}
+      {f.bases.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 9, color: G4, fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5, marginBottom: 4 }}>Crónicos conocidos · no disparan el riel</div>
+          {f.bases.map(lb => {
+            const vencida = lb.vencida;
+            return (
+              <div key={lb.zona} style={{ background: '#0e0e0e', borderLeft: `3px solid ${vencida ? ROJO : G4}`, borderRadius: 6, padding: '6px 9px', marginBottom: 5 }}>
+                <div style={{ fontSize: 11, color: WH, fontWeight: 700 }}>
+                  📌 {String(lb.zona).replace(/_/g, ' ')}
+                  <span style={{ color: G4, fontWeight: 400 }}> · {lb.naturaleza_basal} · {lb.intensidad_basal}</span>
+                </div>
+                <div style={{ fontSize: 9, color: vencida ? ROJO : G4, marginTop: 2, fontWeight: vencida ? 800 : 400 }}>
+                  {vencida ? `REVISIÓN VENCIDA el ${lb.revision_vence} — hay que revalorarla` : `se revisa el ${lb.revision_vence}`}
+                  {lb.autor ? ` · ${lb.autor}` : ''}
+                </div>
+                {lb.veredicto && <div style={{ fontSize: 9, color: '#bbb', marginTop: 3, lineHeight: 1.4 }}>{lb.veredicto}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* ── Incidencias abiertas: qué duele y resolverlas acá mismo ─────── */}
       {f.abiertas.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -331,25 +372,37 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
                   {i.ejercicio_nombre || 'sin ejercicio registrado'}
                   {i.eva != null && <span style={{ color: cBanda }}> · EVA {i.eva}/10</span>}
                   {i.banda && <span style={{ color: cBanda }}> · {i.banda}</span>}
+                  {/* Lo que quien está en sala necesita saber antes de cargar:
+                      si el patrón está bloqueado, no se progresa aunque el
+                      cliente se sienta bien hoy. */}
+                  {bloqueaPatron(i) && <span style={{ color: ROJO }}> · ⛔ patrón sin progresar</span>}
                 </div>
                 <div style={{ fontSize: 9, color: G4, marginTop: 2 }}>
                   {String(i.fecha || '').slice(0, 10)}
+                  {` · esc. ${escalonDe(i)} · ${etiquetaEstado(i)}`}
+                  {i.origen === 'feedback' ? ' · del portal' : ''}
+                  {i.zona ? ` · ${String(i.zona).replace(/_/g, ' ')}` : ''}
+                  {i.naturaleza ? ` · ${i.naturaleza}` : ''}
                   {i.sustituto_nombre ? ` · sustituido por ${i.sustituto_nombre}` : ''}
                   {i.bandera_activa ? ' · 🚩 bandera clínica' : ''}
                   {i.estado === 'seguimiento' && i.fecha_revision ? ` · revisar el ${i.fecha_revision}` : ''}
                 </div>
                 {i.nota && <div style={{ fontSize: 9, color: '#bbb', marginTop: 3, lineHeight: 1.4 }}>{i.nota}</div>}
                 {/* Resolver desde sala: antes había que ir al riel, buscarla y
-                    recién ahí cambiar el estado. */}
+                    recién ahí cambiar el estado.
+                    Las acciones ofrecidas salen de incidencias.js y dependen
+                    del estado: antes eran siempre las mismas tres y por eso el
+                    escalón 1 no existía en la práctica — el riel saltaba de
+                    "sustituye" a "frena y deriva". */}
                 <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
-                  {[['resuelta', '✓ Resuelta', VERDE], ['seguimiento', '👁 Seguir', AMBAR], ['derivada', '🏥 Derivar a clínica', AZUL]]
-                    .filter(([k]) => k !== (i.estado || 'abierta'))
-                    .map(([k, lbl, col]) => (
+                  {accionesDe(i).map(({ k, label, tono }) => {
+                      const col = { verde: VERDE, ambar: AMBAR, azul: AZUL, rojo: ROJO, gris: G4 }[tono] || G4;
+                      return (
                       <button key={k} onClick={() => onEstadoIncidencia?.(i, k)}
                         style={{ background: 'none', border: `1px solid ${col}66`, color: col, borderRadius: 5, padding: '4px 8px', fontSize: 9, fontWeight: 700, cursor: 'pointer' }}>
-                        {lbl}
-                      </button>
-                    ))}
+                        {label}
+                      </button>);
+                    })}
                 </div>
               </div>
             );

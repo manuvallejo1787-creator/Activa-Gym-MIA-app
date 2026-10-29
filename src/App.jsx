@@ -9,6 +9,7 @@ import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useReha
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
+import { esPendiente, esVigente, etiquetaEstado, escalonDe, ordenarIncidencias } from "./incidencias.js";
 import PanelVeredicto from "./PanelVeredicto.jsx";
 import { computarMetricas, evaluarAvance, adaptadorGym, resumenDeterminista,
          sellarMetodos, comparables, metodoDe,
@@ -3935,14 +3936,14 @@ export default function App(){
   // vivía solo en localStorage — ver useCentroConfig en db.js).
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
-  const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia } = useIncidencias();
+  const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia, marcarLineaBase } = useIncidencias();
   const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
   // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
   // mantenimiento de datos se vuelve permanente y deja de significar algo.
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
   // en dos consultas, no una por tarjeta.
   const [salaIds,setSalaIds]=useState(()=>{ try{return JSON.parse(localStorage.getItem('sala_clientes')||'[]')}catch{return[]} });
-  const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback } = useSalaDatos(salaIds);
+  const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback, lineasBase:salaLineasBase } = useSalaDatos(salaIds);
   const [rutinaVer,setRutinaVer]=useState(null);
   const [rielCliente,setRielCliente]=useState(null);
   const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes]);
@@ -3955,15 +3956,70 @@ export default function App(){
   // definida y seguimientos cuya fecha de revisión ya venció. Un seguimiento
   // en curso no es un pendiente — contarlo haría que el badge nunca baje y
   // se vuelva ruido que se ignora.
+  // Antes esto tenía su propia lista blanca de estados y las incidencias que
+  // el riel empezó a crear el 29/10 —valoracion_pendiente, en_sala— no
+  // entraban en ninguna rama y el badge las ignoraba. Ahora la pregunta la
+  // responde incidencias.js, que es el único lugar donde está definido qué
+  // estado requiere acción.
   const incPendientes = useMemo(()=>{
     const hoy=new Date().toISOString().slice(0,10);
-    return incidencias.filter(i=>{
-      const e=i.estado||(i.resuelto?'resuelta':'abierta');
-      if(e==='abierta')return true;
-      if(e==='seguimiento')return !!(i.fecha_revision&&i.fecha_revision<=hoy);
-      return false;
-    }).length;
+    return incidencias.filter(i=>esPendiente(i,hoy)).length;
   },[incidencias]);
+
+  // CONDUCTA SOBRE UNA INCIDENCIA, UN SOLO LUGAR
+  //
+  // Antes esto vivía inline en el panel de sala y tenía un `else` que trataba
+  // como 'resuelta' cualquier estado que no fuera seguimiento ni derivada. Con
+  // los estados nuevos del riel eso significaba que tocar "Pedir valoración" o
+  // "No quiso" marcaba la incidencia como resuelta: la conducta opuesta a la
+  // que se pidió, y sin dejar rastro de lo que realmente pasó.
+  //
+  // Cada estado pide lo que necesita para no quedar a medias:
+  //   seguimiento   la fecha de revisión — sin fecha nadie vuelve a mirarlo
+  //   valoracion_hecha  el veredicto escrito — es el escalón que rutea
+  //   declinada     el motivo — es el dato que dice cuántas mueren y por qué
+  //   linea_base    el veredicto de qué se descartó, y además CREA la fila en
+  //                 gym_linea_base, porque sin esa fila el riel sigue
+  //                 disparando y el estado sería decorativo
+  const cambiarEstadoIncidencia=async(inc,estado)=>{
+    try{
+      if(estado==='seguimiento'){
+        const f=prompt('¿Qué día la revisás? (AAAA-MM-DD)',new Date(Date.now()+7*864e5).toISOString().slice(0,10));
+        if(!f)return;
+        await setEstadoIncidencia(inc,'seguimiento',{fecha_revision:f});
+      } else if(estado==='derivada'){
+        await setEstadoIncidencia(inc,'derivada',{derivado_fisio:true});
+      } else if(estado==='valoracion_pendiente'){
+        await setEstadoIncidencia(inc,'valoracion_pendiente',{});
+      } else if(estado==='valoracion_hecha'){
+        const v=prompt('Veredicto de la valoración: qué encontraste y qué descartaste.','');
+        if(v==null||!v.trim())return;   // sin veredicto no hay valoración hecha
+        await setEstadoIncidencia(inc,'valoracion_hecha',{notas_seguimiento:v.trim()});
+      } else if(estado==='programa'){
+        const v=prompt('Qué programa dirigido y sobre qué región (opcional)','')||'';
+        await setEstadoIncidencia(inc,'programa',{notas_seguimiento:v});
+      } else if(estado==='declinada'){
+        const m=prompt('¿Por qué no quiso? (costo, tiempo, no le parece necesario…)','');
+        if(m==null||!m.trim())return;   // el motivo ES el dato de este estado
+        await setEstadoIncidencia(inc,'declinada',{
+          declinada_motivo:m.trim(),
+          declinada_el:new Date().toISOString().slice(0,10),
+          // Declinar sube el umbral: 8 sesiones ejecutadas sin reporte nuevo
+          // en esa zona para liberar el patrón, contra 4 del escalón 0.
+          sesiones_umbral:8,
+        });
+      } else if(estado==='linea_base'){
+        if(!inc.zona){alert('Esta incidencia no tiene zona cargada, así que no se puede marcar como línea de base: el riel no sabría qué zona silenciar.');return;}
+        const v=prompt('¿Qué descartaste y con qué criterio? Queda como el veredicto que justifica la línea de base.','');
+        if(v==null||!v.trim())return;
+        if(!confirm(`Se va a dejar de disparar el riel para ${String(inc.zona).replace(/_/g,' ')} de este cliente, salvo que el patrón empeore.\n\nSe revisa obligatoriamente en 90 días.\n\n¿Confirmás?`))return;
+        await marcarLineaBase(inc,{veredicto:v.trim(),autor:usuario?.email||'sala'});
+      } else {
+        const n=prompt('¿Cómo se resolvió? (opcional)','')||'';
+        await setEstadoIncidencia(inc,'resuelta',{resuelto:true,resuelto_nota:n});
+      }
+    }catch(e){alert('No se pudo actualizar: '+e.message);}
+  };
   const [clientWizard,setClientWizard]=useState(null);
   const [clienteSearch,setClienteSearch]=useState('');
   const [verBajas,setVerBajas]=useState(false);
@@ -5981,24 +6037,8 @@ export default function App(){
           {/* El panel de sala va ARRIBA del riel de molestias: es la razón para
               abrir esta pestaña. El riel queda abajo, a un toque. */}
           <SalaDashboard clients={clients} hoyGym={hoyGym} tests={salaTests} planes={salaPlanes}
-            feedback={salaFeedback} config={brand||{}} incidencias={incidencias}
-            onEstadoIncidencia={async(inc,estado)=>{
-              // Resolver la incidencia sin salir de sala. Para "seguimiento"
-              // se pide la fecha de revisión: sin fecha, el seguimiento no
-              // existe — nadie vuelve a mirarlo.
-              try{
-                if(estado==='seguimiento'){
-                  const f=prompt('¿Qué día la revisás? (AAAA-MM-DD)',new Date(Date.now()+7*864e5).toISOString().slice(0,10));
-                  if(!f)return;
-                  await setEstadoIncidencia(inc,'seguimiento',{fecha_revision:f});
-                } else if(estado==='derivada'){
-                  await setEstadoIncidencia(inc,'derivada',{derivado_fisio:true});
-                } else {
-                  const n=prompt('¿Cómo se resolvió? (opcional)','')||'';
-                  await setEstadoIncidencia(inc,'resuelta',{resuelto:true,resuelto_nota:n});
-                }
-              }catch(e){alert('No se pudo actualizar: '+e.message);}
-            }}
+            feedback={salaFeedback} lineasBase={salaLineasBase} config={brand||{}} incidencias={incidencias}
+            onEstadoIncidencia={cambiarEstadoIncidencia}
             onCambioSeleccion={setSalaIds}
             onVerRutina={(c,plan)=>setRutinaVer({cliente:c,plan})}
             onNuevaIncidencia={(c)=>setRielCliente(c)}/>
