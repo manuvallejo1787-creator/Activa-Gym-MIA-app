@@ -348,9 +348,5 @@ export const mapearFaseRehabANegocio=(faseRehabKey)=>{
   return MAP[faseRehabKey]||'restaura';
 };
 
-// ─── ETIQUETA LEGIBLE DE FASE ─────────────────────────────────────────────
-export const getFaseLabel=(fase)=>{
-  const f=FASES_METODO[fase];
-  if(!f)return fase;
-  return `${f.badge} · ${f.label}`;
-};
+// `getFaseLabel` vivía acá y no lo llamaba nadie: cada pantalla armaba su
+// etiqueta con `FASES_METODO[fase]` directo. Lo detectó `npm run salud`.

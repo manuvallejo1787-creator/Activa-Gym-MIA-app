@@ -7,7 +7,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint src/",
-    "verificar": "eslint src/ && node verificar-api.mjs && vite build"
+    "verificar": "node salud.mjs",
+    "salud": "node salud.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.14",

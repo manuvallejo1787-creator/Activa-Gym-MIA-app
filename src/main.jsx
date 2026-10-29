@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import AuthGate from './AuthGate.jsx'
+import AvisoBuild from './AvisoBuild.jsx'
 
 // Error boundary — si algo falla, muestra mensaje en lugar de pantalla en blanco
 class ErrorBoundary extends React.Component {
@@ -10,6 +11,10 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(e, info) { console.error('App error:', e, info) }
   render() {
     if (this.state.hasError) {
+      // Modo silencioso: para envolver accesorios como AvisoBuild, que nunca
+      // tienen que poder tirar la app entera con su propia pantalla de error.
+      // Si el accesorio falla, desaparece y la app sigue andando.
+      if (this.props.silencioso) return null
       return (
         <div style={{fontFamily:'Arial,sans-serif',padding:32,background:'#1a1a1a',minHeight:'100vh',color:'#fff',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
           <div style={{fontSize:40,marginBottom:16}}>⚠️</div>
@@ -52,10 +57,16 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// AvisoBuild va FUERA del AuthGate y FUERA del ErrorBoundary a propósito: si
+// el bundle viejo rompe la app o deja al usuario trabado en el login, es justo
+// cuando más hace falta que el cartel se vea.
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <AuthGate>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </AuthGate>
+  <>
+    <ErrorBoundary silencioso><AvisoBuild /></ErrorBoundary>
+    <AuthGate>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </AuthGate>
+  </>
 )

@@ -58,11 +58,9 @@ export const RANGOS = {
   per_pantorrilla_d: [20, 70], per_pantorrilla_i: [20, 70],
 };
 
-export const fueraDeRango = (campo, valor) => {
-  const r = RANGOS[campo]; const n = aNumero(valor);
-  if (!r || n == null) return false;
-  return n < r[0] || n > r[1];
-};
+// `fueraDeRango` vivía acá sin que lo llamara nadie: duplicaba la primera
+// mitad de `avisoRango`, que es el que de verdad se usa. Lo detectó
+// `npm run salud`.
 
 // Mensaje de advertencia para un valor fuera de rango. Devuelve null si está
 // bien. No bloquea la carga: hay excepciones reales (un atleta, un niño), y un

@@ -84,7 +84,8 @@ export const PLAZOS_TEJIDO = [
 
 // Fases clínicas ↔ claves del catálogo de ejercicios PROT_SESION
 export const FASE_A_PROT = { proteccion: 'aguda', carga_progresiva: 'subaguda', retorno_funcion: 'cronica' };
-export const PROT_A_FASE = { aguda: 'proteccion', subaguda: 'carga_progresiva', cronica: 'retorno_funcion' };
+// El mapa inverso, `PROT_A_FASE`, estaba acá y no lo usaba nadie: la
+// traducción sólo se hace en un sentido. Lo detectó `npm run salud`.
 
 // Parámetros de dosificación por fase clínica.
 // Referencias habituales: isometría analgésica 30-45 s en fase aguda;

@@ -568,12 +568,10 @@ export const pctFromReps = (reps, formula = 'epley_brzycki') => {
   return Math.round((epley + brzycki) / 2); // epley_brzycki (promedio / legacy)
 };
 
-// Peso de trabajo para N reps a partir del 1RM y la fórmula del test
-export const pesoParaReps = (rm1, reps, formula = 'epley_brzycki') => {
-  const pct = pctFromReps(reps, formula);
-  if (!rm1 || pct == null) return null;
-  return Math.round(rm1 * pct / 100 / 2.5) * 2.5; // redondeo a 2.5 kg
-};
+// `pesoParaReps` vivía acá y no lo llamaba nadie: `sugerirPeso` lo reemplazó
+// cuando la sugerencia pasó a resolverse por transferencia, historial o
+// estimación conservadora en lugar de por un 1RM suelto. Lo detectó
+// `npm run salud`.
 
 // ─── PARSE REPS DE UNA FASE DE PERIODIZACIÓN ────────────────────────────
 // "8–12" → average 10; "1–3" → 2; "3–5" → 4
