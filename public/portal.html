@@ -944,10 +944,95 @@ function kgTotalesMovidos(){
 // ═══════════════════════════════════════════════════════════════════════
 const RPE_TXT={1:'Muy suave',2:'Suave',3:'Cómodo',4:'Moderado',5:'Algo exigente',6:'Exigente',7:'Duro',8:'Muy duro',9:'Casi al límite',10:'Al límite'};
 const RPE_COL={1:'#22C55E',2:'#22C55E',3:'#4ADE80',4:'#A3E635',5:'#FACC15',6:'#FB923C',7:'#F97316',8:'#EF4444',9:'#DC2626',10:'#991B1B'};
-let RPE_BORRADOR={rpe:null,energia:null,dolor:null,zona:'',nota:''};
-// Zonas del cuerpo. Sin esto, un "dolor 4/10" no le dice nada al entrenador:
-// no sabe si es lumbar, hombro o rodilla, y tiene que adivinar o preguntar.
-const ZONAS=['Cuello','Hombro','Codo','Muñeca','Espalda alta','Lumbares','Cadera','Rodilla','Tobillo','Otra'];
+let RPE_BORRADOR={rpe:null,llegada:null,molestia:null,naturaleza:null,momento:null,ahora:null,intensidad:null,zona:'',lado:'',nota:''};
+
+// ── POR QUÉ ESTE BLOQUE SE REHIZO (29/10/2026) ─────────────────────────────
+// Medido sobre los 42 reportes de dolor que había: 32 eran "2" (76%), el "8"
+// nunca se usó, y 12 llegaron sin zona. Una escala de cinco puntos que colapsa
+// en un valor no es una escala.
+//
+// Pero el problema de fondo no era la resolución: el campo `dolor` mezclaba
+// dos cosas opuestas. Un 2/10 muscular difuso que se va solo es entrenamiento
+// funcionando; un 2/10 articular puntual que vuelve cada semana es lo que el
+// riel existe para atrapar. Mismo número, conductas opuestas, y ninguna cifra
+// de intensidad los separa.
+//
+// Lo que decide la conducta es NATURALEZA, si sobrevive a la sesión, y ZONA.
+// La intensidad baja a tercera.
+//
+// NO HAY PREGUNTA DE PERSISTENCIA. Se había diseñado como "¿te duró unas
+// horas? / ¿seguís igual mañana?" y es impracticable: esta encuesta se llena
+// al terminar de entrenar, así que eso pregunta por el futuro y sólo se puede
+// adivinar. En su lugar van dos preguntas contestables mirando el presente
+// —`momento` y `ahora`— y la persistencia real queda MEDIDA en lugar de
+// predicha: si la misma zona reaparece, eso es persistencia, y el riel la
+// detecta con la regla de 2 reportes en 7 días.
+const LLEGADA=[
+  {k:'pilas',   e:'🔋', l:'Con las pilas puestas'},
+  {k:'medio',   e:'😐', l:'Bien, punto medio'},
+  {k:'cansado', e:'🪫', l:'Cansado'},
+];
+// El texto describe la SENSACIÓN, no nombra la categoría: un socio no sabe qué
+// es "articular", pero sí sabe si lo puede señalar con un dedo.
+const NATURALEZA=[
+  {k:'muscular',  l:'Muscular',  d:'El músculo cargado, difuso, tipo agujetas'},
+  {k:'articular', l:'Articular', d:'En la articulación, puntual, la puedo señalar con un dedo'},
+  {k:'nerviosa',  l:'Nerviosa',  d:'Baja por el brazo o la pierna, hormiguea o se adormece'},
+];
+const MOMENTO=[
+  {k:'nueva',  l:'Apareció hoy'},
+  {k:'previa', l:'Ya venía con eso'},
+];
+const AHORA=[
+  {k:'se_fue', l:'Se fue al parar'},
+  {k:'sigue',  l:'Sigue ahora'},
+];
+const INTENSIDAD=[
+  {k:'apenas',   l:'Apenas'},
+  {k:'bastante', l:'Bastante'},
+  {k:'mucho',    l:'Tuve que parar'},
+];
+// Zonas en código sin acentos: el riel compara la zona como texto exacto y la
+// regla de repetición es POR ZONA. Un reporte sin zona no es ruteable, así que
+// el botón de enviar la exige. `bi` marca las que llevan lado — hombro
+// izquierdo y hombro derecho son zonas distintas, y una molestia que cambia de
+// lado es un hallazgo propio, no una repetición.
+const ZONAS=[
+  {k:'cuello',  l:'Cuello',       bi:false},
+  {k:'hombro',  l:'Hombro',       bi:true },
+  {k:'codo',    l:'Codo',         bi:true },
+  {k:'muneca',  l:'Muñeca',       bi:true },
+  {k:'dorsal',  l:'Espalda alta', bi:false},
+  {k:'lumbar',  l:'Lumbares',     bi:false},
+  {k:'cadera',  l:'Cadera',       bi:true },
+  {k:'rodilla', l:'Rodilla',      bi:true },
+  {k:'tobillo', l:'Tobillo',      bi:true },
+];
+// Abreviadas a propósito: "Rodilla izquierdo" no concuerda, y resolver el
+// género de cada zona para una etiqueta es trabajo que no paga. "Rodilla izq"
+// concuerda con todo y ocupa menos en un celular.
+const LADOS=[{k:'izq',l:'Izq'},{k:'der',l:'Der'},{k:'ambos',l:'Ambos'}];
+const zonaBi=k=>!!(ZONAS.find(z=>z.k===k)||{}).bi;
+// Clave final que viaja a la base: 'lumbar', 'hombro_izq', 'rodilla_ambos'.
+const zonaClave=(b)=>!b.zona?'':(zonaBi(b.zona)?(b.lado?b.zona+'_'+b.lado:''):b.zona);
+const zonaTexto=(k)=>{
+  if(!k) return '';
+  const p=String(k).split('_'); const z=ZONAS.find(x=>x.k===p[0]);
+  const lado=(LADOS.find(l=>l.k===p[1])||{}).l;
+  return z?(z.l+(lado?' '+lado.toLowerCase():'')):String(k);
+};
+// Falta algo para poder enviar? Devuelve el texto de lo que falta, o ''.
+function faltaEnFeedback(b){
+  if(!b.rpe) return 'Elegí un número del 1 al 10';
+  if(b.molestia===null) return 'Decinos si algo te molestó';
+  if(!b.molestia) return '';
+  if(!b.naturaleza) return 'Falta cómo es la molestia';
+  if(!b.momento)    return 'Falta si apareció hoy o ya venías';
+  if(!b.ahora)      return 'Falta si se fue o sigue';
+  if(!b.intensidad) return 'Falta cuánto te molesta';
+  if(!zonaClave(b)) return zonaBi(b.zona)?'Falta de qué lado':'Falta indicar dónde te molesta';
+  return '';
+}
 
 function fbKey(diaId,sem){ return diaId+'|'+sem; }
 // Antes buscaba solo por (día, semana): si el cliente repetía la misma sesión
@@ -1009,9 +1094,16 @@ function renderRPE(dia){
     `</div>`+
     (esHoy?'':`<div class="fecha-aviso">Estás cargando una sesión del ${FECHA_ENTRENO}, no de hoy.</div>`);
   if(ya){
+    // Los reportes viejos sólo tienen `dolor`; los nuevos traen naturaleza e
+    // intensidad. Se muestra lo que haya, sin inventar lo que falta.
+    const natTxt=(NATURALEZA.find(x=>x.k===ya.naturaleza)||{}).l;
+    const intTxt=(INTENSIDAD.find(x=>x.k===ya.intensidad)||{}).l;
+    const molTxt=ya.naturaleza
+      ? `${natTxt}${intTxt?' · '+intTxt.toLowerCase():''}${ya.dolor_zona?' en '+esc(zonaTexto(ya.dolor_zona)):''}`
+      : (ya.dolor>0?`${ya.dolor}/10${ya.dolor_zona?' en '+esc(zonaTexto(ya.dolor_zona)):''}`:'');
     return selFecha+`<div class="rpedone">✓ Ya registraste cómo te fue el ${ya.fecha}:
       <strong style="color:${RPE_COL[ya.rpe_sesion]||'#86EFAC'}">RPE ${ya.rpe_sesion}/10 · ${RPE_TXT[ya.rpe_sesion]||''}</strong>
-      ${ya.dolor>0?`<br><span style="color:#FCA5A5">Molestia: ${ya.dolor}/10${ya.dolor_zona?' en '+esc(ya.dolor_zona):''} — tu entrenador lo ve</span>`:''}
+      ${molTxt?`<br><span style="color:#FCA5A5">Molestia: ${molTxt} — tu entrenador lo ve</span>`:''}
       <br><span style="font-size:10px;color:#6b8f7a;font-weight:400">Si volvés a hacer esta misma rutina otro día, vas a poder responderla de nuevo.</span></div>`;
   }
   const b=RPE_BORRADOR;
@@ -1022,41 +1114,99 @@ function renderRPE(dia){
       `<button onclick="setRPE(${n})" class="${b.rpe===n?'on':''}" style="${b.rpe===n?`background:${RPE_COL[n]};border-color:${RPE_COL[n]};color:#fff`:''}">${n}</button>`).join('')}</div>
     <div class="rpelbl" style="color:${b.rpe?RPE_COL[b.rpe]:'#9CA3AF'}">${b.rpe?RPE_TXT[b.rpe]:'1 = muy suave · 10 = al límite'}</div>
     <div class="minirow">
-      <div><div class="ml">¿Cómo llegaste?</div><div class="chips">${['😴','😐','🙂','💪','🔥'].map((e,i)=>
-        `<button onclick="setEnergia(${i+1})" class="${b.energia===i+1?'on':''}">${e}</button>`).join('')}</div></div>
+      <div><div class="ml">¿Cómo llegaste hoy?</div><div class="chips">${LLEGADA.map(x=>
+        `<button onclick="setLlegada('${x.k}')" class="${b.llegada===x.k?'on':''}" title="${x.l}" style="font-size:17px">${x.e}</button>`).join('')}</div>
+      <div style="font-size:9px;color:#6B7280;margin-top:3px">${b.llegada?(LLEGADA.find(x=>x.k===b.llegada)||{}).l:'Antes de empezar, no al terminar'}</div></div>
     </div>
     <div class="minirow">
-      <div><div class="ml">¿Molestia o dolor?</div><div class="chips">${[0,2,4,6,8].map(n=>
-        `<button onclick="setDolor(${n})" class="${b.dolor===n?'on':''}" style="font-size:11px;font-weight:800">${n===0?'No':n}</button>`).join('')}</div></div>
+      <div><div class="ml">¿Algo te molestó?</div><div class="chips">
+        <button onclick="setMolestia(false)" class="${b.molestia===false?'on':''}" style="font-size:11px;font-weight:800">No</button>
+        <button onclick="setMolestia(true)" class="${b.molestia===true?'on':''}" style="font-size:11px;font-weight:800">Sí</button>
+      </div></div>
     </div>
-    ${b.dolor>0?`<div class="minirow"><div>
+    ${b.molestia?`
+    <div class="minirow"><div>
+      <div class="ml">¿Cómo es la molestia?</div>
+      <div class="zonas">${NATURALEZA.map(x=>
+        `<button onclick="setNaturaleza('${x.k}')" class="${b.naturaleza===x.k?'on':''}">${x.l}</button>`).join('')}</div>
+      <div style="font-size:9px;color:#6B7280;margin-top:4px;line-height:1.35">${
+        b.naturaleza?(NATURALEZA.find(x=>x.k===b.naturaleza)||{}).d
+                    :NATURALEZA.map(x=>`<b style="color:#9CA3AF">${x.l}:</b> ${x.d}`).join('<br>')}</div>
+    </div></div>
+    <div class="minirow">
+      <div><div class="ml">¿Apareció hoy o ya venías?</div><div class="chips">${MOMENTO.map(x=>
+        `<button onclick="setMomento('${x.k}')" class="${b.momento===x.k?'on':''}" style="font-size:10px;font-weight:700">${x.l}</button>`).join('')}</div></div>
+    </div>
+    <div class="minirow">
+      <div><div class="ml">¿Se fue al parar o sigue?</div><div class="chips">${AHORA.map(x=>
+        `<button onclick="setAhora('${x.k}')" class="${b.ahora===x.k?'on':''}" style="font-size:10px;font-weight:700">${x.l}</button>`).join('')}</div></div>
+    </div>
+    <div class="minirow">
+      <div><div class="ml">¿Cuánto?</div><div class="chips">${INTENSIDAD.map(x=>
+        `<button onclick="setIntensidad('${x.k}')" class="${b.intensidad===x.k?'on':''}" style="font-size:10px;font-weight:700">${x.l}</button>`).join('')}</div></div>
+    </div>
+    <div class="minirow"><div>
       <div class="ml">¿Dónde te molesta?</div>
       <div class="zonas">${ZONAS.map(z=>
-        `<button onclick="setZona('${z}')" class="${b.zona===z?'on':''}">${z}</button>`).join('')}</div>
-      ${!b.zona?'<div style="font-size:9px;color:#FCA5A5;margin-top:5px">Elegí la zona: sin eso tu entrenador no sabe qué revisar.</div>':''}
+        `<button onclick="setZona('${z.k}')" class="${b.zona===z.k?'on':''}">${z.l}</button>`).join('')}</div>
+      ${b.zona&&zonaBi(b.zona)?`<div class="chips" style="margin-top:6px">${LADOS.map(l=>
+        `<button onclick="setLado('${l.k}')" class="${b.lado===l.k?'on':''}" style="font-size:10px;font-weight:700">${l.l}</button>`).join('')}</div>`:''}
+      ${!zonaClave(b)?'<div style="font-size:9px;color:#FCA5A5;margin-top:5px">Sin la zona tu entrenador no sabe qué revisar, y el seguimiento no puede compararla con la próxima vez.</div>':''}
     </div></div>`:''}
     <textarea rows="2" placeholder="Algo para contarle a tu entrenador (opcional)" oninput="RPE_BORRADOR.nota=this.value">${esc(b.nota)}</textarea>
-    <button class="rpesend" ${(b.rpe&&(!b.dolor||b.zona))?'':'disabled'} onclick="enviarRPE('${esc(dia._planId||(DATA.plan&&DATA.plan.id)||'')}','${dia.id}','${escAttr(dia.name||'')}',${sem})">
-      ${!b.rpe?'Elegí un número del 1 al 10':(b.dolor&&!b.zona)?'Falta indicar dónde te molesta':'Enviar'}</button>
+    <button class="rpesend" ${faltaEnFeedback(b)?'disabled':''} onclick="enviarRPE('${esc(dia._planId||(DATA.plan&&DATA.plan.id)||'')}','${dia.id}','${escAttr(dia.name||'')}',${sem})">
+      ${faltaEnFeedback(b)||'Enviar'}</button>
   </div>`;
 }
 
+const FB_VACIO=()=>({rpe:null,llegada:null,molestia:null,naturaleza:null,momento:null,ahora:null,intensidad:null,zona:'',lado:'',nota:''});
 window.setRPE=(n)=>{RPE_BORRADOR.rpe=n;render();};
-window.setEnergia=(n)=>{RPE_BORRADOR.energia=n;render();};
-window.setDolor=(n)=>{RPE_BORRADOR.dolor=n;if(!n)RPE_BORRADOR.zona='';render();};
-window.setZona=(z)=>{RPE_BORRADOR.zona=RPE_BORRADOR.zona===z?'':z;render();};
+window.setLlegada=(k)=>{RPE_BORRADOR.llegada=k;render();};
+// Pasar a "No" limpia todo el bloque de molestia: si no se limpiara, una
+// naturaleza elegida y después descartada igual viajaría a la base y el riel
+// la rutearía como si el cliente la hubiera reportado.
+window.setMolestia=(v)=>{
+  RPE_BORRADOR.molestia=v;
+  if(!v) Object.assign(RPE_BORRADOR,{naturaleza:null,momento:null,ahora:null,intensidad:null,zona:'',lado:''});
+  render();
+};
+window.setNaturaleza=(k)=>{RPE_BORRADOR.naturaleza=k;render();};
+window.setMomento=(k)=>{RPE_BORRADOR.momento=k;render();};
+window.setAhora=(k)=>{RPE_BORRADOR.ahora=k;render();};
+window.setIntensidad=(k)=>{RPE_BORRADOR.intensidad=k;render();};
+// Cambiar de zona borra el lado: un lado elegido para el hombro no tiene que
+// quedar pegado si después se elige lumbares.
+window.setZona=(z)=>{
+  const mismo=RPE_BORRADOR.zona===z;
+  RPE_BORRADOR.zona=mismo?'':z;
+  RPE_BORRADOR.lado='';
+  render();
+};
+window.setLado=(l)=>{RPE_BORRADOR.lado=RPE_BORRADOR.lado===l?'':l;render();};
 
 window.enviarRPE=async(plan_id,dia_id,dia_nombre,semana)=>{
   const b=RPE_BORRADOR;
-  if(!b.rpe) return;
+  if(faltaEnFeedback(b)) return;
+  const zona=zonaClave(b);
+  const fila={
+    rpe_sesion:b.rpe, llegada:b.llegada, molestia:!!b.molestia,
+    naturaleza:b.molestia?b.naturaleza:null, momento:b.molestia?b.momento:null,
+    ahora:b.molestia?b.ahora:null, intensidad:b.molestia?b.intensidad:null,
+    dolor_zona:zona, nota:b.nota,
+  };
   try{
     const r=await fetch('/api/portal',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,fecha:FECHA_ENTRENO,
-        rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota})});
+      body:JSON.stringify({token:TOKEN,accion:'feedback',plan_id,dia_id,dia_nombre,semana,fecha:FECHA_ENTRENO,...fila})});
     if(!r.ok) throw new Error();
-    (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,rpe_sesion:b.rpe,energia:b.energia,dolor:b.dolor,dolor_zona:b.zona,nota:b.nota,fecha:isoLocal()});
-    RPE_BORRADOR={rpe:null,energia:null,dolor:null,zona:'',nota:''};
-    toast(b.dolor>=4?'Enviado — tu entrenador va a ver la molestia':'¡Gracias! Enviado ✓',true);
+    (DATA.feedback=DATA.feedback||[]).push({dia_id,semana,fecha:isoLocal(),...fila});
+    RPE_BORRADOR=FB_VACIO();
+    // Una molestia nerviosa o que obligó a parar frena el patrón y avisa, así
+    // que el mensaje tiene que decir algo distinto: el cliente acaba de
+    // disparar una conducta, no sólo de registrar un dato.
+    const urgente=b.molestia&&(b.naturaleza==='nerviosa'||b.intensidad==='mucho');
+    toast(urgente?'Enviado — tu entrenador lo ve ahora mismo'
+         :b.molestia?'Enviado — tu entrenador va a ver la molestia'
+         :'¡Gracias! Enviado ✓',true);
     render();
   }catch(e){ toast('No se pudo enviar',false); }
 };
