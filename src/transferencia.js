@@ -33,6 +33,46 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const REGLAS_TRANSFERENCIA = [
+  // ── BALÍSTICOS Y POTENCIA — GANAN ANTES QUE TODO ───────────────────────
+  // POR QUÉ EXISTE ESTA SECCIÓN
+  // "Sentadilla salto con barra" caía en la regla genérica /sentadilla|squat/
+  // con coef 1.00 y confianza ALTA. Después `pctFromReps` le aplicaba el % por
+  // repeticiones: el bloque potencia pide 3-5 reps → promedio 4 → 90%.
+  // Resultado medido sobre los 1RM reales de la base: a Maicol (1RM 135 kg,
+  // 88 kg de peso corporal) le prescribía 122 kg a la espalda para saltar y
+  // caer — 1,38 veces su peso corporal. A Evangelina, 84 kg.
+  //
+  // No era un porcentaje mal calibrado: era un error de categoría. `pctFromReps`
+  // invierte Epley/Brzycki, que son modelos de FUERZA. La potencia vive en otro
+  // punto de la curva carga-velocidad y no se prescribe por reps hasta el fallo:
+  // por encima de ~30% del 1RM de sentadilla el salto deja de ser balístico, la
+  // velocidad de despegue se derrumba y el excéntrico del aterrizaje se dispara.
+  //
+  // El campo `pot` saca al ejercicio de la cadena reps → %1RM y le da su propia
+  // ventana. `base` dice sobre qué se calcula:
+  //   'test'  → % del 1RM del test de referencia
+  //   'pc'    → % del peso corporal (cuando no hay carga axial)
+  //   'clean' → % de un 1RM que el sistema todavía no mide: no se da número
+  { re: /(sentadilla|squat).*(salto|jump)|(salto|jump).*(sentadilla|squat)|jump squat/i,
+    test: 'squat', coef: 1.00, modo: 'total', conf: 'alta',
+    pot: { min: 20, max: 30, base: 'test' },
+    nota: 'Salto cargado: ventana de potencia 20-30% del 1RM de sentadilla. Arrancar en el piso.' },
+  { re: /(salto|jump|brinco).*(mancuern|dumbbell|\bdb\b)|(mancuern|dumbbell)\s.*(salto|jump)/i,
+    test: null, coef: null, modo: 'por_mano', conf: 'media',
+    pot: { min: 5, max: 10, base: 'pc' },
+    nota: 'La mancuerna cuelga al costado: sin carga axial, el coeficiente del back squat no transfiere. Se ancla al peso corporal.' },
+  { re: /(clean|cargada).*(press|envi[oó]n)|(press|envi[oó]n).*(clean|cargada)|clean ?(y|and|&) ?press/i,
+    test: 'press_mil', coef: 1.00, modo: 'total', conf: 'media',
+    pot: { min: 60, max: 70, base: 'test' },
+    nota: 'El techo lo pone el press, no la cargada: 60-70% del 1RM de press militar.' },
+  { re: /\b(clean|cargada|power clean|hang clean|snatch|arrancada)\b/i,
+    test: null, coef: null, modo: 'total', conf: 'baja',
+    pot: { min: 70, max: 80, base: 'clean' },
+    nota: 'Derivado olímpico: 70-80% del 1RM de clean, que el sistema no mide. Carga a mano o agregá el test.' },
+  { re: /box jump|salto al (caj[oó]n|banco)|salto (vertical|horizontal|en largo)|\bcmj\b|drop jump|salto reactivo|lanzamiento|\bthrow\b/i,
+    test: null, coef: 0, modo: 'corporal', conf: 'alta',
+    nota: 'Sin carga externa: se dosifica por altura, distancia o velocidad.' },
+
   // ── EXCEPCIONES QUE TIENEN QUE GANAR PRIMERO ──────────────────────────
   // Encontradas corriendo el modelo contra el catálogo real: cada una era un
   // error de clasificación, varios por SOBREESTIMACIÓN de carga.
@@ -180,6 +220,8 @@ export function resolverTransferencia(nombre) {
     testId: regla.test,
     testNombre: TEST_NOMBRE[regla.test] || regla.test,
     coef: regla.coef, modo: regla.modo, confianza: regla.conf, nota: regla.nota,
+    // `pot` presente = ejercicio balístico: no pasa por la cadena reps → %1RM.
+    pot: regla.pot || null,
   };
 }
 

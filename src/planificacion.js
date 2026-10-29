@@ -626,6 +626,52 @@ export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null,
       motivo: 'Peso corporal — ' + (tr.nota || 'sin carga externa') };
   }
 
+  // ── BALÍSTICO: ventana de potencia, fuera de la cadena reps → %1RM ───────
+  // `pctFromReps` invierte Epley/Brzycki: modelos de fuerza. Aplicarlos a un
+  // salto cargado daba 90% del 1RM de sentadilla para las 3-5 reps del bloque
+  // potencia (122 kg a la espalda de un cliente de 88 kg). La ventana de
+  // potencia no depende de las reps: la serie se corta por caída de
+  // rendimiento, y las reps son un techo, no un objetivo a alcanzar.
+  if (tr && tr.pot) {
+    const p = tr.pot;
+    const uni = tr.modo === 'por_mano' ? 'kg por mancuerna' : 'kg';
+    const red = (x) => tr.modo === 'por_mano'
+      ? Math.max(1, Math.round(x))
+      : Math.max(2.5, Math.round(x / 2.5) * 2.5);
+    const comun = {
+      fuente: 'potencia', balistico: true, modo: tr.modo, confianza: tr.confianza,
+      nota: tr.nota, unidad: uni, ventana: `${p.min}–${p.max}%`,
+      cierreSet: 'La serie termina cuando cae el rendimiento (altura, velocidad o técnica), no al completar las reps.',
+    };
+    if (p.base === 'test' && tr.testId) {
+      const last = testsCliente
+        .filter(t => t.test_id === tr.testId)
+        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+      const rm1Test = last ? parseFloat(last.rm1_real || last.rm1_calculado) : NaN;
+      if (rm1Test && !isNaN(rm1Test)) {
+        const bajo = rm1Test * tr.coef * p.min / 100;
+        const alto = rm1Test * tr.coef * p.max / 100;
+        return { ...comun, testId: tr.testId, testNombre: tr.testNombre, rm1Test, rm1Fecha: last.fecha,
+          coef: tr.coef, pesoSugerido: red(bajo), pesoRango: `${red(bajo)}–${red(alto)} ${uni}`,
+          explicacion: `${p.min}–${p.max}% del 1RM de ${tr.testNombre} (${rm1Test} kg). Se arranca en el piso de la ventana y se sube sólo si el rendimiento se sostiene.` };
+      }
+      return { ...comun, pesoSugerido: null, testId: tr.testId, testNombre: tr.testNombre,
+        motivo: `Sin test de ${tr.testNombre} no hay ventana de potencia. Hacé el test o cargá el peso a mano — acá no se estima.` };
+    }
+    if (p.base === 'pc') {
+      const pc = parseFloat(String(pesoCorporal ?? '').replace(',', '.'));
+      if (pc > 0) {
+        const bajo = pc * p.min / 100, alto = pc * p.max / 100;
+        return { ...comun, pesoSugerido: red(bajo), pesoRango: `${red(bajo)}–${red(alto)} ${uni}`,
+          explicacion: `${p.min}–${p.max}% del peso corporal (${pc} kg), por mano.` };
+      }
+      return { ...comun, pesoSugerido: null,
+        motivo: 'Sin peso corporal cargado no se puede calcular la ventana. Cargalo en el screening del cliente.' };
+    }
+    return { ...comun, pesoSugerido: null,
+      motivo: `Se prescribe al ${p.min}–${p.max}% del 1RM de ${p.base}, que el sistema todavía no mide. Cargá el peso a mano o agregá ese test.` };
+  }
+
   // Reps objetivo: prioridad a las ingresadas, después la fase, después 10.
   let repsTarget = null, fuenteReps = null;
   const repsFromEntered = parseRepsFromPhase(repsEntered != null ? String(repsEntered) : '');
