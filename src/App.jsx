@@ -3943,7 +3943,7 @@ export default function App(){
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
   // en dos consultas, no una por tarjeta.
   const [salaIds,setSalaIds]=useState(()=>{ try{return JSON.parse(localStorage.getItem('sala_clientes')||'[]')}catch{return[]} });
-  const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback, lineasBase:salaLineasBase } = useSalaDatos(salaIds);
+  const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback, lineasBase:salaLineasBase, bloqueos:salaBloqueos } = useSalaDatos(salaIds);
   const [rutinaVer,setRutinaVer]=useState(null);
   const [rielCliente,setRielCliente]=useState(null);
   const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes]);
@@ -6037,7 +6037,7 @@ export default function App(){
           {/* El panel de sala va ARRIBA del riel de molestias: es la razón para
               abrir esta pestaña. El riel queda abajo, a un toque. */}
           <SalaDashboard clients={clients} hoyGym={hoyGym} tests={salaTests} planes={salaPlanes}
-            feedback={salaFeedback} lineasBase={salaLineasBase} config={brand||{}} incidencias={incidencias}
+            feedback={salaFeedback} lineasBase={salaLineasBase} bloqueos={salaBloqueos} config={brand||{}} incidencias={incidencias}
             onEstadoIncidencia={cambiarEstadoIncidencia}
             onCambioSeleccion={setSalaIds}
             onVerRutina={(c,plan)=>setRutinaVer({cliente:c,plan})}

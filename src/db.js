@@ -1338,11 +1338,12 @@ export function useSalaDatos(ids = []) {
   const [planes,setPlanes]=useState({})
   const [feedback,setFeedback]=useState({})
   const [lineasBase,setLineasBase]=useState({})
+  const [bloqueos,setBloqueos]=useState({})
   const [loading,setLoading]=useState(false)
   const clave=(ids||[]).slice().sort().join(',')
   const fetch=useCallback(async()=>{
     const lista=clave?clave.split(','):[]
-    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});setFeedback({});setLineasBase({});return}
+    if(!isSupabaseReady||!lista.length){setTests({});setPlanes({});setFeedback({});setLineasBase({});setBloqueos({});return}
     setLoading(true)
     try{
       // Las columnas reales son peso_levantado y reps_realizadas: pedir
@@ -1351,7 +1352,7 @@ export function useSalaDatos(ids = []) {
       // se llevaba también los planes: en sala no aparecía ninguna de las dos
       // cosas por un solo nombre de columna mal escrito.
       // Ahora cada consulta falla por separado y se informa cuál falló.
-      const[t,p,fb,lb]=await Promise.allSettled([
+      const[t,p,fb,lb,bq]=await Promise.allSettled([
         supabase.from('fuerza_tests')
           .select('gym_client_id,test_id,test_nombre,fecha,rm1_real,rm1_calculado,peso_levantado,reps_realizadas,nivel_resultado,formula')
           .in('gym_client_id',lista).order('fecha',{ascending:false}),
@@ -1372,11 +1373,19 @@ export function useSalaDatos(ids = []) {
         supabase.from('gym_linea_base')
           .select('gym_client_id,zona,naturaleza_basal,intensidad_basal,ahora_basal,desde,revision_vence,autor,veredicto')
           .in('gym_client_id',lista).eq('activa',true),
+        // Cuántas sesiones limpias faltan para que el patrón bloqueado se
+        // libere solo. Sin esto el umbral sería un número invisible: quien
+        // está en sala vería "patrón sin progresar" sin saber si falta una
+        // sesión o siete, que es la diferencia entre esperar y actuar.
+        supabase.from('gym_incidencias_bloqueo')
+          .select('id,gym_client_id,zona,estado,umbral,sesiones_limpias,faltan')
+          .in('gym_client_id',lista),
       ]).then(rs=>rs.map(r=>r.status==='fulfilled'?r.value:{error:r.reason,data:null}))
       if(t.error)console.error('sala/tests:',t.error.message||t.error)
       if(p.error)console.error('sala/planes:',p.error.message||p.error)
       if(fb.error)console.error('sala/feedback:',fb.error.message||fb.error)
       if(lb.error)console.error('sala/lineaBase:',lb.error.message||lb.error)
+      if(bq.error)console.error('sala/bloqueo:',bq.error.message||bq.error)
       // Un test por patrón, el más reciente
       const porCli={}
       ;(t.data||[]).forEach(r=>{
@@ -1397,12 +1406,15 @@ export function useSalaDatos(ids = []) {
       ;(fb.data||[]).forEach(r=>{(fbCli[r.gym_client_id]=fbCli[r.gym_client_id]||[]).push(r)})
       const lbCli={}
       ;(lb.data||[]).forEach(r=>{(lbCli[r.gym_client_id]=lbCli[r.gym_client_id]||[]).push(r)})
-      setTests(porCli);setPlanes(pl);setFeedback(fbCli);setLineasBase(lbCli)
+      // Por id de incidencia, para que la tarjeta lo encuentre directo.
+      const bqId={}
+      ;(bq.data||[]).forEach(r=>{bqId[r.id]=r})
+      setTests(porCli);setPlanes(pl);setFeedback(fbCli);setLineasBase(lbCli);setBloqueos(bqId)
     }catch(e){console.error('useSalaDatos:',e.message)}
     finally{setLoading(false)}
   },[clave])
   useEffect(()=>{fetch()},[fetch])
-  return{tests,planes,feedback,lineasBase,loading,refetch:fetch}
+  return{tests,planes,feedback,lineasBase,bloqueos,loading,refetch:fetch}
 }
 
 // ─── HOOK: Bandas del screening ───────────────────────────────────────────

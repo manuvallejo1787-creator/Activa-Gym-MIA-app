@@ -48,6 +48,22 @@ export default [
     rules: {
       'no-undef': 'error',
       'react-hooks/rules-of-hooks': 'error',
+      // AVISO, no error, agregada el 29/10/2026.
+      //
+      // POR QUÉ SE ENCENDIÓ
+      // Al conectar el contador de sesiones del riel dejé `lineasBase` y
+      // `bloqueos` fuera de las dependencias de un useMemo. El código
+      // compilaba, eslint pasaba, y la tarjeta de sala simplemente no se
+      // actualizaba cuando esos datos llegaban: un no-op silencioso, que es
+      // peor que un error porque no deja rastro.
+      //
+      // POR QUÉ AVISO Y NO ERROR
+      // Hay ocho casos en todo el código y algunos son deliberados —el
+      // `initialExercises` de useEjercicios no debe re-disparar la carga
+      // cuando cambia la identidad del array semilla. Como error bloquearía
+      // el despliegue por decisiones correctas; como aviso aparece en cada
+      // corrida de salud y se mira cuando toca ese archivo.
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
 ];

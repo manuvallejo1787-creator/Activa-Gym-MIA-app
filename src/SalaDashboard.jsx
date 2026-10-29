@@ -44,7 +44,7 @@ function chipVenc(label, restan, fecha) {
   return { label, c, txt, fecha };
 }
 
-export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, feedback = {}, lineasBase = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, onEstadoIncidencia, incidencias = [] }) {
+export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, planes = {}, feedback = {}, lineasBase = {}, bloqueos = {}, config = {}, onVerRutina, onNuevaIncidencia, onCambioSeleccion, onEstadoIncidencia, incidencias = [] }) {
   const [sel, setSel] = useState(() => {
     try { return JSON.parse(localStorage.getItem('sala_clientes') || '[]'); } catch { return []; }
   });
@@ -103,7 +103,9 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
         chipVenc('Test', dTest == null ? null : vencTest - dTest, h.test_ultimo),
       ],
       tests: tests[id] || {},
-      abiertas,
+      // El bloqueo se adjunta a cada incidencia acá, donde está el mapa, para
+      // que la tarjeta no tenga que buscarlo.
+      abiertas: abiertas.map(i => ({ ...i, bloqueo: bloqueos[i.id] || null })),
       // `vencida` se resuelve acá y no en la tarjeta: `hoy` vive en este
       // alcance, y hacer que el componente de presentación vuelva a derivar
       // fechas es cómo se terminan teniendo dos definiciones de "vencido".
@@ -112,7 +114,7 @@ export default function SalaDashboard({ clients = [], hoyGym = [], tests = {}, p
       })),
       fb: (feedback[id] || []).slice().sort((a, b) => (b.fecha || '').localeCompare(a.fecha || '')),
     };
-  }).filter(Boolean), [sel, clients, hoyGym, planes, tests, feedback, incidencias, config, hoy]);
+  }).filter(Boolean), [sel, clients, hoyGym, planes, tests, feedback, lineasBase, bloqueos, incidencias, config, hoy]);
 
   return (
     <div style={{ padding: '10px 12px' }}>
@@ -375,7 +377,14 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
                   {/* Lo que quien está en sala necesita saber antes de cargar:
                       si el patrón está bloqueado, no se progresa aunque el
                       cliente se sienta bien hoy. */}
-                  {bloqueaPatron(i) && <span style={{ color: ROJO }}> · ⛔ patrón sin progresar</span>}
+                  {bloqueaPatron(i) && <span style={{ color: ROJO }}> · ⛔ patrón sin progresar
+                    {/* Cuántas sesiones limpias faltan para que se libere solo.
+                        Sin el número, "sin progresar" no dice si hay que
+                        esperar una sesión o siete — que es la diferencia entre
+                        dejarlo correr y hacer algo. */}
+                    {i.bloqueo && i.bloqueo.faltan > 0
+                      ? ` (faltan ${i.bloqueo.faltan} de ${i.bloqueo.umbral} sesiones)`
+                      : i.bloqueo ? ' (se libera en la próxima sesión)' : ''}</span>}
                 </div>
                 <div style={{ fontSize: 9, color: G4, marginTop: 2 }}>
                   {String(i.fecha || '').slice(0, 10)}
