@@ -4232,13 +4232,46 @@ export default function App(){
     const bs=OBJS[obj].blocks.map((type,i)=>({id:Date.now()+i,type,position:i+1,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}}));
     setDia(d=>({...d,obj,blocks:bs,name:d.name&&!/^Día \d+$/.test(d.name)?d.name:`Sesión ${OBJS[obj].label}`}));
   };
+  // ── ORDEN DE LOS BLOQUES ──────────────────────────────────────────────
+  // `position` es el número que se ve en la cabecera y el que se imprime en
+  // el PDF del plan, así que tiene que ser 1..n sin huecos ni repetidos.
+  // Antes no se normalizaba nunca y eso dejaba dos problemas:
+  //   · Borrar un bloque dejaba hueco: 1, 2, 4, 5 — y así salía impreso.
+  //   · Insertar en una posición ocupada dejaba dos bloques con el mismo
+  //     número, porque se ordenaba pero no se renumeraba.
+  const renumerar=(bs)=>bs.slice().sort((a,b)=>a.position-b.position)
+    .map((b,i)=>b.position===i+1?b:{...b,position:i+1});
+
   const addBlock=()=>{
     if(!addBType||!addBPos||dia.blocks.length>=7)return;
-    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos),exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
-    setDia(d=>({...d,blocks:[...d.blocks,nb].sort((a,b)=>a.position-b.position)}));
+    // La posición pedida menos medio punto: si ya hay un bloque en esa
+    // posición, el nuevo queda ANTES —que es lo que se pidió— y el otro baja.
+    // Sin esto el orden entre los dos empatados lo decidía el azar del sort.
+    const nb={id:Date.now(),type:addBType,position:parseInt(addBPos)-0.5,exercises:[],params:{series:3,reps:'10-12',rpe:7,tempo:'2-0-1',descanso:'90s'}};
+    setDia(d=>({...d,blocks:renumerar([...d.blocks,nb])}));
     setAddBType('');setAddBPos('');
   };
-  const removeBlock=(id)=>setDia(d=>({...d,blocks:d.blocks.filter(b=>b.id!==id)}));
+  const removeBlock=(id)=>setDia(d=>({...d,blocks:renumerar(d.blocks.filter(b=>b.id!==id))}));
+
+  // MOVER UN BLOQUE DE LUGAR
+  //
+  // POR QUÉ EXISTE
+  // No había forma de reordenar: para cambiar la distribución que propone la
+  // IA había que BORRAR el bloque y crearlo de nuevo en otra posición, y con
+  // eso se perdían sus ejercicios, sus parámetros y las cargas sugeridas.
+  // Reordenar es la operación más común al revisar un plan propuesto, y era
+  // la única que obligaba a rehacer trabajo.
+  //
+  // Intercambia con el vecino y renumera, así que el resultado siempre queda
+  // 1..n. `moveExInBlock` hace lo mismo con los ejercicios dentro del bloque.
+  const moveBlock=(id,dir)=>setDia(d=>{
+    const bs=d.blocks.slice().sort((a,b)=>a.position-b.position);
+    const i=bs.findIndex(b=>b.id===id);
+    const j=i+dir;
+    if(i<0||j<0||j>=bs.length)return d;        // ya está en la punta
+    [bs[i],bs[j]]=[bs[j],bs[i]];
+    return{...d,blocks:renumerar(bs.map((b,k)=>({...b,position:k+1})))};
+  });
   const addExToBlock=(blockId,exId,override=false,note='')=>{
     setDia(d=>({...d,blocks:d.blocks.map(b=>{
       if(b.id!==blockId||b.exercises.length>=5)return b;
@@ -5525,8 +5558,25 @@ export default function App(){
                   {block.exercises.length>0&&<span style={{background:'rgba(255,255,255,.2)',borderRadius:99,fontSize:10,padding:'1px 6px'}}>{block.exercises.length} ej.</span>}
                 </div>
                 <div style={{display:'flex',gap:6}}>
-                  <button onClick={()=>setExpandedBlock(isExp?null:block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>{isExp?'▲':'▼'}</button>
-                  <button onClick={()=>removeBlock(block.id)} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>✕</button>
+                  {/* Subir y bajar. Las flechas llenas ▲▼ son el desplegar, así
+                      que mover usa ↑↓ para que no se confundan. Se deshabilitan
+                      en las puntas en lugar de desaparecer, para que los botones
+                      no se muevan de lugar entre bloques. */}
+                  {(()=>{
+                    const orden=dia.blocks.slice().sort((a,b)=>a.position-b.position);
+                    const i=orden.findIndex(b=>b.id===block.id);
+                    const btn=(txt,dir,off,titulo)=>(
+                      <button onClick={()=>!off&&moveBlock(block.id,dir)} disabled={off} title={titulo}
+                        style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,
+                          padding:'3px 7px',cursor:off?'default':'pointer',fontSize:11,opacity:off?.3:1}}>{txt}</button>
+                    );
+                    return(<>
+                      {btn('↑',-1,i<=0,'Subir el bloque')}
+                      {btn('↓', 1,i<0||i>=orden.length-1,'Bajar el bloque')}
+                    </>);
+                  })()}
+                  <button onClick={()=>setExpandedBlock(isExp?null:block.id)} title={isExp?'Cerrar':'Abrir'} style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>{isExp?'▲':'▼'}</button>
+                  <button onClick={()=>removeBlock(block.id)} title="Quitar el bloque" style={{background:'rgba(255,255,255,.15)',color:WH,border:'none',borderRadius:4,padding:'3px 8px',cursor:'pointer',fontSize:11}}>✕</button>
                 </div>
               </div>
               {isExp&&(
