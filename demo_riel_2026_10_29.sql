@@ -20,12 +20,15 @@
 --      veredicto, crónico conocido pide el criterio y confirma.
 --   4. Cuando termines, correr el bloque de LIMPIEZA del final.
 --
--- El cliente queda con activo=false para que no aparezca en listados normales
--- ni cuente en las métricas del centro mientras lo mirás.
-
+-- EL CLIENTE VA ACTIVO, Y NO ES UN DESCUIDO.
+-- La primera versión lo creaba con activo=false para que no ensuciara listados
+-- ni métricas. Pero el buscador de sala filtra `c.activo !== false`, así que
+-- quedaba imposible de encontrar: el cliente existía, las cuatro incidencias
+-- existían, y no había forma de agregarlo a sala para verlas.
+-- Va activo y se borra al terminar, que es lo que el bloque de limpieza hace.
 insert into gym_clients (id, nombre, apellido, nivel, semaforo, activo, fecha_ingreso, screening_completo)
-values ('cli_DEMO_RIEL', 'ZZ Demo', 'Riel', 'activa', 'verde', false, current_date, false)
-on conflict (id) do nothing;
+values ('cli_DEMO_RIEL', 'ZZ Demo', 'Riel', 'activa', 'verde', true, current_date, false)
+on conflict (id) do update set activo = true;
 
 delete from gym_incidencias where gym_client_id = 'cli_DEMO_RIEL';
 delete from gym_linea_base  where gym_client_id = 'cli_DEMO_RIEL';
