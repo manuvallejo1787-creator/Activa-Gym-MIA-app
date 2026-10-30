@@ -59,6 +59,12 @@ begin
   -- Una sola vez por sesión, no una por ejercicio: hay 14,2 filas por sesión
   -- en promedio, así que sin esta guarda el bloque de abajo correría 14 veces
   -- para el mismo resultado.
+  --
+  -- La guarda compara la MISMA FECHA, así que no interfiere con inserciones
+  -- de varias sesiones de días distintos: ésas pasan y liberan normalmente.
+  -- Verificado el 30/10 con las dos formas — 14 ejercicios de un mismo día
+  -- cuentan como 1 sesión, y 4 filas de 4 días distintos en una sola sentencia
+  -- liberan el patrón.
   if exists (select 1 from ejecucion_registros e
               where e.gym_client_id = new.gym_client_id
                 and e.fecha = new.fecha
