@@ -3,7 +3,13 @@
 // juntas cada vez que cambia lo que el formulario manda, y `npm run salud`
 // verifica que coincidan — si no, un portal cacheado mandaría el formulario
 // viejo, sin `naturaleza`, y el riel no rutearía esa molestia.
-const PORTAL_V = '2026-10-29-a';
+const PORTAL_V = '2026-10-30-a';
+
+// Escalón 2. La composición del plan y el rechazo de la escritura viven en
+// un módulo aparte porque los leen los dos lados —esta api y la app— y
+// porque inline acá no se podían probar: la única forma de verificarlos era
+// desplegar y mirar el portal de un cliente real.
+import { componerPlan, bloqueoDe, mensajeBloqueo, indexarReentradas } from '../src/superposicion.js';
 
 // api/portal.js — Portal del cliente (frontera de seguridad)
 // El portal del cliente NUNCA toca Supabase directo. Pasa por acá.
@@ -91,6 +97,7 @@ export default async function handler(req, res) {
         return candidatos.filter(p => (p.fecha_inicio || '') === ultimaFecha);
       })();
       let plan = null;
+      let superposicion = [];
       let logs = [];
       let nombres = {};
       let media = {};
@@ -157,6 +164,43 @@ export default async function handler(req, res) {
           nombres[e.id] = e.nombre;
           if (e.media_url) media[e.id] = { url: e.media_url, tipo: e.media_tipo || "imagen", desc: e.media_desc || "" };
         });
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // SUPERPOSICIÓN DEL RIEL — ESCALÓN 2
+      // ══════════════════════════════════════════════════════════════════════
+      // Decisión de Manu el 30/10: el bloque dirigido se inserta en el plan de
+      // gym SIN borrar la rutina original; se bloquea la carga del patrón
+      // afectado y a continuación se agrega el bloque nuevo.
+      //
+      // Se compone ACÁ, al leer, y no se escribe en gym_planes.dias. Escribirlo
+      // obligaría a des-escribirlo cuando el bloqueo se levanta, y eso es un
+      // segundo mecanismo que puede fallar dejando el plan mutado para siempre
+      // con un bloque de rehab que ya no corresponde — y nadie se enteraría,
+      // porque el plan se vería normal. Como superposición, cuando
+      // tg_liberar_patron pasa la incidencia a 'resuelta' las vistas dejan de
+      // devolver la fila y la rutina vuelve intacta sola.
+      let bloqueados = {};      // exId → por qué está bloqueado
+      let reentradas = {};      // exId → regla de reentrada en curso
+      try {
+        const enc = encodeURIComponent(cli.id);
+        const [sup, reen] = await Promise.all([
+          sb(`gym_superposicion?gym_client_id=eq.${enc}&select=incidencia_id,estado,zona,escalon,patron_bloqueado,patron_dias,bloque_dirigido,bloquea_carga,suma_bloque,motivo`),
+          sb(`gym_reentrada?gym_client_id=eq.${enc}&select=ejercicio_id,incidencia_id,zona,liberado_el,pct,sesiones_req,sesiones_hechas,sesiones_restantes`),
+        ]);
+        superposicion = Array.isArray(sup) ? sup : [];
+        reentradas = indexarReentradas(reen);
+
+        const comp = componerPlan({ plan, superposicion });
+        plan = comp.plan;
+        bloqueados = comp.bloqueados;
+        Object.assign(nombres, comp.nombres);
+        Object.assign(media, comp.media);
+      } catch (e) {
+        // Que falle la superposición no puede dejar al cliente sin plan. En el
+        // lado seguro: sin superposición el plan se ve completo y el bloqueo se
+        // sigue rechazando en el POST, que es la barrera que importa.
+        console.error("superposicion:", e.message);
       }
       // Criterios de avance de la fase actual del cliente (plantilla, no editable acá)
       let criterios = [];
@@ -321,6 +365,10 @@ export default async function handler(req, res) {
           periodizacion: cli.periodizacion, periodizacionInicio: cli.periodizacion_inicio, periodizacionFin: cli.periodizacion_fin,
           criteriosEstado: cli.criterios_avance_estado || {}, screening: cli.screening || {} },
         criterios, metas, medidas, brand, plan, logs: logs || [], nombres, media, clinico,
+        // Escalón 2: qué está bloqueado y qué patrón está en reentrada. El
+        // plan ya viene con las marcas puestas; esto es para que el portal
+        // pueda explicar y para que la app lea la misma regla que la api.
+        bloqueados, reentradas,
         // Versión que este backend espera del portal. Si el cliente trae una
         // distinta, su portal.html está cacheado y manda el formulario viejo:
         // sin `naturaleza` el riel no rutea su molestia y nadie se entera.
@@ -458,6 +506,33 @@ export default async function handler(req, res) {
       const owns = await sb(`gym_planes?id=eq.${encodeURIComponent(plan_id)}&gym_client_id=eq.${cli.id}&select=id`);
       if (!Array.isArray(owns) || !owns.length) {
         return res.status(403).json({ error: "El plan no corresponde a este cliente" });
+      }
+
+      // ── PATRÓN BLOQUEADO: EL RECHAZO VA ACÁ, NO EN EL PORTAL ────────────
+      // Pintar el ejercicio de solo-lectura en portal.html no alcanza: un
+      // portal cacheado manda el POST igual, y cachés viejos del portal son un
+      // problema OBSERVADO en este proyecto — es la razón por la que existe
+      // PORTAL_V. Si la única barrera estuviera en el cliente, el patrón que
+      // el riel bloqueó seguiría recibiendo carga sin que nadie se enterara.
+      //
+      // 409 y no 403: no es un problema de permisos, es un estado del sistema
+      // que el portal tiene que poder explicar. El motivo viaja en la
+      // respuesta para que el cliente lea POR QUÉ y no "error al guardar".
+      try {
+        const bloq = await sb(`gym_superposicion?gym_client_id=eq.${encodeURIComponent(cli.id)}&bloquea_carga=is.true&select=incidencia_id,zona,escalon,estado,patron_bloqueado,patron_dias,motivo,bloquea_carga`);
+        const hit = bloqueoDe(Array.isArray(bloq) ? bloq : [], ejercicio_id, dia_id);
+        if (hit) {
+          return res.status(409).json({
+            error: "patron_bloqueado",
+            zona: hit.zona || null, escalon: hit.escalon, estado: hit.estado,
+            motivo: hit.motivo || "", mensaje: mensajeBloqueo(hit),
+          });
+        }
+      } catch (e) {
+        // Si la verificación falla no se bloquea la carga: perder el registro
+        // del cliente es peor que dejar pasar una serie en un patrón
+        // sustituido. Queda en los logs para verlo con query_logs.
+        console.error("verificacion patron_bloqueado:", e.message);
       }
 
       const id = `${plan_id}__${dia_id}__${ejercicio_id}__w${semana}__${fechaEntreno}`;

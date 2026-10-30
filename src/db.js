@@ -1268,7 +1268,12 @@ export function useEjecucionCliente(clienteId){
     if(!isSupabaseReady||!clienteId){setHistorial([]);return}
     try{
       const{data,error}=await supabase.from('ejecucion_registros')
-        .select('ejercicio_id,ejercicio_nombre,peso_real,reps_real,semana,updated_at')
+        // `fecha` se agregó el 30/10 y NO es cosmético: es el día que el
+        // cliente declara que entrenó, y la regla de reentrada necesita
+        // separar las cargas previas al bloqueo de las de la reentrada misma.
+        // Sin esta columna el filtro de `sugerirPeso` comparaba contra undefined
+        // y dejaba pasar todo: habría aplicado el 60% sobre el 60%.
+        .select('ejercicio_id,ejercicio_nombre,peso_real,reps_real,semana,fecha,updated_at')
         .eq('gym_client_id',clienteId).not('peso_real','is',null)
         .order('updated_at',{ascending:false}).limit(400)
       if(error)throw error
