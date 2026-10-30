@@ -19,6 +19,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PERIODIZACIONES, parseDuracionSemanas } from "./planificacion.js";
+import { estadoDe as estadoIncidencia, esPendiente, escalonDe, etiquetaEstado,
+         fechaVence, zonaTexto, naturalezaTexto } from "./incidencias.js";
 
 // ─── VENCIMIENTOS ─────────────────────────────────────────────────────────
 // Plazos por defecto; se pueden cambiar en centro_config sin tocar código.
@@ -123,7 +125,7 @@ const sumarDias = (fecha, n) => {
 const nom = (x) => `${x.nombre || ''} ${x.apellido || ''}`.trim();
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
-export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
+export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], incidencias = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
   const PZ = { ...PLAZOS, screening: config.venc_screening_dias ?? PLAZOS.screening,
     test: config.venc_test_dias ?? PLAZOS.test, aviso: config.aviso_previo_dias ?? PLAZOS.aviso };
   const items = [];
@@ -146,6 +148,144 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
 
   // ── CRÍTICO ────────────────────────────────────────────────────────────
 
+  // ── EL RIEL: INCIDENCIAS CON ESCALÓN ───────────────────────────────────
+  //
+  // POR QUÉ ESTÁN ACÁ Y NO SOLO EN SALA
+  // El escalón 1 —pedir una valoración— se eligió notificar por RESUMEN
+  // DIARIO. Sin esto el resumen no existía: las valoraciones pendientes solo
+  // se veían abriendo la pestaña Sala, que es justamente la que no se abre
+  // cuando no hay nadie entrenando. Una valoración pendiente que nadie ve es
+  // un patrón bloqueado indefinidamente, y eso ya pasó: 8 de las 10
+  // incidencias históricas se cerraron sin derivación porque la única salida
+  // visible era la más pesada.
+  //
+  // `seguimiento` NO entra acá: es el estado heredado y ya tiene su propio
+  // aviso más abajo (`incid_revision`), armado desde la vista de Hoy. Meterlo
+  // también acá daría dos renglones para la misma revisión.
+  const nombreDe = (cid) => {
+    const c = gym.find(x => x.id === cid);
+    return c ? nom(c) : 'Cliente';
+  };
+  const clienteDeBaja = (cid) => gym.find(x => x.id === cid)?.activo === false;
+
+  // Lo que el riel ya sabe sobre cada zona de cada cliente. Lo consume el
+  // bloque de reportes de dolor de abajo para no decir dos veces lo mismo.
+  const rielPorZona = new Map();   // `${cliente}|${zona}` → incidencia
+  incidencias.forEach(i => {
+    if (!i.zona) return;
+    const k = `${i.gym_client_id}|${i.zona}`;
+    const prev = rielPorZona.get(k);
+    // Si hay varias para la misma zona gana la más reciente: es la que
+    // describe el estado actual del patrón.
+    if (!prev || String(i.fecha || '') > String(prev.fecha || '')) rielPorZona.set(k, i);
+  });
+
+  const cronicosEnSilencio = [];   // líneas de base vigentes: registran y callan
+
+  incidencias.forEach(i => {
+    const est = estadoIncidencia(i);
+    if (est === 'seguimiento' || est === 'resuelta') return;
+    if (clienteDeBaja(i.gym_client_id)) return;      // de baja: no está entrenando
+
+    const nombre = nombreDe(i.gym_client_id);
+    // Las 10 incidencias cargadas a mano antes del riel tienen `zona = ''`:
+    // la zona vivía en la nota libre ("Hombro derecho tendinosis…"). Sin este
+    // reemplazo el título decía "Antonela: zona sin especificar sin conducta
+    // definida", que además de ilegible suena a error de la app.
+    const conZona = !!i.zona;
+    const zona = conZona ? zonaTexto(i.zona) : 'incidencia';
+    const nat = naturalezaTexto(i.naturaleza);
+    const d = dias(i.fecha, hoy);
+    const desde = d == null ? '' : d === 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${plural(d, 'día', 'días')}`;
+    const esc = escalonDe(i);
+    const ficha = `${conZona ? zona : 'sin zona registrada'}${nat ? ` · ${nat}` : ''}` +
+      (i.banda ? ` · ${i.banda}` : '') +
+      (i.origen === 'feedback' ? ' · lo reportó el cliente en el portal' : i.origen ? ` · ${i.origen}` : '') +
+      (desde ? ` · ${desde}` : '');
+
+    // ── Línea de base vigente: no es un aviso, es lo contrario ───────────
+    // Está acá y no afuera porque es el único lugar donde se puede verificar
+    // que la decisión sigue vigente. Vencida sube a aviso; viva se cuenta en
+    // un renglón agrupado para que se sepa que está haciendo su trabajo.
+    if (est === 'linea_base') {
+      const vence = fechaVence(i);
+      if (!esPendiente(i, hoy)) {
+        cronicosEnSilencio.push({ id: i.gym_client_id, nombre: `${nombre} (${zona})`, vence });
+        return;
+      }
+      const dv = dias(vence, hoy);
+      add({
+        key: `base_vencida:${i.id}`, sev: 'atencion', icono: '📌',
+        titulo: `Revalorar el crónico de ${nombre}: ${zona}`,
+        detalle: `La línea de base venció ${dv === 0 ? 'hoy' : `hace ${plural(dv, 'día', 'días')}`}` +
+          ` (del ${vence})` + (i.notas_seguimiento ? ` · veredicto anterior: “${i.notas_seguimiento}”` : ''),
+        rank: 600 + (dv || 0), clienteId: i.gym_client_id, incidenciaId: i.id, escalon: esc, estado: 'base_vencida',
+        accion: { label: 'Abrir el riel de sala', tab: 'sala', clienteId: i.gym_client_id },
+        porQue: 'Una línea de base dice "esto es su normal" con fecha de caducidad. Vencida, el riel dejó de disparar sobre una zona que nadie volvió a mirar.',
+      });
+      return;
+    }
+
+    // ── Los tres estados que piden una acción ────────────────────────────
+    // La zona va como SUFIJO y no incrustada en la frase: así el título sigue
+    // leyéndose cuando no hay zona, que es el caso de todo lo cargado a mano
+    // antes del riel.
+    const z = conZona ? `: ${zona}` : '';
+    const AVISO = {
+      valoracion_pendiente: {
+        sev: 'critico', icono: '🔍', rank: 900,
+        titulo: `Valoración pendiente de ${nombre}${z}`,
+        porQue: 'El patrón está sustituido y sin progresar, y así se queda hasta que haya veredicto. No vence por tiempo a propósito: la app no premia la demora.',
+      },
+      valoracion_hecha: {
+        sev: 'critico', icono: '🧭', rank: 920,
+        titulo: `${nombre} está valorada y sin rutear${z}`,
+        porQue: 'Hay veredicto escrito y el patrón sigue bloqueado. Falta la decisión: baja a sala, bloque dirigido, clínica o crónico conocido.',
+      },
+      abierta: {
+        sev: 'critico', icono: '⚠️', rank: 940,
+        titulo: `${nombre}${z || ': incidencia'} sin conducta definida`,
+        porQue: nat === 'nerviosa'
+          ? 'Naturaleza nerviosa: el riel la mandó directo a escalón 3 y nadie definió conducta. Es el único patrón que no se sustituye, se deriva.'
+          : 'El riel la abrió y nadie decidió qué hacer. Mientras tanto el patrón queda sustituido y sin progresar.',
+      },
+      declinada: {
+        sev: 'atencion', icono: '✗', rank: 200,
+        titulo: `${nombre} declinó el escalón${z}`,
+        porQue: 'La decisión es del cliente y queda registrada. El patrón se libera solo a las 8 sesiones ejecutadas sin reporte nuevo en esa zona.',
+      },
+      en_sala: {
+        sev: 'manten', icono: '🔧', rank: 150,
+        titulo: `${nombre}${z || ': incidencia'} con ajuste en sala`,
+        porQue: 'Escalón 0 corriendo. Se libera solo a las 4 sesiones ejecutadas sin reporte nuevo. Aparece acá para que el ajuste no se olvide, no para hacer algo hoy.',
+      },
+      programa: {
+        sev: 'manten', icono: '📋', rank: 140,
+        titulo: `${nombre}: bloque dirigido corriendo${conZona ? ` en ${zona}` : ''}`,
+        porQue: 'Escalón 2. El patrón ya no está bloqueado: hay trabajo específico dentro del plan.',
+      },
+      derivada: {
+        sev: 'atencion', icono: '🏥', rank: 210,
+        titulo: `${nombre} está derivada a clínica${z}`,
+        porQue: 'Escalón 3. El patrón queda bloqueado hasta que la clínica devuelva conducta.',
+      },
+    }[est];
+    if (!AVISO) return;
+
+    add({
+      key: `riel:${i.id}`, sev: AVISO.sev, icono: AVISO.icono,
+      titulo: AVISO.titulo,
+      // "Escalón 0 · Sin conducta" es contradictorio: sin conducta no hay
+      // escalón. Las incidencias viejas traen la columna en 0 porque el valor
+      // por defecto es 0, no porque alguien las haya ruteado al escalón 0.
+      detalle: `${est === 'abierta' ? 'Sin escalón asignado' : `Escalón ${esc}`} · ${etiquetaEstado(i)} · ${ficha}` +
+        (i.nota ? ` · “${i.nota}”` : ''),
+      rank: AVISO.rank + (d || 0), clienteId: i.gym_client_id, incidenciaId: i.id, escalon: esc, estado: est,
+      accion: { label: 'Abrir el riel de sala', tab: 'sala', clienteId: i.gym_client_id },
+      porQue: AVISO.porQue,
+    });
+  });
+
   // ── REPORTES DE DOLOR DEL PORTAL, UNO POR UNO ─────────────────────────
   // Antes era un solo aviso por cliente con el CONTEO de sesiones: "2 sesiones
   // con molestia ≥4/10". No decía dónde dolía, cuánto, qué día ni en qué
@@ -153,8 +293,29 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
   // aviso, con su zona, su intensidad y su sesión, y se puede cerrar por
   // separado: atender el lumbar del martes no debe tapar la rodilla del jueves.
   // Aparecen TODOS los que manifiesten dolor, no solo los de 4 o más.
+  //
+  // LO QUE EL RIEL YA TOMÓ NO SE REPITE ACÁ
+  // Desde el 29/10 el disparador crea una incidencia por cada molestia
+  // reportada, así que sin este filtro cada molestia salía DOS veces: una como
+  // reporte crudo y otra como incidencia con conducta. Dos renglones para un
+  // problema y dos lugares donde cerrarlo. Gana el del riel, que es el que
+  // tiene escalón y botones de conducta; el reporte crudo queda como el dato
+  // que lo originó.
   const deBaja = new Set(gym.filter(c => c.activo === false).map(c => c.id));
-  reportes.filter(r => (r.dolor || 0) > 0 && !deBaja.has(r.gym_client_id)).forEach(r => {
+  const yaEnElRiel = (r) => {
+    const i = rielPorZona.get(`${r.gym_client_id}|${r.dolor_zona || ''}`);
+    if (!i) return false;
+    const est = estadoIncidencia(i);
+    if (est === 'resuelta') return false;             // cerrada: el reporte nuevo vuelve a contar
+    // Una línea de base VENCIDA ya generó su propio aviso arriba; viva, el
+    // silencio es su función. En los dos casos el reporte crudo no aporta.
+    if (est === 'linea_base') return true;
+    // Sólo absorbe reportes de la incidencia en curso o anteriores. Uno
+    // POSTERIOR a su última fecha es información nueva que el disparador no
+    // alcanzó a rutear, y esconderlo sería perder el dato.
+    return String(r.fecha || '') <= String(i.fecha || '').slice(0, 10);
+  };
+  reportes.filter(r => (r.dolor || 0) > 0 && !deBaja.has(r.gym_client_id) && !yaEnElRiel(r)).forEach(r => {
     const c = gym.find(x => x.id === r.gym_client_id) || { nombre: r.cliente_nombre || 'Cliente', apellido: '' };
     const d = dias(r.fecha, hoy);
     const cuando = d === 0 ? 'hoy' : d === 1 ? 'ayer' : `hace ${plural(d, 'día', 'días')}`;
@@ -486,6 +647,23 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
     'Ver clientes', 'clientes',
     'Con varios planes activos, el portal le muestra el más reciente que ya empezó. Conviene cerrar los anteriores.');
 
+  // ── LO QUE EL RIEL ESTÁ CALLANDO A PROPÓSITO ──────────────────────────
+  // Este renglón no pide nada: dice cuántas molestias NO están en la bandeja
+  // porque ya se decidió que son el normal de esa persona. Sin él, marcar una
+  // línea de base se siente como perder información —el hallazgo desaparece y
+  // no queda señal de que la decisión existe— y la próxima vez nadie la marca.
+  if (cronicosEnSilencio.length && !oculto('g_cronicos')) {
+    grupos.push({
+      key: 'g_cronicos', sev: 'manten', icono: '📌', agrupado: true,
+      titulo: `${plural(cronicosEnSilencio.length, 'crónico conocido', 'crónicos conocidos')} sin avisar`,
+      detalle: cronicosEnSilencio.slice(0, 5).map(x => x.nombre).join(' · ') +
+        (cronicosEnSilencio.length > 5 ? ` y ${cronicosEnSilencio.length - 5} más` : ''),
+      lista: cronicosEnSilencio.map(x => ({ id: x.id, nombre: `${x.nombre} — se revisa el ${x.vence || '—'}` })),
+      accion: { label: 'Ver en sala', tab: 'sala' },
+      porQue: 'Son zonas con línea de base vigente: el riel registra el reporte y no dispara. Cuando vence la revisión aparecen arriba como aviso.',
+    });
+  }
+
   grupo('g_sin_portal', '🔑',
     (n) => `${plural(n, 'cliente', 'clientes')} con plan y sin usar el portal`,
     gym.filter(c => c.planes_activos > 0 && (c.portal_registros || 0) === 0),
@@ -513,8 +691,27 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
   const visibles = [...criticos, ...atencion.slice(0, cupoAtencion)];
   const ocultos = atencion.slice(cupoAtencion);
 
+  // El resumen del riel se devuelve aparte de la bandeja porque tiene otro
+  // destino: la bandeja se mira, el resumen se MANDA. Si fuera solo un filtro
+  // de `visibles` habría que recalcularlo en la pantalla, que es como se
+  // desincronizan las dos vistas de un mismo dato.
+  // Se filtra por `estado`, no por icono ni por el texto del título: asertar
+  // contra prosa ya costó tres bugs esta semana, el último un `like '%linea de
+  // base%'` que nunca matcheó porque el dato decía "línea".
+  const delRiel = items.filter(i => i.incidenciaId);
+  const porEstado = (e) => delRiel.filter(i => i.estado === e);
+  const riel = {
+    valoraciones:  porEstado('valoracion_pendiente'),
+    rutear:        porEstado('valoracion_hecha'),
+    sinConducta:   porEstado('abierta'),
+    basesVencidas: porEstado('base_vencida'),
+    cronicos: cronicosEnSilencio,
+  };
+  riel.pendientes = riel.valoraciones.length + riel.rutear.length +
+    riel.sinConducta.length + riel.basesVencidas.length;
+
   return {
-    visibles, ocultos, proximos, grupos,
+    visibles, ocultos, proximos, grupos, riel,
     conteo: { critico: criticos.length, atencion: atencion.length,
       proximos: proximos.length,
       manten: grupos.reduce((s, g) => s + g.lista.length, 0) },
@@ -522,4 +719,44 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
     todoAlDia: criticos.length === 0 && atencion.length === 0 && proximos.length === 0,
     generado: hoy,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EL RESUMEN DIARIO DEL RIEL, EN TEXTO
+//
+// POR QUÉ EN TEXTO Y NO OTRO PANEL
+// El escalón 1 se eligió notificar por resumen diario, y un resumen que vive
+// dentro de la app es un cuarto lugar donde mirar lo mismo. Esto sale de la
+// app: se copia o se manda por WhatsApp a quien tenga que hacer la valoración,
+// que puede no ser quien abre la app.
+//
+// No hay envío automático a propósito: no hay un servicio de mensajería
+// conectado, y un "resumen diario" que depende de que alguien lo mande es
+// honesto. Uno que dice enviarse y no se envía, no.
+// ═══════════════════════════════════════════════════════════════════════════
+export function resumenRiel(H, { centro = '' } = {}) {
+  const r = H?.riel;
+  if (!r) return '';
+  const f = new Date(String(H.generado || HOY()) + 'T12:00')
+    .toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });
+  const L = [`*Riel — ${f}*${centro ? ` · ${centro}` : ''}`];
+
+  if (!r.pendientes) {
+    L.push('', 'Sin valoraciones pendientes, sin incidencias sin conducta y sin líneas de base vencidas.');
+  } else {
+    const bloque = (titulo, lista) => {
+      if (!lista.length) return;
+      L.push('', `*${titulo}* (${lista.length})`);
+      lista.forEach(i => L.push(`• ${i.titulo}`));
+    };
+    bloque('Valoraciones pendientes', r.valoraciones);
+    bloque('Valoradas, falta rutear', r.rutear);
+    bloque('Sin conducta definida', r.sinConducta);
+    bloque('Crónicos a revalorar', r.basesVencidas);
+  }
+
+  if (r.cronicos.length) {
+    L.push('', `_${plural(r.cronicos.length, 'crónico conocido', 'crónicos conocidos')} con línea de base vigente: el riel no avisa sobre ${r.cronicos.length === 1 ? 'esa zona' : 'esas zonas'}._`);
+  }
+  return L.join('\n');
 }

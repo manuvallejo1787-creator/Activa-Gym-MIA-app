@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { construirHoy, SEV } from "./hoy.js";
+import { construirHoy, resumenRiel, SEV } from "./hoy.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Hoy.jsx — LA BANDEJA DE ENTRADA DEL CENTRO
@@ -16,10 +16,11 @@ import { construirHoy, SEV } from "./hoy.js";
 
 const BK = '#111', WH = '#fff', G4 = '#888', G2 = '#e5e5e5';
 
-export default function Hoy({ gym, fisio, descartes, reportes = [], loading, postergar, marcarItem, quitarMarca, onIr, brand, config = {} }) {
+export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias = [], loading, postergar, marcarItem, quitarMarca, onIr, brand, config = {} }) {
   const [verTodo, setVerTodo] = useState(false);
   const [abierto, setAbierto] = useState(null);
-  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, config }), [gym, fisio, descartes, reportes, config]);
+  const [copiado, setCopiado] = useState(false);
+  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, incidencias, config }), [gym, fisio, descartes, reportes, incidencias, config]);
 
   const hoyTxt = new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -113,6 +114,51 @@ export default function Hoy({ gym, fisio, descartes, reportes = [], loading, pos
         <div style={{ fontSize: 17, fontWeight: 900, color: '#111' }}>Hoy</div>
         <div style={{ fontSize: 11, color: G4, textTransform: 'capitalize' }}>{hoyTxt}</div>
       </div>
+
+      {/* ── RESUMEN DIARIO DEL RIEL ───────────────────────────────────────
+          El canal elegido para el escalón 1. No repite los avisos —están
+          abajo, cada uno con su botón— : lo que agrega es la SALIDA. Quien
+          tiene que hacer la valoración puede no ser quien abre la app, y hasta
+          acá el escalón 1 no tenía forma de llegarle. */}
+      {(H.riel.pendientes > 0 || H.riel.cronicos.length > 0) && (
+        <div style={{ background: H.riel.pendientes ? '#FFFBEB' : '#F8FAFC',
+          border: `1px solid ${H.riel.pendientes ? '#D97706' : G2}`, borderRadius: 10,
+          padding: '11px 13px', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 900, color: H.riel.pendientes ? '#92400E' : '#444' }}>
+            Riel — resumen del día
+          </div>
+          <div style={{ fontSize: 11, color: '#555', marginTop: 4, lineHeight: 1.55 }}>
+            {H.riel.pendientes
+              ? [
+                  H.riel.valoraciones.length && `${H.riel.valoraciones.length} valoración${H.riel.valoraciones.length > 1 ? 'es' : ''} pendiente${H.riel.valoraciones.length > 1 ? 's' : ''}`,
+                  H.riel.rutear.length && `${H.riel.rutear.length} valorada${H.riel.rutear.length > 1 ? 's' : ''} sin rutear`,
+                  H.riel.sinConducta.length && `${H.riel.sinConducta.length} sin conducta`,
+                  H.riel.basesVencidas.length && `${H.riel.basesVencidas.length} crónico${H.riel.basesVencidas.length > 1 ? 's' : ''} a revalorar`,
+                ].filter(Boolean).join(' · ')
+              : 'Nada pendiente en el riel.'}
+            {H.riel.cronicos.length > 0 && (
+              <div style={{ color: G4, marginTop: 3 }}>
+                {H.riel.cronicos.length} con línea de base vigente: el riel registra y no avisa.
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
+            <button onClick={async () => {
+                const txt = resumenRiel(H, { centro: config.nombre || '' });
+                try { await navigator.clipboard.writeText(txt); setCopiado(true); setTimeout(() => setCopiado(false), 2500); }
+                catch { prompt('Copialo desde acá:', txt); }   // sin permiso de portapapeles
+              }}
+              style={{ background: copiado ? '#16A34A' : BK, color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+              {copiado ? '✓ Copiado' : '📋 Copiar resumen'}
+            </button>
+            <a href={`https://wa.me/?text=${encodeURIComponent(resumenRiel(H, { centro: config.nombre || '' }))}`}
+              target="_blank" rel="noreferrer"
+              style={{ background: '#25D366', color: '#073b23', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, textDecoration: 'none' }}>
+              Enviar por WhatsApp
+            </a>
+          </div>
+        </div>
+      )}
 
       {H.todoAlDia ? (
         <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 10, padding: '22px 16px', textAlign: 'center', marginBottom: 12 }}>

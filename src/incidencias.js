@@ -53,11 +53,16 @@ export const ESTADOS = {
   // sentido de marcar una línea de base es que deje de aparecer como hallazgo
   // abierto. Si siguiera contando, el caso de Raúl ensuciaría el panel para
   // siempre, que es justo lo que se vino a resolver.
-  linea_base:           { label: 'Línea de base',         escalon: 0,    pendiente: false, vigente: false, bloquea: false },
+  //
+  // PERO sí vuelve a ser pendiente cuando vence su revisión. Una línea de base
+  // es una decisión con fecha de caducidad —"esto es su normal, se revisa en 90
+  // días"— y sin esto la caducidad quedaba escrita y sin consumir: el único
+  // lugar donde se veía era el panel de sala, que hay que abrir para verlo.
+  linea_base:           { label: 'Línea de base',         escalon: 0,    pendiente: { vence: 'revision_vence' }, vigente: false, bloquea: false },
   // Estado heredado del riel anterior, previo a los escalones. Se conserva
   // porque hay incidencias guardadas con él: pendiente sólo cuando venció su
   // fecha de revisión.
-  seguimiento:          { label: 'En seguimiento',        escalon: 0,    pendiente: 'vence', vigente: true, bloquea: false },
+  seguimiento:          { label: 'En seguimiento',        escalon: 0,    pendiente: { vence: 'fecha_revision' }, vigente: true, bloquea: false },
   resuelta:             { label: 'Resuelta',              escalon: null, pendiente: false, vigente: false, bloquea: false },
 };
 
@@ -75,10 +80,26 @@ export const metaEstado = (inc) => ESTADOS[estadoDe(inc)];
 export const etiquetaEstado = (inc) => metaEstado(inc).label;
 
 // ¿Requiere una acción hoy? `hoy` se inyecta para poder probarlo.
+//
+// Dos estados son pendientes POR FECHA y cada uno guarda la suya en una columna
+// distinta: `seguimiento` en `fecha_revision` (heredada del riel viejo) y
+// `linea_base` en `revision_vence` (la que escribe marcarLineaBase). Son dos
+// nombres para lo mismo y es una deuda del esquema, no un criterio; mientras
+// exista, el estado dice cuál es la suya en lugar de que esta función adivine.
 export function esPendiente(inc = {}, hoy = new Date().toISOString().slice(0, 10)) {
   const p = metaEstado(inc).pendiente;
-  if (p === 'vence') return !!(inc.fecha_revision && inc.fecha_revision <= hoy);
+  if (p && typeof p === 'object' && p.vence) {
+    const f = inc[p.vence];
+    return !!(f && String(f).slice(0, 10) <= hoy);
+  }
   return !!p;
+}
+
+// La fecha por la que esta incidencia vence, si vence por fecha. La consume la
+// bandeja de Hoy para poder decir hace cuántos días, no sólo que venció.
+export function fechaVence(inc = {}) {
+  const p = metaEstado(inc).pendiente;
+  return (p && typeof p === 'object' && p.vence) ? (inc[p.vence] || null) : null;
 }
 
 // ¿Hay algo abierto sobre este cliente?
@@ -100,6 +121,30 @@ export function escalonDe(inc = {}) {
 // agrega cuando exista el contador de sesiones sin reporte que lo consume:
 // dejarla escrita de antemano sería código muerto, y el estándar es explícito
 // en que nada quede sin conectar.
+
+// ── EL VOCABULARIO DE LA ZONA Y LA NATURALEZA ─────────────────────────────
+// Las claves las escribe el portal (`zonaClave`: zona + lado cuando es
+// bilateral) y las leen la bandeja de Hoy, el panel de sala y el riel. Hasta
+// ahora cada pantalla hacía `String(zona).replace(/_/g,' ')`, que devuelve
+// "rodilla izq" y "muneca der": sin tildes y sin mayúscula, porque la clave
+// nunca fue texto para mostrar. Con tres lugares haciendo lo mismo mal, la
+// traducción va donde ya viven los estados.
+const ZONAS = {
+  cuello: 'Cuello', hombro: 'Hombro', codo: 'Codo', muneca: 'Muñeca',
+  dorsal: 'Espalda alta', lumbar: 'Lumbares', cadera: 'Cadera',
+  rodilla: 'Rodilla', tobillo: 'Tobillo',
+};
+const LADOS = { izq: 'izq', der: 'der', ambos: 'ambos lados' };
+
+export function zonaTexto(zona) {
+  if (!zona) return 'zona sin especificar';
+  const [base, lado] = String(zona).split('_');
+  const z = ZONAS[base] || (base.charAt(0).toUpperCase() + base.slice(1));
+  return lado && LADOS[lado] ? `${z} ${LADOS[lado]}` : z;
+}
+
+export const NATURALEZAS = { muscular: 'muscular', articular: 'articular', nerviosa: 'nerviosa' };
+export const naturalezaTexto = (n) => NATURALEZAS[n] || null;
 
 // ── QUÉ SE PUEDE HACER DESDE CADA ESTADO ──────────────────────────────────
 // Antes las pantallas ofrecían siempre los mismos tres botones —resuelta,

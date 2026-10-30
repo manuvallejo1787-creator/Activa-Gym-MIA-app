@@ -3946,7 +3946,12 @@ export default function App(){
   const { tests:salaTests, planes:salaPlanes, feedback:salaFeedback, lineasBase:salaLineasBase, bloqueos:salaBloqueos } = useSalaDatos(salaIds);
   const [rutinaVer,setRutinaVer]=useState(null);
   const [rielCliente,setRielCliente]=useState(null);
-  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes]);
+  // El contador de la pestaña tiene que construir la MISMA bandeja que la
+  // pantalla: si acá faltara `incidencias`, el badge diría 2 y la pantalla
+  // mostraría 5. Es el mismo tipo de desincronización que ya pasó con las dos
+  // listas blancas de estados. `brand` entra en las dependencias porque
+  // config cambia los plazos de vencimiento.
+  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,incidencias,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes,incidencias,brand]);
   const [gpDias,setGpDias]=useState(3);
   const [gpDiv,setGpDiv]=useState('auto');
   const [gpLibre,setGpLibre]=useState('');
@@ -6009,7 +6014,7 @@ export default function App(){
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='hoy'&&(
-          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} loading={hoyLoading} config={brand||{}}
+          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} incidencias={incidencias} loading={hoyLoading} config={brand||{}}
             postergar={hoyPostergar} marcarItem={hoyMarcar} quitarMarca={hoyQuitarMarca} brand={brand}
             onIr={(destino,id)=>{
               // Cada ítem se resuelve en un toque: la navegación deja a la
