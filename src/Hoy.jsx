@@ -16,11 +16,12 @@ import { construirHoy, resumenRiel, SEV } from "./hoy.js";
 
 const BK = '#111', WH = '#fff', G4 = '#888', G2 = '#e5e5e5';
 
-export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias = [], loading, postergar, marcarItem, quitarMarca, onIr, brand, config = {} }) {
+export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], loading, postergar, marcarItem, quitarMarca, onIr, onPuente, onVincular, brand, config = {} }) {
   const [verTodo, setVerTodo] = useState(false);
   const [abierto, setAbierto] = useState(null);
   const [copiado, setCopiado] = useState(false);
-  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, incidencias, config }), [gym, fisio, descartes, reportes, incidencias, config]);
+  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, config }),
+    [gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, config]);
 
   const hoyTxt = new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -57,6 +58,27 @@ export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias 
                 <button onClick={() => onIr(it.accion.tab, it.accion.clienteId || it.accion.pacienteId)}
                   style={{ background: sv.color, color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
                   {it.accion.label} →
+                </button>
+              )}
+              {/* EL TOQUE QUE APLICA. Está acá y no dentro de una pantalla
+                  aparte porque el aviso y la acción tienen que vivir juntos:
+                  un aviso que obliga a navegar para resolverse se posterga. */}
+              {it.puente && it.puente.accion === 'confirmar' && (
+                <button onClick={() => onPuente?.(it.puente)}
+                  style={{ background: '#0F766E', color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                  ✓ Confirmar el alta
+                </button>
+              )}
+              {it.puente && it.puente.accion === 'bloquear' && (
+                <button onClick={() => onPuente?.(it.puente)}
+                  style={{ background: '#9A3412', color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                  🔒 Bloquear el patrón de la zona
+                </button>
+              )}
+              {it.vinculos && it.vinculos.length > 0 && (
+                <button onClick={() => onVincular?.(it.vinculos)}
+                  style={{ background: BK, color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                  🔗 Vincular {it.vinculos.length === 1 ? 'al paciente' : `los ${it.vinculos.length}`}
                 </button>
               )}
               <button onClick={() => setAbierto(ab ? null : it.key)}

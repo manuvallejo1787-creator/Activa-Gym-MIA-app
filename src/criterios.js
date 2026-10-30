@@ -342,6 +342,37 @@ export const generarProtocoloRehab=(region='', tejido='', objetivo='', evaInicia
   });
 };
 
+// ── EL ORDEN DE LAS FASES ─────────────────────────────────────────────────
+//
+// POR QUÉ EXISTE
+// El 30/10, al conectar la clínica con el gimnasio, hubo que decidir si un
+// cambio de fase SUBE o BAJA — porque la decisión de Manu es que hacia abajo
+// se actúe solo e inmediato, y hacia arriba haga falta un toque. Y el orden no
+// estaba escrito en ningún lado: estaba implícito en el orden de las claves de
+// FASES_METODO, que es un detalle del archivo, no una regla.
+//
+// Un orden implícito es el mismo problema que las dos listas blancas de
+// estados del 29/10: funciona hasta que alguien reordena el objeto.
+//
+// POR QUÉ IMPORTA LA DIRECCIÓN
+// Equivocarse hacia abajo cuesta que a alguien le frenen el plan de más.
+// Equivocarse hacia arriba le habilita trabajo pesado y balístico sin que el
+// que está en sala lo haya visto. No son el mismo error.
+export const ORDEN_FASES = ['restaura', 'activa', 'potencia', 'rinde'];
+
+// El nivel numérico de una fase. -1 si no se reconoce: ante la duda, que no
+// parezca un ascenso.
+export const nivelFase = (f) => ORDEN_FASES.indexOf(String(f || ''));
+
+// 'baja' | 'sube' | 'igual' | null (cuando alguna no se reconoce).
+// `null` NO es 'igual' a propósito: una fase desconocida es un dato roto, y
+// tratarla como "no pasa nada" la esconde.
+export function direccionCambio(faseActual, faseNueva) {
+  const a = nivelFase(faseActual), b = nivelFase(faseNueva);
+  if (a < 0 || b < 0) return null;
+  return b < a ? 'baja' : b > a ? 'sube' : 'igual';
+}
+
 // Traducción explícita: fase clínica de rehab → fase de negocio del Método.
 export const mapearFaseRehabANegocio=(faseRehabKey)=>{
   const MAP={proteccion:'restaura', carga_progresiva:'activa', retorno_funcion:'potencia'};

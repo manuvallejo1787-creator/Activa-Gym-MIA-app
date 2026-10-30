@@ -21,6 +21,7 @@
 import { PERIODIZACIONES, parseDuracionSemanas } from "./planificacion.js";
 import { estadoDe as estadoIncidencia, esPendiente, escalonDe, etiquetaEstado,
          fechaVence, zonaTexto, naturalezaTexto } from "./incidencias.js";
+import { decidir, textoAviso, sugerirVinculos, etiquetaFase } from "./puenteClinica.js";
 
 // ─── VENCIMIENTOS ─────────────────────────────────────────────────────────
 // Plazos por defecto; se pueden cambiar en centro_config sin tocar código.
@@ -125,7 +126,7 @@ const sumarDias = (fecha, n) => {
 const nom = (x) => `${x.nombre || ''} ${x.apellido || ''}`.trim();
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
-export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], incidencias = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
+export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
   const PZ = { ...PLAZOS, screening: config.venc_screening_dias ?? PLAZOS.screening,
     test: config.venc_test_dias ?? PLAZOS.test, aviso: config.aviso_previo_dias ?? PLAZOS.aviso };
   const items = [];
@@ -283,6 +284,68 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
       rank: AVISO.rank + (d || 0), clienteId: i.gym_client_id, incidenciaId: i.id, escalon: esc, estado: est,
       accion: { label: 'Abrir el riel de sala', tab: 'sala', clienteId: i.gym_client_id },
       porQue: AVISO.porQue,
+    });
+  });
+
+  // ── EL PUENTE CLÍNICA ↔ GIMNASIO ───────────────────────────────────────
+  //
+  // POR QUÉ ESTÁ EN LA BANDEJA Y NO EN LA PANTALLA DE FISIO
+  // Porque la consecuencia es del gimnasio. Un alta de clínica que sólo se ve
+  // abriendo FisioActiva es un cliente que se queda con el patrón bloqueado
+  // hasta que alguien, por casualidad, abre esa pestaña. Es el mismo error que
+  // tenía el escalón 1 antes del resumen diario.
+  //
+  // LA DECISIÓN QUE ESTO IMPLEMENTA (Manu, 30/10): hacia abajo la app actúa
+  // sola y acá sólo se informa; hacia arriba NUNCA actúa sola y acá está el
+  // toque que lo aplica.
+  puente.forEach(fila => {
+    const d = decidir(fila);
+    if (d.accion === 'nada') return;
+    const t = textoAviso(d, fila.nombre || 'El cliente');
+    if (!t) return;
+
+    // 'bloquear' es lo único crítico de este bloque: la clínica bajó la fase y
+    // el patrón TODAVÍA NO está bloqueado, así que el cliente puede cargarlo
+    // hoy. Lo demás es servicio, no riesgo: confirmar un alta tarde retiene a
+    // alguien de más, que es molesto pero no peligroso.
+    const sev = d.accion === 'bloquear' ? 'critico'
+      : d.accion === 'revisar' ? 'atencion' : 'atencion';
+    add({
+      key: `puente_${d.accion}:${fila.gym_client_id}`,
+      sev, icono: d.accion === 'bloquear' ? '🏥' : d.accion === 'revisar' ? '❓' : '🎓',
+      titulo: t.titulo,
+      detalle: `Gimnasio: ${etiquetaFase(fila.fase_gym)} · Clínica: ${etiquetaFase(fila.fase_clinica)}` +
+        (fila.fecha_eval ? ` · evaluación del ${fila.fecha_eval}` : '') +
+        (fila.region ? ` · ${fila.region}` : '') +
+        ` · ${fila.planes_activos || 0} plan${(fila.planes_activos || 0) === 1 ? '' : 'es'} activo${(fila.planes_activos || 0) === 1 ? '' : 's'}`,
+      rank: d.accion === 'bloquear' ? 950 : 700,
+      clienteId: fila.gym_client_id,
+      // Lo consume App.jsx para ofrecer el botón de un toque que corresponda.
+      puente: { ...d, clienteId: fila.gym_client_id, nombre: fila.nombre,
+        evaluacionId: fila.evaluacion_id || null },
+      accion: { label: d.accion === 'bloquear' ? 'Abrir el riel de sala' : 'Abrir ficha',
+        tab: d.accion === 'bloquear' ? 'sala' : 'clientes', clienteId: fila.gym_client_id },
+      porQue: t.porQue,
+    });
+  });
+
+  // ── LO QUE LA APP HIZO SOLA ────────────────────────────────────────────
+  // Una bajada automática deja las dos fases iguales, así que la vista del
+  // puente deja de mostrarla. Sin este renglón la app le cambiaría la fase a
+  // un cliente y nadie se enteraría nunca — y una automatización invisible no
+  // se puede auditar ni desarmar.
+  cambiosFase.filter(c => c.origen === 'clinica_automatico').forEach(c => {
+    const dd = dias(String(c.fecha || '').slice(0, 10), hoy);
+    if (dd == null || dd > 7) return;            // una semana a la vista, no para siempre
+    const g = gym.find(x => x.id === c.gym_client_id);
+    add({
+      key: `fase_auto:${c.id}`, sev: 'manten', icono: '⬇️',
+      titulo: `La app bajó a ${g ? nom(g) : 'un cliente'} de ${etiquetaFase(c.fase_de)} a ${etiquetaFase(c.fase_a)}`,
+      detalle: (c.nota || 'Bajada automática por indicación de la clínica.') +
+        (dd === 0 ? ' · hoy' : dd === 1 ? ' · ayer' : ` · hace ${plural(dd, 'día', 'días')}`),
+      rank: 100 - dd, clienteId: c.gym_client_id,
+      accion: { label: 'Ver ficha', tab: 'clientes', clienteId: c.gym_client_id },
+      porQue: 'No hay nada que hacer: se informa para que quede constancia de que la fase la movió la app y no una persona. Bajar es el lado seguro y no espera a nadie.',
     });
   });
 
@@ -664,6 +727,48 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
     });
   }
 
+  // ── PACIENTES DE LA CLÍNICA SIN VINCULAR ──────────────────────────────
+  // Medido el 30/10: sólo 8 de 80 clientes activos están vinculados a un
+  // paciente de la clínica, y 2 pacientes no están vinculados a nadie. Todo el
+  // puente corre sobre el vínculo, así que sin vínculo no corre nada — y eso
+  // no se nota, porque la ausencia de avisos se parece a que todo está bien.
+  //
+  // Se separan en dos renglones a propósito: los que tienen un cliente del
+  // mismo nombre son un toque de trabajo; los que no, hay que buscarlos a mano.
+  {
+    const conPar = sugerirVinculos(
+      sueltos.map(s => {
+        const partes = String(s.nombre || '').trim().split(' ');
+        return { id: s.paciente_id, nombre: partes[0] || '', apellido: partes.slice(1).join(' ') };
+      }), gym);
+    const idsConPar = new Set(conPar.map(x => x.pacienteId));
+
+    if (conPar.length && !oculto('g_vincular')) {
+      grupos.push({
+        key: 'g_vincular', sev: 'manten', icono: '🔗', agrupado: true,
+        titulo: `${plural(conPar.length, 'paciente', 'pacientes')} de la clínica con su cliente del gym sin vincular`,
+        detalle: conPar.slice(0, 5).map(x => x.nombre).join(' · ') +
+          (conPar.length > 5 ? ` y ${conPar.length - 5} más` : ''),
+        lista: conPar.map(x => ({ id: x.clienteId, nombre: x.nombre })),
+        vinculos: conPar,
+        accion: { label: 'Ver clientes', tab: 'clientes' },
+        porQue: 'Coincide el nombre y apellido con un cliente activo. Mientras no estén vinculados, un alta o una bajada de fase de la clínica no llega al gimnasio: el puente entero corre sobre ese vínculo.',
+      });
+    }
+    const sinPar = sueltos.filter(s => !idsConPar.has(s.paciente_id));
+    if (sinPar.length && !oculto('g_sin_par')) {
+      grupos.push({
+        key: 'g_sin_par', sev: 'manten', icono: '🏥', agrupado: true,
+        titulo: `${plural(sinPar.length, 'paciente', 'pacientes')} de la clínica sin cliente del gym`,
+        detalle: sinPar.slice(0, 5).map(s => s.nombre).join(' · ') +
+          (sinPar.length > 5 ? ` y ${sinPar.length - 5} más` : ''),
+        lista: sinPar.map(s => ({ id: s.paciente_id, nombre: s.nombre })),
+        accion: { label: 'Ver pacientes', tab: 'fisio' },
+        porQue: 'O sólo usan la clínica —y entonces está bien así— o son candidatos a seguir en el gimnasio y nadie los invitó. Las dos cosas se resuelven mirando la lista una vez.',
+      });
+    }
+  }
+
   grupo('g_sin_portal', '🔑',
     (n) => `${plural(n, 'cliente', 'clientes')} con plan y sin usar el portal`,
     gym.filter(c => c.planes_activos > 0 && (c.portal_registros || 0) === 0),
@@ -710,8 +815,20 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
   riel.pendientes = riel.valoraciones.length + riel.rutear.length +
     riel.sinConducta.length + riel.basesVencidas.length;
 
+  // El puente va aparte del riel aunque los dos salgan de la clínica: el riel
+  // lo resuelve quien está en sala, y el puente lo confirma quien decide la
+  // fase. Mezclarlos haría que el resumen diario le mande a una persona cosas
+  // que no son suyas.
+  const clinica = {
+    confirmar: items.filter(i => i.puente && i.puente.accion === 'confirmar'),
+    bloquear:  items.filter(i => i.puente && i.puente.accion === 'bloquear'),
+    revisar:   items.filter(i => i.puente && i.puente.accion === 'revisar'),
+    automaticas: items.filter(i => i.key.startsWith('fase_auto:')),
+  };
+  clinica.pendientes = clinica.confirmar.length + clinica.bloquear.length + clinica.revisar.length;
+
   return {
-    visibles, ocultos, proximos, grupos, riel,
+    visibles, ocultos, proximos, grupos, riel, clinica,
     conteo: { critico: criticos.length, atencion: atencion.length,
       proximos: proximos.length,
       manten: grupos.reduce((s, g) => s + g.lista.length, 0) },
@@ -753,6 +870,14 @@ export function resumenRiel(H, { centro = '' } = {}) {
     bloque('Valoradas, falta rutear', r.rutear);
     bloque('Sin conducta definida', r.sinConducta);
     bloque('Crónicos a revalorar', r.basesVencidas);
+  }
+
+  const c = H.clinica;
+  if (c && c.pendientes) {
+    L.push('', `*Clínica ↔ gimnasio* (${c.pendientes})`);
+    c.bloquear.forEach(i => L.push(`• ${i.titulo}`));
+    c.confirmar.forEach(i => L.push(`• ${i.titulo}`));
+    c.revisar.forEach(i => L.push(`• ${i.titulo}`));
   }
 
   if (r.cronicos.length) {

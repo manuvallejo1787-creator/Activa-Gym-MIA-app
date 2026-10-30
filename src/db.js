@@ -3,6 +3,29 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, isSupabaseReady } from './supabase.js'
 import { aplicarBandasDeTabla } from './motor.js'
 
+// ─── Registro de cambios de fase del método ───────────────────────────────
+// POR QUÉ ES UNA FUNCIÓN DE ACÁ Y NO UN `supabase.from(...)` EN App.jsx
+// Lo escribí primero en App.jsx y eslint lo cazó: `supabase` e
+// `isSupabaseReady` no existen en ese archivo. Habría sido pantalla en blanco
+// al tocar el botón, con el build en verde — el mismo tipo de falla que hizo
+// nacer esta configuración de eslint el 21/10. La base se toca desde acá.
+//
+// QUÉ REGISTRA Y POR QUÉ IMPORTA
+// Quién movió la fase de un cliente: la clínica automáticamente, alguien
+// confirmando un alta, o a mano. Sin eso, dentro de un mes no hay forma de
+// saber de dónde salió una fase — y de eso depende poder desarmar la
+// automatización si resulta estar mal.
+export async function registrarCambioFase(fila){
+  if(!isSupabaseReady)return
+  const{error}=await supabase.from('gym_fase_historial').insert({
+    id:'fh_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    fecha:new Date().toISOString(), ...fila,
+  })
+  // Que falle el registro NO puede impedir el cambio de fase, que es lo que el
+  // profesional vino a hacer. Queda en la consola y el cambio se aplica igual.
+  if(error)console.error('gym_fase_historial:',error.message)
+}
+
 export const genId = (prefix = 'id') =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,7)}`
 
@@ -1292,11 +1315,18 @@ export function useHoy(){
   const [fisio,setFisio]=useState([])
   const [descartes,setDescartes]=useState([])
   const [reportes,setReportes]=useState([])
+  // Puente clínica-gimnasio (30/10). Van en este hook y no en uno aparte para
+  // que la bandeja se arme con UNA sola tanda de consultas: si llegaran por
+  // separado, la pantalla se pintaría dos veces y el contador de la pestaña
+  // diría un número distinto al de la pantalla por un instante.
+  const [puente,setPuente]=useState([])
+  const [sueltos,setSueltos]=useState([])
+  const [cambiosFase,setCambiosFase]=useState([])
   const [loading,setLoading]=useState(true)
   const fetch=useCallback(async()=>{
     if(!isSupabaseReady){setLoading(false);return}
     try{
-      const[g,f,d,r]=await Promise.all([
+      const[g,f,d,r,pc,sv,fh]=await Promise.all([
         supabase.from('hoy_gym').select('*'),
         supabase.from('hoy_fisio').select('*'),
         supabase.from('hoy_descartes').select('*'),
@@ -1305,10 +1335,26 @@ export function useHoy(){
         supabase.from('gym_sesion_feedback')
           .select('id,gym_client_id,dia_id,dia_nombre,semana,fecha,rpe_sesion,energia,dolor,dolor_zona,nota,llegada,molestia,naturaleza,momento,ahora,intensidad')
           .gt('dolor',0).order('fecha',{ascending:false}).limit(120),
+        supabase.from('gym_clinica_puente').select('*'),
+        supabase.from('fisio_sin_vincular').select('*'),
+        // Los cambios de fase de los últimos 14 días. Una bajada automática
+        // deja las dos fases iguales, así que la vista del puente deja de
+        // mostrarla: sin esta consulta, la app le cambiaría la fase a alguien y
+        // nadie se enteraría nunca.
+        supabase.from('gym_fase_historial').select('*')
+          .gte('fecha',new Date(Date.now()-14*864e5).toISOString())
+          .order('fecha',{ascending:false}).limit(60),
       ])
       if(g.error)throw g.error; if(f.error)throw f.error
       if(r.error)console.error('hoy/reportes:',r.error.message)
+      // Las tres del puente NO tiran la bandeja si fallan: mientras la
+      // migración no esté corrida devuelven error y el resto tiene que seguir
+      // funcionando igual.
+      if(pc.error)console.error('hoy/puente:',pc.error.message)
+      if(sv.error)console.error('hoy/sin-vincular:',sv.error.message)
+      if(fh.error)console.error('hoy/fase-historial:',fh.error.message)
       setGym(g.data||[]);setFisio(f.data||[]);setDescartes(d.data||[]);setReportes(r.data||[])
+      setPuente(pc.data||[]);setSueltos(sv.data||[]);setCambiosFase(fh.data||[])
     }catch(e){console.error('useHoy:',e.message)}
     finally{setLoading(false)}
   },[])
@@ -1332,7 +1378,7 @@ export function useHoy(){
     if(error){console.error('quitarMarca:',error.message);fetch()}
   },[fetch])
   const postergar=useCallback((item_key,dias=7,motivo='')=>marcarItem(item_key,'descartado',motivo),[marcarItem])
-  return{gym,fisio,descartes,reportes,loading,refetch:fetch,postergar,marcarItem,quitarMarca}
+  return{gym,fisio,descartes,reportes,puente,sueltos,cambiosFase,loading,refetch:fetch,postergar,marcarItem,quitarMarca}
 }
 
 // ─── HOOK: datos de sala para VARIOS clientes a la vez ───────────────────

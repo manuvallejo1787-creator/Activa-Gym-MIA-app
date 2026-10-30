@@ -147,7 +147,88 @@ console.log('\n4. El contador del riel y el resumen que sale de la app');
   ok(H.riel.pendientes === 0, 'un aviso postergado no entra al resumen');
 }
 
-console.log('\n5. La bandeja sin riel sigue funcionando igual');
+console.log('\n5. El puente clínica-gimnasio en la bandeja');
+const pf = (o = {}) => ({ gym_client_id: 'c1', nombre: 'Maicol Prueba', fase_gym: 'activa',
+  fase_clinica: 'activa', fecha_eval: '2026-10-29', region: 'hombro',
+  planes_activos: 1, incidencia_abierta: false, ...o });
+{
+  // Un alta con plan corriendo: pide confirmación y NO es crítico.
+  const H = B({ puente: [pf({ fase_clinica: 'potencia' })] });
+  const it = [...H.visibles, ...H.ocultos].find(x => x.key === 'puente_confirmar:c1');
+  ok(!!it, 'un alta de clínica aparece en la bandeja');
+  ok(it?.sev === 'atencion', 'como atención y no como crítico: esperar retiene a alguien, no lo lastima');
+  ok(it?.puente?.accion === 'confirmar', 'lleva la decisión adentro para que el botón sepa qué hacer');
+  ok(/RESTAURA|ACTIVA|POTENCIA/.test(it?.detalle || ''), 'el detalle muestra las dos fases');
+  ok(H.clinica.confirmar.length === 1 && H.clinica.pendientes === 1, 'y entra al resumen de clínica');
+}
+{
+  // Una bajada con plan corriendo: CRÍTICO, porque el patrón todavía no está
+  // bloqueado y el cliente puede cargarlo hoy.
+  const H = B({ puente: [pf({ fase_gym: 'potencia', fase_clinica: 'restaura' })] });
+  const it = H.visibles.find(x => x.key === 'puente_bloquear:c1');
+  ok(!!it, 'una bajada con plan corriendo aparece');
+  ok(it?.sev === 'critico', 'y SÍ es crítica: el patrón no está bloqueado todavía');
+  ok(/hombro/.test(it?.titulo || ''), 'nombrando la zona');
+  ok(/resto del plan sigue igual/.test(it?.porQue || ''),
+    'y el porqué dice que el resto del plan no se toca');
+}
+{
+  const H = B({ puente: [pf({ fase_gym: 'potencia', fase_clinica: 'restaura', incidencia_abierta: true })] });
+  ok(![...H.visibles, ...H.ocultos].some(x => x.key.startsWith('puente_')),
+    'con la incidencia ya abierta no se avisa de nuevo: el patrón está tomado');
+}
+{
+  const H = B({ puente: [pf()] });
+  ok(![...H.visibles, ...H.ocultos].some(x => x.key.startsWith('puente_')),
+    'fases iguales: ningún aviso');
+  ok(H.clinica.pendientes === 0, 'y el resumen de clínica queda vacío');
+}
+{
+  const H = B({ puente: [pf({ fase_clinica: 'fase_inventada' })] });
+  ok([...H.visibles, ...H.ocultos].some(x => x.key === 'puente_revisar:c1'),
+    'una fase que no se reconoce se avisa en lugar de ignorarse');
+}
+{
+  // Lo que la app hizo sola tiene que quedar a la vista unos días.
+  const hoyISO = HOY;
+  const H = B({ cambiosFase: [{ id: 'fh1', gym_client_id: 'c1', fase_de: 'activa',
+    fase_a: 'restaura', direccion: 'baja', origen: 'clinica_automatico',
+    fecha: hoyISO + 'T10:00:00Z', nota: 'Bajada automática.' }] });
+  const it = [...H.visibles, ...H.ocultos, ...H.proximos].find(x => x.key === 'fase_auto:fh1');
+  ok(!!it, 'una bajada automática se informa: si no, la app cambia una fase y nadie se entera');
+  ok(/bajó a Maicol/.test(it?.titulo || ''), 'con el nombre del cliente');
+  ok(/constancia/.test(it?.porQue || ''), 'y aclara que es para que quede constancia, no para hacer algo');
+}
+{
+  const viejo = '2026-10-01T10:00:00Z';
+  const H = B({ cambiosFase: [{ id: 'fh2', gym_client_id: 'c1', fase_de: 'activa',
+    fase_a: 'restaura', origen: 'clinica_automatico', fecha: viejo }] });
+  ok(![...H.visibles, ...H.ocultos, ...H.proximos].some(x => x.key === 'fase_auto:fh2'),
+    'pasada una semana deja de mostrarse: no es un aviso permanente');
+}
+{
+  const H = B({ cambiosFase: [{ id: 'fh3', gym_client_id: 'c1', fase_de: 'restaura',
+    fase_a: 'activa', origen: 'confirmacion', fecha: HOY + 'T10:00:00Z' }] });
+  ok(![...H.visibles, ...H.ocultos, ...H.proximos].some(x => x.key === 'fase_auto:fh3'),
+    'una confirmación a mano NO se informa: la hizo una persona y ya lo sabe');
+}
+
+console.log('\n6. Pacientes de la clínica sin vincular');
+{
+  const H = B({ sueltos: [{ paciente_id: 'p1', nombre: 'Maicol Prueba', fase_clinica: 'activa' }] });
+  const g = H.grupos.find(x => x.key === 'g_vincular');
+  ok(!!g, 'un paciente con cliente del mismo nombre se ofrece para vincular');
+  ok(g?.vinculos?.length === 1 && g.vinculos[0].clienteId === 'c1', 'con el par resuelto');
+  ok(/puente entero corre sobre ese vínculo/.test(g?.porQue || ''),
+    'y explica por qué importa: sin vínculo no llega nada');
+}
+{
+  const H = B({ sueltos: [{ paciente_id: 'p9', nombre: 'Nadie Coincide' }] });
+  ok(H.grupos.some(x => x.key === 'g_sin_par'), 'uno sin par va a su propio renglón');
+  ok(!H.grupos.some(x => x.key === 'g_vincular'), 'y no al de vincular');
+}
+
+console.log('\n7. La bandeja sin riel sigue funcionando igual');
 {
   const H = B({ reportes: [rep()] });
   ok([...H.visibles, ...H.ocultos].some(x => x.key === 'dolor_reporte:f1'),

@@ -185,6 +185,34 @@ etapa(5, 'interconexión: nada suelto')
     else bien(`PORTAL_V coincide en el portal y la api (${vHtml})`)
   }
 
+  // 5c-bis. El orden de las fases del método está en DOS lugares: `ORDEN_FASES`
+  // en src/criterios.js, que usa la app, y un array dentro de fn_nivel_fase en
+  // la migración del puente clínica-gimnasio, que usa la base.
+  //
+  // POR QUÉ ESTÁ DUPLICADO Y NO SE PUEDE EVITAR
+  // La app no puede consultar la base para pintar una pantalla, y la base no
+  // puede importar el código. Es la misma situación que PORTAL_V.
+  //
+  // POR QUÉ IMPORTA QUE COINCIDAN
+  // De ese orden sale si un cambio de fase SUBE o BAJA, y de eso sale si la
+  // app actúa sola o pide confirmación. Si los dos órdenes se desincronizan,
+  // un ascenso puede terminar tratado como una bajada: la base aplicaría sola
+  // un pase a POTENCIA, que es justo lo que la decisión del 30/10 prohíbe.
+  {
+    const mig = 'migracion_puente_clinica_2026_10_30.sql'
+    if (fs.existsSync(mig)) {
+      const enJs = (fs.readFileSync('src/criterios.js', 'utf8')
+        .match(/export const ORDEN_FASES\s*=\s*\[([^\]]+)\]/) || [])[1]
+      const enSql = (fs.readFileSync(mig, 'utf8')
+        .match(/array_position\(array\[([^\]]+)\]/) || [])[1]
+      const limpiar = (s) => (s || '').split(',').map(x => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean).join('>')
+      const a = limpiar(enJs), b = limpiar(enSql)
+      if (!a || !b) mal(`no se pudo leer el orden de fases de ${!a ? 'src/criterios.js' : mig}`)
+      else if (a !== b) mal(`el orden de las fases NO coincide: criterios.js "${a}" vs ${mig} "${b}"`)
+      else bien(`el orden de las fases coincide en el código y la migración (${a})`)
+    }
+  }
+
   // 5d. build.json: sin él, el aviso de versión vieja no puede funcionar.
   if (fs.existsSync('dist/build.json')) {
     const b = JSON.parse(fs.readFileSync('dist/build.json', 'utf8'))

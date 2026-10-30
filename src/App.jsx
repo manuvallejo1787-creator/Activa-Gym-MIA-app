@@ -4,9 +4,11 @@ import PoseROM from "./PoseROM.jsx";
 import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import BloqueDirigido from "./BloqueDirigido.jsx";
+import { etiquetaFase } from "./puenteClinica.js";
+import { ejerciciosDelPlan, sugerirPatronBloqueado } from "./rehabPuente.js";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { aNumero, aTexto, aGuardar, normalizarTipeo, avisoRango, calcularIMC } from "./num.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, useBandasScreening, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, useBandasScreening, registrarCambioFase, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -3600,7 +3602,7 @@ export default function App(){
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
   const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia, marcarLineaBase } = useIncidencias();
-  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
+  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, puente:hoyPuente, sueltos:hoySueltos, cambiosFase:hoyCambiosFase, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
   // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
   // mantenimiento de datos se vuelve permanente y deja de significar algo.
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
@@ -3616,7 +3618,7 @@ export default function App(){
   // mostraría 5. Es el mismo tipo de desincronización que ya pasó con las dos
   // listas blancas de estados. `brand` entra en las dependencias porque
   // config cambia los plazos de vencimiento.
-  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,incidencias,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes,incidencias,brand]);
+  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,incidencias,puente:hoyPuente,sueltos:hoySueltos,cambiosFase:hoyCambiosFase,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes,incidencias,hoyPuente,hoySueltos,hoyCambiosFase,brand]);
   const [gpDias,setGpDias]=useState(3);
   const [gpDiv,setGpDiv]=useState('auto');
   const [gpLibre,setGpLibre]=useState('');
@@ -3651,6 +3653,117 @@ export default function App(){
   //   linea_base    el veredicto de qué se descartó, y además CREA la fila en
   //                 gym_linea_base, porque sin esa fila el riel sigue
   //                 disparando y el estado sería decorativo
+  // ═══ EL PUENTE CLÍNICA ↔ GIMNASIO, EN UN TOQUE ═══════════════════════════
+  //
+  // Hacia abajo la base ya actuó sola (tg_puente_clinica). Acá vive lo que NO
+  // puede ser automático:
+  //
+  //   'confirmar'  un ascenso. La decisión de Manu del 30/10 es que un alta
+  //                nunca se aplique sola: habilita trabajo pesado y balístico,
+  //                y el que está en sala tiene que haberlo visto.
+  //   'bloquear'   la base abrió la incidencia pero NO eligió los ejercicios:
+  //                qué patrón carga una zona lo sugiere la app por el nombre
+  //                del ejercicio, y portar esas reglas a SQL duplicaría la
+  //                definición en dos lenguajes. Acá se aplica la sugerencia.
+  const aplicarPuente=async(d)=>{
+    try{
+      const c=clients.find(x=>x.id===d.clienteId);
+      if(!c){alert('No encuentro a ese cliente en la lista.');return}
+      const nombre=`${c.nombre} ${c.apellido||''}`.trim();
+
+      if(d.accion==='confirmar'){
+        const esLesion=d.camino==='lesion';
+        if(!confirm(
+          `La clínica pasó a ${nombre} a ${etiquetaFase(d.fase_clinica)}.\n\n`+
+          `Confirmando:\n`+
+          `· la fase del método pasa de ${etiquetaFase(d.fase_gym)} a ${etiquetaFase(d.fase_clinica)}\n`+
+          (esLesion?`· se libera el patrón que estaba bloqueado y la carga vuelve al 60% las primeras sesiones\n`:
+                    `· queda habilitado para armarle su primer ciclo de fuerza\n`)+
+          `\n¿Confirmás?`))return;
+
+        // 1) La fase. Es lo único que el ascenso mueve por sí mismo.
+        await saveClientFn({...c, nivel:d.fase_clinica});
+
+        // 2) Queda registrado QUIÉN lo confirmó. Sin esto, dentro de un mes no
+        //    hay forma de saber si la fase la movió la clínica, la app o
+        //    alguien a mano — y de eso depende poder desarmarlo.
+        await registrarCambioFase({
+          gym_client_id:c.id, fase_de:d.fase_gym, fase_a:d.fase_clinica,
+          direccion:'sube', origen:'confirmacion', camino:d.camino,
+          evaluacion_id:d.evaluacionId||null, autor:usuario?.email||'sala',
+          nota:'Alta de clínica confirmada a mano. Un ascenso no se aplica solo.',
+        });
+
+        // 3) CAMINO LESIÓN: liberar el patrón. `liberado_el` es el desde-cuándo
+        //    que necesita la reentrada; sin esa fecha la carga volvería al peso
+        //    previo al dolor, que es el agujero que se cerró esta mañana.
+        if(esLesion){
+          const zona=(d.region||'').toLowerCase();
+          const abiertas=incidencias.filter(i=>i.gym_client_id===c.id
+            && esVigente(i)
+            && (String(i.zona||'').toLowerCase()===zona
+                || String(i.zona||'').toLowerCase().split('_')[0]===zona));
+          for(const inc of abiertas){
+            await setEstadoIncidencia(inc,'resuelta',{
+              resuelto:true, liberado_el:new Date().toISOString().slice(0,10),
+              resuelto_nota:`Alta de clínica confirmada el ${new Date().toISOString().slice(0,10)}`+
+                ` por ${usuario?.email||'sala'}. Pase a ${etiquetaFase(d.fase_clinica)}.`,
+            });
+          }
+        }
+        await hoyRefetch();
+        return;
+      }
+
+      if(d.accion==='bloquear'){
+        // La incidencia ya existe: la creó el disparador al bajar la fase.
+        const zona=(d.region||'').toLowerCase();
+        const inc=incidencias.find(i=>i.gym_client_id===c.id && esVigente(i)
+          && (String(i.zona||'').toLowerCase()===zona
+              || String(i.zona||'').toLowerCase().split('_')[0]===zona));
+        if(!inc){
+          alert('No encuentro la incidencia de esa zona. Abrí el riel de sala y cargala a mano.');
+          return;
+        }
+        // La sugerencia por nombre de ejercicio, sobre los planes del cliente.
+        const delPlan=ejerciciosDelPlan(
+          gymPlanes.filter(p=>p.gym_client_id===c.id),
+          id=>exs.find(e=>e.id===id)?.nombre||'');
+        const sug=sugerirPatronBloqueado(d.region, delPlan);
+        if(!sug.length){
+          alert(`No encontré en el plan de ${nombre} ningún ejercicio que cargue ${d.region}.\n\n`+
+                `Abrí el riel de sala y elegilos a mano: la app sugiere por el nombre del ejercicio y puede no reconocerlos.`);
+          return;
+        }
+        const nombres=sug.map(id=>delPlan.find(e=>e.exId===id)?.nombre||id);
+        if(!confirm(
+          `Quedan SIN CARGA en el plan de ${nombre}:\n\n`+
+          nombres.map(n=>'· '+n).join('\n')+
+          `\n\nEl resto del plan sigue igual. El cliente lo ve explicado en el portal.\n\n`+
+          `¿Confirmás? (podés cambiar la selección desde el riel de sala)`))return;
+        await setEstadoIncidencia(inc,'en_sala',{patron_bloqueado:sug});
+        await hoyRefetch();
+        return;
+      }
+    }catch(e){alert('No se pudo aplicar: '+e.message);}
+  };
+
+  // Vincular paciente de la clínica con cliente del gimnasio. La app propone
+  // por nombre y acá se confirma: emparejar a dos personas distintas que se
+  // llaman igual mezcla dos historiales clínicos y eso no se deshace solo.
+  const vincularPacientes=async(vinculos=[])=>{
+    try{
+      const lista=vinculos.map(v=>`· ${v.nombre}`).join('\n');
+      if(!confirm(`Se van a vincular estos clientes del gimnasio con su paciente de la clínica:\n\n${lista}\n\n`+
+        `Desde ese momento, un alta o una bajada de fase de la clínica llega al gimnasio.\n\n¿Confirmás?`))return;
+      for(const v of vinculos){
+        const c=clients.find(x=>x.id===v.clienteId);
+        if(c)await saveClientFn({...c, fisio_pacienteId:v.pacienteId});
+      }
+      await hoyRefetch();
+    }catch(e){alert('No se pudo vincular: '+e.message);}
+  };
+
   const cambiarEstadoIncidencia=async(inc,estado)=>{
     try{
       if(estado==='seguimiento'){
@@ -5684,7 +5797,10 @@ export default function App(){
       </div>
       <div style={{maxWidth:960,margin:'0 auto',paddingBottom:32}}>
         {tab==='hoy'&&(
-          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} incidencias={incidencias} loading={hoyLoading} config={brand||{}}
+          <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} incidencias={incidencias}
+            puente={hoyPuente} sueltos={hoySueltos} cambiosFase={hoyCambiosFase}
+            onPuente={aplicarPuente} onVincular={vincularPacientes}
+            loading={hoyLoading} config={brand||{}}
             postergar={hoyPostergar} marcarItem={hoyMarcar} quitarMarca={hoyQuitarMarca} brand={brand}
             onIr={(destino,id)=>{
               // Cada ítem se resuelve en un toque: la navegación deja a la
