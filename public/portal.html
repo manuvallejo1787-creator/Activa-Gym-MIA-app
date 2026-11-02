@@ -295,7 +295,7 @@ function calcularSemanas(plan, logs){
 // que espera. Si no coinciden, el portal está viejo. SE BUMPEAN LAS DOS cada
 // vez que cambia lo que el formulario manda; `npm run salud` verifica que
 // estén iguales, así que no se puede olvidar una.
-const PORTAL_V = '2026-10-29-a';
+const PORTAL_V = '2026-11-02-a';
 
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get('t') || params.get('token') || '';
@@ -354,6 +354,7 @@ async function cargar(){
     let body = null;
     try { body = await r.json(); } catch {}
     if(r.status === 403){ $('msg').textContent = 'Acceso no válido. Revisá el link con tu entrenador.'; return; }
+    if(r.status === 423){ $('msg').textContent = (body && body.error) || 'Tu acceso al portal está pausado. Acercate a recepción para reactivarlo.'; return; }
     if(!r.ok){ $('msg').textContent = 'Error del servidor: ' + ((body && body.error) || ('HTTP ' + r.status)) + '. Avisale a tu entrenador.'; return; }
     DATA = body;
     // ¿Este portal está viejo? La API dice qué versión del formulario espera.

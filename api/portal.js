@@ -3,7 +3,7 @@
 // juntas cada vez que cambia lo que el formulario manda, y `npm run salud`
 // verifica que coincidan — si no, un portal cacheado mandaría el formulario
 // viejo, sin `naturaleza`, y el riel no rutearía esa molestia.
-const PORTAL_V = '2026-10-29-a';
+const PORTAL_V = '2026-11-02-a';
 
 // api/portal.js — Portal del cliente (frontera de seguridad)
 // El portal del cliente NUNCA toca Supabase directo. Pasa por acá.
@@ -35,11 +35,15 @@ async function sb(path, opts = {}) {
   return data;
 }
 
+// Portal pausado: lo marca la sincronización con Gestión cuando la cuota lleva
+// varios días vencida (solo llega el aviso de bloqueo, ningún dato de pagos).
+const BLOQUEADO = "Tu acceso al portal está pausado. Acercate a recepción para reactivarlo.";
+
 // Valida el token y devuelve el cliente (o null)
 async function clienteDeToken(token) {
   if (!token || typeof token !== "string" || token.length < 8) return null;
   const enc = encodeURIComponent(token);
-  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido,nivel,objetivo,periodizacion,periodizacion_inicio,periodizacion_fin,criterios_avance_estado,screening,fisio_paciente_id`);
+  const rows = await sb(`gym_clients?portal_token=eq.${enc}&select=id,nombre,apellido,nivel,objetivo,periodizacion,periodizacion_inicio,periodizacion_fin,criterios_avance_estado,screening,fisio_paciente_id,portal_bloqueado`);
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
@@ -54,6 +58,7 @@ export default async function handler(req, res) {
       const token = req.query.token;
       const cli = await clienteDeToken(token);
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
+      if (cli.portal_bloqueado) return res.status(423).json({ error: BLOQUEADO, bloqueado: true });
 
       // Antes esto tomaba solo el plan 'activo' más reciente (limit=1). Si el
       // profesional arma varias sesiones por separado y las junta en bloque
@@ -350,6 +355,7 @@ export default async function handler(req, res) {
         return f < limite ? limite : f;
       })();
       const cli = await clienteDeToken(b.token);
+      if (cli && cli.portal_bloqueado) return res.status(423).json({ error: BLOQUEADO, bloqueado: true });
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
 
       // ── MEDICIÓN CORPORAL CARGADA POR EL CLIENTE ──────────────────────
