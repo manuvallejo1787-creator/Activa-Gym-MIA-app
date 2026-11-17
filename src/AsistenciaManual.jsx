@@ -11,6 +11,9 @@ import { supabase } from "./supabase.js";
 //
 // Un toque = presente hoy, con la hora del momento. Se puede marcar hasta 7
 // días atrás (sin hora: la hora de un día pasado sería inventada).
+//
+// Cuota atrasada (17/11, caso Roldan): Gestión marca "bloqueado" a quien debe
+// 20+ días. Marcarlo pide confirmación y un motivo, que viaja a Gestión.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const WH = '#fff', BK = '#141414', G2 = '#2a2a2a', G4 = '#8a8a8a', VERDE = '#16A34A', ROJO = '#DC2626';
@@ -72,6 +75,13 @@ export default function AsistenciaManual() {
         if (e) throw e;
         setMarcas(ms => ms.filter(x => x.id !== ya.id));
       } else {
+        let motivo = null;
+        if (c.bloqueado) {
+          motivo = window.prompt(`${c.nombre} tiene la cuota atrasada 20+ días y su acceso está bloqueado.\nPrimero tiene que pasar por recepción a pagar.\n\nSi igual lo dejás entrenar, escribí el motivo (ej.: "pagó hoy en efectivo", "autorizó Manu"):`, '');
+          if (motivo === null) return;
+          motivo = motivo.trim();
+          if (!motivo) { setError('Para marcar a alguien bloqueado hace falta escribir el motivo.'); return; }
+        }
         const { data: u } = await supabase.auth.getUser();
         const fila = {
           cliente_gestion_id: id,
@@ -79,6 +89,7 @@ export default function AsistenciaManual() {
           fecha,
           hora: fecha === hoy ? horaLocal() : null,
           registrado_por: u?.user?.email || null,
+          ...(motivo ? { motivo_excepcion: motivo } : {}),
         };
         const { data, error: e } = await supabase.from('asistencias_manual')
           .upsert(fila, { onConflict: 'cliente_gestion_id,fecha' }).select().single();
@@ -137,6 +148,7 @@ export default function AsistenciaManual() {
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 9px', borderRadius: 6, background: '#1c1c1c', marginBottom: 3 }}>
                   <span style={{ fontSize: 12, color: WH }}>
                     {c.nombre}
+                    {c.bloqueado && <span style={{ color: ROJO, fontSize: 10, fontWeight: 700 }}> · CUOTA VENCIDA, cobrar antes</span>}
                     {c.plan && <span style={{ color: G4, fontSize: 10 }}> · {c.plan}</span>}
                   </span>
                   <button disabled={ocupado === Number(c.cliente_gestion_id)} onClick={() => alternar(c)}
