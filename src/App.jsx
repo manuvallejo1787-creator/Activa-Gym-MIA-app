@@ -5,6 +5,7 @@ import { getPrintCSS, footerHTML } from "./printStyles.js";
 import DateInput from "./DateInput.jsx";
 import BloqueDirigido from "./BloqueDirigido.jsx";
 import { etiquetaFase } from "./puenteClinica.js";
+import { checkRestriccion, patronesBloqueados, motivoRestriccion } from "./restriccion.js";
 import { ejerciciosDelPlan, sugerirPatronBloqueado } from "./rehabPuente.js";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { aNumero, aTexto, aGuardar, normalizarTipeo, avisoRango, calcularIMC } from "./num.js";
@@ -100,25 +101,21 @@ const BLOCKS={
 };
 
 // ─── RESTRICCIÓN × BLOQUE/PATRÓN ────────────────────────────────────────────
-// Retorna null (libre) | 'warn' | 'block'
-function checkRestriction(ex, client){
-  if(!client || client.semaforo==='pendiente') return null;
-  if(client.semaforo==='rojo') return 'block';
-  if(client.semaforo!=='amarillo') return null;
-  const r=client.restricciones_flags||{};
-  if(r.impacto && ex.bloque==='potencia') return 'block';
-  if(r.impacto && (ex.patron||'').toLowerCase().includes('salto')) return 'block';
-  if(r.impacto && (ex.patron||'').toLowerCase().includes('pliométr')) return 'block';
-  if(r.overhead && ((ex.patron||'').toLowerCase().includes('overhead')||
-     (ex.patron||'').toLowerCase().includes('vertical')||
-     (ex.patron||'').toLowerCase().includes('empuje v'))) return 'warn';
-  if(r.cargaAxial && ex.bloque==='fuerza' &&
-     ((ex.patron||'').toLowerCase().includes('bilateral')||
-      (ex.patron||'').toLowerCase().includes('bisagra'))) return 'warn';
-  if(r.cargaAxial && (ex.nombre||'').toLowerCase().includes('sentadilla')) return 'warn';
-  if(r.cargaAxial && (ex.nombre||'').toLowerCase().includes('peso muerto')) return 'warn';
-  return null;
-}
+// La regla se mudó a src/restriccion.js el 19/11/2026, con arnés.
+//
+// POR QUÉ: acá decía `if(client.semaforo==='rojo') return 'block'`, y de esa
+// línea colgaban CINCO bloqueos — el cartel de entrenamiento bloqueado, los dos
+// botones de agregar que desaparecían, la alerta de ejercicio bloqueado, y el
+// generador devolviendo un plan vacío. Manu reportó que el rojo seguía
+// bloqueando el armado de entrenos, y el método declara que RESTAURA es rojo:
+// la app le prohibía entrenar a la población de la transición clínica → sala.
+//
+// Ahora el rojo bloquea lo mismo que el amarillo más lo que la clínica marcó
+// concretamente, que es la decisión que Manu ya había tomado el 30/10 para el
+// escalón 2: se bloquea la zona, no el plan.
+//
+// `patronesClienteBloqueados` se arma en el componente, donde están las
+// incidencias; acá sólo se adapta la firma vieja para no tocar los 6 llamadores.
 
 const NIVEL_COLOR={Principiante:'#16A34A',Intermedio:'#D97706',Avanzado:'#CC0000'};
 const GRUPO_COL={A:'#7C3AED',B:'#0891B2',C:'#DB2777',D:'#CA8A04'};
@@ -3509,7 +3506,7 @@ const SemaforoBanner=({cliente,setSession,s})=>{
               ?<div style={{fontSize:11,color:'#444'}}><strong>Restricciones:</strong> {cliente.restricciones}</div>
               :<div style={{fontSize:11,color:G3}}>Sin restricciones documentadas</div>
             }
-            {cliente.semaforo==='rojo'&&<div style={{fontSize:11,color:R,fontWeight:700,marginTop:4}}>⚠ Solo fisioterapia — Derivar antes de programar entrenamiento</div>}
+            {cliente.semaforo==='rojo'&&<div style={{fontSize:11,color:'#92400E',fontWeight:700,marginTop:4}}>🔴 En tratamiento clínico — se planifica igual, con los patrones de la zona sustituidos</div>}
             {cliente.semaforo==='pendiente'&&<div style={{fontSize:11,color:'#D97706',marginTop:2}}>El filtro de ejercicios se activa al completar la evaluación funcional.</div>}
             {cliente.periodizacion&&PERIODIZACIONES[cliente.periodizacion]&&(()=>{
               const p=PERIODIZACIONES[cliente.periodizacion];
@@ -3822,6 +3819,18 @@ export default function App(){
   const emptyEx={id:'',nombre:'',bloque:'movilidad',musculos:'',contraccion:'',patron:'',nivel:'Principiante',equipo:'',regresion:'',progresion:''};
 
   const activeClient=useMemo(()=>session.clienteId?clients.find(c=>c.id===session.clienteId):null,[clients,session.clienteId]);
+  // Los patrones que el riel tiene sustituidos para este cliente. Es la
+  // barrera REAL desde el 19/11: específica, salida de un hallazgo concreto, y
+  // la levanta el propio riel a las 4 sesiones limpias. Reemplaza al corte por
+  // semáforo, que bloqueaba los 434 ejercicios de una vez.
+  const patronesCliente=useMemo(()=>patronesBloqueados(
+    incidencias.filter(i=>i.gym_client_id===activeClient?.id), esVigente),
+    [incidencias,activeClient]);
+  // Adaptador con la firma vieja (ex, client) para no tocar los 6 llamadores
+  // ni la del generador, que la recibe como parámetro.
+  const checkRestriction=useCallback((ex,client)=>
+    checkRestriccion(ex,client,client?.id===activeClient?.id?patronesCliente:null),
+    [patronesCliente,activeClient]);
   // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
   const {feedback:activeClientFeedback}=useFeedbackSesiones(activeClient?.id||null);
@@ -4194,7 +4203,13 @@ export default function App(){
   const handlePickEx=(block,ex)=>{
     const rest=checkRestriction(ex,activeClient);
     if(rest==='block'){
-      alert(`🚫 Ejercicio bloqueado\n\nEl semáforo ${SF[activeClient.semaforo].label} de ${activeClient.nombre} impide agregar este ejercicio.\n\nPatrón: ${ex.patron}`);
+      // Decía "el semáforo impide agregar este ejercicio", que desde el 19/11
+      // es falso: el semáforo ya no bloquea nada por sí mismo. El motivo real
+      // lo da restriccion.js y es específico — el riel, o una bandera del
+      // screening. Un aviso que acusa a la causa equivocada manda a buscar al
+      // lugar equivocado.
+      alert(`🚫 ${ex.nombre} no se puede agregar\n\n`+
+        `${motivoRestriccion(ex,activeClient,patronesCliente)}\n\nPatrón: ${ex.patron||'—'}`);
       return;
     }
     const repl=(replaceTarget&&replaceTarget.blockId===block.id)?replaceTarget.idx:null;
@@ -5334,12 +5349,28 @@ export default function App(){
           );
         })()}
         {verEjecucion&&<EjecucionModal plan={verEjecucion} exs={exs} onClose={()=>setVerEjecucion(null)}/>}
-        {/* BLOQUEO TOTAL SEMÁFORO ROJO */}
+        {/* SEMÁFORO ROJO — INFORMA, NO BLOQUEA (19/11/2026)
+            Era un muro que decía "Entrenamiento bloqueado" y no dejaba agregar
+            nada. Pero el método declara que RESTAURA es rojo, así que el muro
+            caía justo sobre el cliente que sale de la clínica. Ahora dice qué
+            está protegido y qué falta registrar. */}
         {activeClient&&activeClient.semaforo==='rojo'&&(
-          <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:8,padding:'16px 14px',marginBottom:12,textAlign:'center'}}>
-            <div style={{fontSize:18,marginBottom:6}}>🔴</div>
-            <div style={{fontSize:13,fontWeight:800,color:R,marginBottom:4}}>SEMÁFORO ROJO — Entrenamiento bloqueado</div>
-            <div style={{fontSize:12,color:'#666'}}>No es posible agregar ejercicios a un cliente con semáforo rojo.<br/>Derivar a fisioterapia antes de retomar el entrenamiento.</div>
+          <div style={{background:'#FFFBEB',border:`1px solid #D97706`,borderRadius:8,padding:'12px 14px',marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:800,color:'#92400E',marginBottom:4}}>
+              🔴 {activeClient.nombre} está en rojo — se puede planificar igual
+            </div>
+            {patronesCliente.size>0
+              ? <div style={{fontSize:11,color:'#555',lineHeight:1.55}}>
+                  El riel tiene <strong>{patronesCliente.size} {patronesCliente.size===1?'patrón':'patrones'} sustituido{patronesCliente.size===1?'':'s'}</strong>:
+                  esos ejercicios no se pueden agregar y se liberan solos a las 4 sesiones
+                  ejecutadas sin reporte nuevo. El resto del plan va normal.
+                </div>
+              : <div style={{fontSize:11,color:'#555',lineHeight:1.55}}>
+                  <strong>No hay ninguna restricción concreta registrada</strong> — ni banderas en el
+                  screening ni patrones sustituidos por el riel. Se avisa en todos los ejercicios
+                  y no se bloquea ninguno, porque la app no sabe qué proteger. Registrá la
+                  restricción en el screening o abrí la incidencia desde Sala.
+                </div>}
           </div>
         )}
         {overrideState&&(
@@ -5594,7 +5625,7 @@ export default function App(){
                       </div>
                     );
                   })}
-                  {block.exercises.length<5&&!(activeClient&&activeClient.semaforo==='rojo')&&!replMode&&(
+                  {block.exercises.length<5&&!replMode&&(
                     <button onClick={()=>{setSelBlock(isSel?null:block.id);setExSearch('');}} style={{...s.btnBK,width:'100%',marginTop:4}}>{isSel?'✕ Cerrar':'+ Agregar ejercicio'}</button>
                   )}
                   {isSel&&(
@@ -5691,7 +5722,7 @@ export default function App(){
             </div>
           );
         })()}
-        {dia.blocks.length<7&&!(activeClient&&activeClient.semaforo==='rojo')&&(
+        {dia.blocks.length<7&&(
           <div style={s.card}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:G4}}>Agregar bloque manual</div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 90px 80px',gap:8}}>

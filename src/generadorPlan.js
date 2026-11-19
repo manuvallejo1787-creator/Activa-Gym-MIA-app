@@ -528,12 +528,15 @@ export function generarPlanBase({
 
   // ── 5) Cobertura ────────────────────────────────────────────────────────
   const totalEj = dias.reduce((s, d) => s + d.blocks.reduce((x, b) => x + b.exercises.length, 0), 0);
-  // Con semáforo rojo, checkRestriction bloquea TODOS los ejercicios y el plan
-  // salía vacío sin decir por qué. Ahora lo declara.
+  // Hasta el 19/11 el semáforo rojo bloqueaba TODOS los ejercicios y el plan
+  // salía vacío. Ya no: el rojo bloquea sólo los patrones que la clínica marcó
+  // (src/restriccion.js). Si aun así no se seleccionó nada, la causa son las
+  // banderas o los patrones del riel, y se dice cuál en lugar de culpar al
+  // semáforo — acusar a la causa equivocada manda a buscar al lugar equivocado.
   if (totalEj === 0) bloqueantes.unshift(
-    cliente.semaforo === 'rojo'
-      ? 'Semáforo ROJO: toda la base de ejercicios queda bloqueada por restricción. Este cliente no entrena en el gimnasio hasta que la clínica lo habilite.'
-      : 'No se pudo seleccionar ningún ejercicio con las restricciones actuales del cliente.');
+    'No se pudo seleccionar ningún ejercicio. Revisá las banderas del screening ' +
+    '(impacto / overhead / carga axial) y los patrones que el riel tiene sustituidos ' +
+    'en Sala: entre las dos cosas no queda ningún ejercicio disponible.');
   const conPeso = dias.reduce((s, d) => s + d.blocks.reduce((x, b) => x + b.exercises.filter(e => e.pesoSug).length, 0), 0);
   const conAviso = dias.reduce((s, d) => s + d.blocks.reduce((x, b) => x + b.exercises.filter(e => e.override).length, 0), 0);
 
