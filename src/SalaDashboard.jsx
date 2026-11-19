@@ -3,7 +3,7 @@ import { computarMetricas } from "./motor.js";
 import { faseActual, diasDesde, PLAZOS } from "./hoy.js";
 import { PERIODIZACIONES, TESTS_FUERZA } from "./planificacion.js";
 import AsistenciaManual from "./AsistenciaManual.jsx";
-import { esVigente, etiquetaEstado, escalonDe, ordenarIncidencias, accionesDe, bloqueaPatron } from "./incidencias.js";
+import { esVigente, etiquetaEstado, escalonDe, ordenarIncidencias, accionesDe, bloqueaPatron, zonaTexto } from "./incidencias.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SalaDashboard — la información que el profe necesita EN EL MOMENTO
@@ -348,7 +348,7 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
             return (
               <div key={lb.zona} style={{ background: '#0e0e0e', borderLeft: `3px solid ${vencida ? ROJO : G4}`, borderRadius: 6, padding: '6px 9px', marginBottom: 5 }}>
                 <div style={{ fontSize: 11, color: WH, fontWeight: 700 }}>
-                  📌 {String(lb.zona).replace(/_/g, ' ')}
+                  📌 {zonaTexto(lb.zona)}
                   <span style={{ color: G4, fontWeight: 400 }}> · {lb.naturaleza_basal} · {lb.intensidad_basal}</span>
                 </div>
                 <div style={{ fontSize: 9, color: vencida ? ROJO : G4, marginTop: 2, fontWeight: vencida ? 800 : 400 }}>
@@ -390,7 +390,7 @@ function Tarjeta({ f, onVerRutina, onNuevaIncidencia, onEstadoIncidencia }) {
                   {String(i.fecha || '').slice(0, 10)}
                   {` · esc. ${escalonDe(i)} · ${etiquetaEstado(i)}`}
                   {i.origen === 'feedback' ? ' · del portal' : ''}
-                  {i.zona ? ` · ${String(i.zona).replace(/_/g, ' ')}` : ''}
+                  {i.zona ? ` · ${zonaTexto(i.zona)}` : ''}
                   {i.naturaleza ? ` · ${i.naturaleza}` : ''}
                   {i.sustituto_nombre ? ` · sustituido por ${i.sustituto_nombre}` : ''}
                   {i.bandera_activa ? ' · 🚩 bandera clínica' : ''}

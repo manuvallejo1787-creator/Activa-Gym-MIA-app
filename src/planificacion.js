@@ -611,7 +611,7 @@ const parseRepsFromPhase = (repsStr) => {
 // opcional y trae peso corporal, sexo e historial.
 // ═══════════════════════════════════════════════════════════════════════════
 export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null, repsEntered = null, opts = {}) => {
-  const { pesoCorporal = null, sexo = '', historial = [], exId = null } = opts || {};
+  const { pesoCorporal = null, sexo = '', historial = [], exId = null, reentrada = null } = opts || {};
 
   // Ejercicios por tiempo (isométricos, cardio) no se rigen por % de 1RM
   if (repsEntered != null && /seg|min|\d+:\d{2}/.test(String(repsEntered).toLowerCase())) {
@@ -718,6 +718,67 @@ export const sugerirPeso = (nombreEjercicio, testsCliente = [], fasePlan = null,
     .filter(h => (exId && h.ejercicio_id === exId) || (!exId && h.ejercicio_nombre === nombreEjercicio))
     .filter(h => !isNaN(parseFloat(h.peso_real)) && parseFloat(h.peso_real) > 0)
     .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+
+  // ── 2-bis) REENTRADA DESPUÉS DE UN PATRÓN BLOQUEADO ───────────────────────
+  //
+  // EL AGUJERO QUE CIERRA, encontrado el 30/10 leyendo este mismo bloque:
+  // el historial de arriba no tiene NINGÚN límite de fecha. Ordena por
+  // updated_at y agarra el primero. Y si ese día el cliente completó las reps,
+  // progresa (peso*1.025 o +2,5 kg).
+  //
+  // Con el riel del 29/10 eso se volvió peligroso de verdad: un patrón
+  // bloqueado 4 sesiones se libera SOLO —tg_liberar_patron— y la primera carga
+  // que la app sugería al volver era la de antes del dolor, más 2,5 kg, tras
+  // dos o tres semanas sin entrenar ese patrón. Un bloqueo que se levanta sin
+  // regla de reentrada no protege: aplaza.
+  //
+  // DE DÓNDE SALE LA CARGA BASE
+  // La última registrada ANTES de la liberación, no la última a secas. Durante
+  // el bloqueo la api RECHAZA la carga de ese ejercicio, así que no hay filas
+  // entre el bloqueo y la liberación: "la última ≤ liberado_el" es la carga
+  // previa al dolor. Y durante la reentrada sí hay filas nuevas —las del 60%—
+  // así que tomar la última a secas aplicaría el 60% sobre el 60%.
+  //
+  // POR QUÉ RAMPA Y NO PORCENTAJE PLANO
+  // 60% fijo dos sesiones y al tercer día la progresión normal es un escalón
+  // del 60 al 100 de un día para el otro. La rampa reparte: con pct 60 y 2
+  // sesiones da 60% → 80% → normal. Sale de los mismos datos que ya devuelve
+  // la vista gym_reentrada, sin columna nueva.
+  const re = reentrada;
+  if (re && hist.length) {
+    const pct0 = parseFloat(re.pct);
+    const req = parseInt(re.sesiones_req, 10);
+    const hechas = parseInt(re.sesiones_hechas ?? 0, 10);
+    const corte = re.liberado_el ? String(re.liberado_el).slice(0, 10) : null;
+    // `fecha` es el día declarado; `updated_at` el respaldo para filas viejas
+    // que se guardaron antes de que la consulta pidiera `fecha`. Sin respaldo
+    // una fila sin fecha comparaba `'' <= '2026-10-30'` → verdadero, y dejaba
+    // pasar justamente las cargas de la reentrada que hay que excluir.
+    const diaDe = (h) => String(h.fecha || h.updated_at || '').slice(0, 10);
+    const previas = corte ? hist.filter(h => diaDe(h) && diaDe(h) <= corte) : hist;
+    // Sin carga previa al bloqueo no se inventa una reentrada: cae al historial
+    // normal, que para un ejercicio sin historial previo ya es conservador.
+    const base = previas.length ? parseFloat(previas[0].peso_real) : NaN;
+    if (!isNaN(pct0) && req > 0 && hechas < req && !isNaN(base) && base > 0) {
+      const modo = tr?.modo || 'total';
+      const pctHoy = Math.min(100, pct0 + (100 - pct0) * (hechas / req));
+      const peso = base * pctHoy / 100;
+      return {
+        fuente: 'reentrada', reentrada: true, modo, confianza: 'alta', unidad: unidad(modo),
+        pesoSugerido: redondear(peso, modo), reps: repsTarget, repsTarget: `${repsTarget}`, fuenteReps,
+        pesoRango: `${redondear(peso * 0.9, modo)}–${redondear(peso, modo)} ${unidad(modo)}`,
+        pctReentrada: Math.round(pctHoy), pesoPrevio: base,
+        sesionesRestantes: req - hechas, liberadoEl: corte, zona: re.zona || null,
+        explicacion: `Reentrada tras bloqueo${re.zona ? ` de ${re.zona}` : ''}: ${Math.round(pctHoy)}% de la última carga previa (${base} kg). ` +
+          `Quedan ${req - hechas} ${req - hechas === 1 ? 'sesión' : 'sesiones'} de reentrada antes de volver a la progresión normal.`,
+        // Explícito porque es lo que distingue esta fuente: acá NO se progresa
+        // aunque complete las reps. Completar las reps al 60% es lo esperado.
+        cierreSet: 'No subir carga durante la reentrada aunque complete las reps: la rampa la sube sola.',
+        nota: tr?.nota || '',
+      };
+    }
+  }
+
   if (hist.length) {
     const ult = hist[0];
     const peso = parseFloat(ult.peso_real);

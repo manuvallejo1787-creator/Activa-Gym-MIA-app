@@ -4,6 +4,7 @@
 
 import { useState } from "react";
 import { PERIODIZACIONES, periodizacionesPorFase } from "./planificacion.js";
+import { armarPromptSesion } from "./promptSesion.js";
 
 // ─── IDENTIDAD DEL ASISTENTE ─────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Sos el asistente de IA integrado en el sistema de gestión de ACTIVA Fitness Club y FisioActiva Colonia, el primer centro de rehabilitación y entrenamiento integrado de Colonia del Sacramento, Uruguay. 
@@ -91,88 +92,12 @@ export function AIGeneradorSesion({ cliente, periodizacion, faseIndex=0, tests, 
   const generar = async () => {
     setLoading(true); setError(null); setResult(null);
     try {
-      // Antes esto era siempre periodizacion?.fases?.[0] — la IA asumía que
-      // toda sesión pertenecía a la fase inicial del plan, aunque el
-      // profesional esté adelantando trabajo y armando fases posteriores.
-      const totalFases = periodizacion?.fases?.length || 0;
-      const idx = Math.min(Math.max(faseIndex, 0), Math.max(totalFases - 1, 0));
-      const faseActiva = periodizacion?.fases?.[idx];
-      const esAdelanto = idx > 0;
-      const rm1s = tests?.map(t => `${t.test_nombre}: ${t.rm1_real||t.rm1_calculado||'sin dato'} kg`).join(", ") || "sin tests registrados";
-
-      // Contexto de aprendizaje: reglas del profesional + historial de planes del cliente
-      const reglasActivas = (reglas||[]).filter(r => r.activo && ['entrenamiento','general'].includes(r.ambito));
-      const reglasTxt = reglasActivas.length
-        ? `\nREGLAS DEL PROFESIONAL (obligatorias, tienen prioridad sobre criterios genéricos):\n${reglasActivas.map(r => `- ${r.regla}`).join("\n")}\n`
-        : "";
-      const ejemplos = (historial||[]).filter(p => p.es_ejemplo).slice(0,2);
-      const recientes = (historial||[]).filter(p => !p.es_ejemplo).slice(0,3);
-      const histTxt = (ejemplos.length || recientes.length)
-        ? `\nHISTORIAL DE PLANES DE ESTE CLIENTE (para progresar, NO repetir igual):\n` +
-          ejemplos.map(p => `★ EJEMPLO (${p.fecha_inicio||''}, ${p.estado}): ${p.resumen||p.nombre}`).join("\n") +
-          (ejemplos.length?"\n":"") +
-          recientes.map(p => `· ${p.fecha_inicio||''} (${p.estado}): ${p.resumen||p.nombre}`).join("\n") +
-          `\nProgresá respecto a lo ya realizado: variá estímulos, subí dificultad donde corresponda y respetá la continuidad.\n`
-        : "";
-      const ejecTxt = (ejecucion||[]).length
-        ? `\nCARGAS REALES QUE EL CLIENTE EJECUTÓ (registradas por él, semana a semana — son el dato MÁS importante para progresar):\n${ejecucion.map(e => `- ${e}`).join("\n")}\nUsá estas cargas reales para calibrar el nuevo plan: si progresó, subí; si se estancó o bajó, ajustá volumen/intensidad. No prescribas a ciegas.\n`
-        : "";
-
-      const prompt = `Generá una sesión de entrenamiento en JSON para este cliente:
-
-Cliente: ${cliente?.nombre} ${cliente?.apellido}
-Nivel Método Activa: ${cliente?.nivel?.toUpperCase()} — ${cliente?.objetivo || "objetivo general"}
-Semáforo: ${cliente?.semaforo}
-Peso corporal: ${cliente?.screening?.peso || "no registrado"} kg
-Restricciones: ${cliente?.restricciones || "ninguna"}
-Periodización activa: ${periodizacion?.nombre || "sin plan"}
-Fase actual: ${faseActiva ? `Fase ${idx+1}/${totalFases} — ${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : "no definida"}
-${esAdelanto?`⚠ El profesional está ADELANTANDO trabajo: esta sesión NO es de la fase inicial del plan, es la fase ${idx+1} de ${totalFases}. Prescribí acorde a los parámetros de ESA fase específica (reps/intensidad/RIR de arriba), no a los de una fase de adaptación inicial.\n`:''}Tests de fuerza 1RM: ${rm1s}
-Instrucciones adicionales: ${instrucciones || "ninguna"}
-${reglasTxt}${histTxt}${ejecTxt}
-ESTRUCTURA OBLIGATORIA DE LA SESIÓN (orden fijo de bloques):
-1. movilidad → 2. activacion → 3. fuerza/potencia/pliometria (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
-El orden NO se altera. Una sesión típica usa 4-6 bloques siguiendo ese flujo.
-
-EJERCICIOS DISPONIBLES — AGRUPADOS POR BLOQUE.
-Un ejercicio SOLO puede ir en un bloque de su mismo tipo. NUNCA pongas un ejercicio de fuerza en movilidad ni viceversa.
-${(() => {
-  const porBloque = {};
-  exs.forEach(e => { (porBloque[e.bloque] = porBloque[e.bloque] || []).push(e); });
-  return Object.entries(porBloque).map(([bloque, lista]) =>
-    `\n### BLOQUE "${bloque}" (solo estos IDs van en bloques type="${bloque}"):\n` +
-    lista.slice(0, 25).map(e => `${e.id} = ${e.nombre}`).join("\n")
-  ).join("\n");
-})()}
-
-CARGAS — NO LAS CALCULES VOS:
-- NO incluyas pesos. La carga de cada ejercicio la calcula el motor determinista del sistema aplicando un coeficiente de transferencia biomecánica sobre el test del patrón.
-- Motivo: un 1RM de press banca con barra NO se traslada a unas aperturas con mancuernas, ni una sentadilla trasera a una búlgara, ni un peso muerto convencional a un rumano. Mismo músculo no es misma carga: cambian el brazo de palanca, la estabilidad requerida y si es uni o bilateral.
-- Tu trabajo es ELEGIR bien los ejercicios y justificar la selección. Usá los 1RM solo para razonar el nivel del cliente, nunca para prescribir kilos.
-
-REGLAS ESTRICTAS:
-- El "type" de cada bloque DEBE ser uno de: movilidad, activacion, zona_media, prev_rehab, potencia, pliometria, fuerza, accesorios, cardio, flex_recovery, propiocepcion, funcional.
-- Cada "exId" dentro de un bloque DEBE pertenecer al grupo de ese bloque (mismo tipo). Si el ejercicio "sentadilla" está listado bajo BLOQUE "fuerza", solo puede ir en un bloque type="fuerza".
-- Usá ÚNICAMENTE los IDs exactos listados arriba. No inventes IDs.
-- Respetá el orden: movilidad y activación al inicio, fuerza/potencia en el medio, cardio/recovery al final.
-
-Respondé ÚNICAMENTE con este JSON (sin texto extra):
-{
-  "nombre": "nombre descriptivo de la sesión",
-  "objetivo_sesion": "descripción breve del objetivo",
-  "blocks": [
-    {
-      "type": "uno de los tipos válidos",
-      "params": { "series": "3", "reps": "10-12", "rpe": "7", "tempo": "2-0-1", "descanso": "90s" },
-      "exercises": [
-        { "exId": "id_exacto_de_ese_bloque", "anotacion": "indicación técnica breve, específica para este cliente" }
-      ]
-    }
-  ],
-  "razonamiento": "explicación breve (2-3 líneas)"
-}
-
-Incluí 4-6 bloques en el orden correcto. Cada bloque máximo 4 ejercicios. Respetá la fase de periodización para los parámetros.`;
+      // El pedido se arma en src/promptSesion.js. Estaba inline acá y la
+      // unica forma de verificar que la instruccion del profesional llegaba
+      // —y con que peso— era generar una sesion de verdad y mirarla a ojo.
+      // Eso no es una prueba: ahora lo cubre qa/promptSesion.mjs.
+      const prompt = armarPromptSesion({ cliente, periodizacion, faseIndex,
+        tests, exs, historial, reglas, ejecucion, instrucciones });
 
       const data = await callClaude(prompt, 2500);
       setResult(data);
@@ -199,10 +124,21 @@ Incluí 4-6 bloques en el orden correcto. Cada bloque máximo 4 ejercicios. Resp
         La IA recibe el perfil completo del cliente: nivel, objetivo, restricciones, fase de periodización y tests de fuerza. Genera la sesión y vos la revisás antes de aplicar.
       </div>
       <div style={{marginBottom:8}}>
-        <span style={as.lbl}>Instrucciones adicionales (opcional)</span>
-        <input value={instrucciones} onChange={e=>setInstrucciones(e.target.value)}
-          placeholder="Ej: enfocarse en piernas, sesión corta 45 min, sin sentadilla hoy..."
-          style={as.inp}/>
+        <span style={as.lbl}>Tu instrucción para esta sesión (opcional)</span>
+        {/* Era un <input> de una línea. No se puede escribir una indicación
+            de verdad en un renglón, y el campo comunicaba lo contrario de lo
+            que vale: desde el 04/11 esta instrucción tiene MÁXIMA PRIORIDAD
+            en el pedido y puede sacar o agregar bloques. */}
+        <textarea value={instrucciones} onChange={e=>setInstrucciones(e.target.value)}
+          rows={3}
+          placeholder={'Ej: "sin cardio, solo fuerza"  ·  "agregale pliometría"  ·  "más unilateral, priorizá glúteo"  ·  "incluí hip thrust"'}
+          style={{...as.inp, minHeight:58, resize:'vertical', fontFamily:'inherit', lineHeight:1.45}}/>
+        <div style={{fontSize:9.5,color:G3,marginTop:4,lineHeight:1.45}}>
+          Manda sobre todo lo demás: puede sacar o agregar bloques, cambiar el énfasis y
+          pedir ejercicios puntuales. Lo único que no puede es usar un ejercicio que no
+          esté cargado en la base — si pedís uno que no existe, elige el más parecido y lo
+          aclara en el razonamiento.
+        </div>
       </div>
       {!loading&&!result&&(
         <button onClick={generar} style={{...as.btn(),width:'100%',justifyContent:'center'}}>
