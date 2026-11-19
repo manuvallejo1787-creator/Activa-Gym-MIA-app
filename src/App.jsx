@@ -6,10 +6,11 @@ import DateInput from "./DateInput.jsx";
 import BloqueDirigido from "./BloqueDirigido.jsx";
 import { etiquetaFase } from "./puenteClinica.js";
 import { checkRestriccion, patronesBloqueados, motivoRestriccion } from "./restriccion.js";
+import { resumenClinico, bloquePreventivo } from "./altaClinica.js";
 import { ejerciciosDelPlan, sugerirPatronBloqueado } from "./rehabPuente.js";
 import { FASES_METODO, generarCriteriosPersonalizados, generarCriteriosAvancePersonalizados, checkCriteriosAvance, getSemaforoPorFase } from "./criterios.js";
 import { aNumero, aTexto, aGuardar, normalizarTipeo, avisoRango, calcularIMC } from "./num.js";
-import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, useBandasScreening, registrarCambioFase, genId } from "./db.js";
+import { useGymClients, useEjercicios, useFuerzaTests, usePlanesCliente, useRehabProtocolos, useGymPlanes, useIAConocimiento, useEjecucion, useCustomTests, useCentroConfig, useIncidencias, useFeedbackSesiones, useEjecucionCliente, useHoy, useSalaDatos, useCriteriosAvanceTemplate, useMetas, useBandasScreening, registrarCambioFase, usePlanesClinicos, genId } from "./db.js";
 import Nutricion from "./Nutricion.jsx";
 import { AIGeneradorSesion, AIAnalisisEvaluacion } from "./AIActiva.jsx";
 import RielIncidencia from "./RielIncidencia.jsx";
@@ -3599,7 +3600,7 @@ export default function App(){
   const { config: brand, saveConfig: setBrand } = useCentroConfig();
   const { template: criteriosAvanceTemplate, saveFase: saveCriteriosFase } = useCriteriosAvanceTemplate();
   const { incidencias, saveIncidencia, marcarResuelta, setEstadoIncidencia, marcarLineaBase } = useIncidencias();
-  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, puente:hoyPuente, sueltos:hoySueltos, cambiosFase:hoyCambiosFase, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
+  const { gym:hoyGym, fisio:hoyFisio, descartes:hoyDescartes, reportes:hoyReportes, puente:hoyPuente, sueltos:hoySueltos, cambiosFase:hoyCambiosFase, planesClinicos:hoyPlanesClinicos, pacientesFisio:hoyPacientesFisio, loading:hoyLoading, postergar:hoyPostergar, marcarItem:hoyMarcar, quitarMarca:hoyQuitarMarca, refetch:hoyRefetch } = useHoy();
   // Solo los CRÍTICOS van al contador de la pestaña. Un badge que suma
   // mantenimiento de datos se vuelve permanente y deja de significar algo.
   // Los clientes que el profe cargó en sala: el hook trae sus tests y planes
@@ -3615,7 +3616,7 @@ export default function App(){
   // mostraría 5. Es el mismo tipo de desincronización que ya pasó con las dos
   // listas blancas de estados. `brand` entra en las dependencias porque
   // config cambia los plazos de vencimiento.
-  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,incidencias,puente:hoyPuente,sueltos:hoySueltos,cambiosFase:hoyCambiosFase,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes,incidencias,hoyPuente,hoySueltos,hoyCambiosFase,brand]);
+  const hoyCriticos = useMemo(()=>construirHoy({gym:hoyGym,fisio:hoyFisio,descartes:hoyDescartes,reportes:hoyReportes,incidencias,puente:hoyPuente,sueltos:hoySueltos,cambiosFase:hoyCambiosFase,planesClinicos:hoyPlanesClinicos,pacientesFisio:hoyPacientesFisio,config:brand||{}}).conteo.critico,[hoyGym,hoyFisio,hoyDescartes,hoyReportes,incidencias,hoyPuente,hoySueltos,hoyCambiosFase,hoyPlanesClinicos,hoyPacientesFisio,brand]);
   const [gpDias,setGpDias]=useState(3);
   const [gpDiv,setGpDiv]=useState('auto');
   const [gpLibre,setGpLibre]=useState('');
@@ -3761,6 +3762,51 @@ export default function App(){
     }catch(e){alert('No se pudo vincular: '+e.message);}
   };
 
+  // ═══ PASAR UN PACIENTE DE LA CLÍNICA A LA SALA ════════════════════════════
+  //
+  // No existía. Medido el 19/11: el único plan clínico de la base era de una
+  // paciente en la semana 11 de 12, con cuatro regiones tratadas, que NO era
+  // cliente del gimnasio ni estaba vinculada a ninguno — así que toda la
+  // transición construida hoy no podía dispararse para el único caso real.
+  //
+  // El cliente nace en RESTAURA con semáforo rojo, como manda el método. Desde
+  // hoy eso YA NO BLOQUEA el armado de entrenos (src/restriccion.js): bloquea
+  // los patrones que la clínica marcó, no la base entera.
+  const pasarASala=async(c)=>{
+    try{
+      const yaExiste=clients.find(x=>x.fisio_paciente_id===c.pacienteId);
+      if(yaExiste){alert(`${c.nombre} ya está vinculada a un cliente del gimnasio.`);return}
+      const zonas=c.regiones.join(', ')||'sin regiones';
+      const nPrev=c.clinico.reduce((n,r)=>n+Math.min(r.ejercicios.length,3),0);
+      if(!confirm(
+        `Pasar a ${c.nombre} de la clínica a la sala.\n\n`+
+        `Se crea su cliente del gimnasio vinculado a su ficha clínica, en fase RESTAURA.\n\n`+
+        `Se le arrastra el preventivo de: ${zonas}\n`+
+        `(${nPrev} ejercicio${nPrev===1?'':'s'} de su última fase clínica, al principio de cada día)\n\n`+
+        `La IA va a leer qué tejido se trató antes de elegir ejercicios.\n\n¿Confirmás?`))return;
+
+      const [nombre,...resto]=String(c.nombre).trim().split(' ');
+      const nuevo={
+        id:genId('cli'), nombre, apellido:resto.join(' '),
+        nivel:'restaura', semaforo:'rojo', activo:true,
+        fisio_pacienteId:c.pacienteId,
+        objetivo:`Continuidad post-tratamiento · ${zonas}`,
+        // Las zonas tratadas quedan escritas en las restricciones en TEXTO, que
+        // es lo que lee el pedido a la IA. Las banderas (impacto / overhead /
+        // carga axial) NO se marcan solas: cuál corresponde lo decide el fisio,
+        // y marcarlas por la app sería tomar una conducta clínica.
+        restricciones:`Post-tratamiento clínico en ${zonas}. Revisar banderas en el screening.`,
+        restricciones_flags:{impacto:false,overhead:false,cargaAxial:false},
+        screeningCompleto:false, fechaEval:'', screening:{},
+      };
+      await saveClientFn(nuevo);
+      await hoyRefetch();
+      alert(`${c.nombre} ya es cliente del gimnasio, en RESTAURA.\n\n`+
+        `Abrí el constructor de sesión: el preventivo de ${zonas} se agrega solo al generar el plan, `+
+        `y la IA ya sabe qué se trató.\n\nFalta completarle el screening para activar el filtro de ejercicios.`);
+    }catch(e){alert('No se pudo pasar a sala: '+e.message);}
+  };
+
   const cambiarEstadoIncidencia=async(inc,estado)=>{
     try{
       if(estado==='seguimiento'){
@@ -3831,6 +3877,21 @@ export default function App(){
   const checkRestriction=useCallback((ex,client)=>
     checkRestriccion(ex,client,client?.id===activeClient?.id?patronesCliente:null),
     [patronesCliente,activeClient]);
+  // ── LA TRANSICIÓN CLÍNICA → SALA (19/11/2026) ───────────────────────────
+  // El plan clínico del cliente activo, resumido por región: qué tejido se
+  // trató, en qué fase quedó, qué estuvo haciendo y qué falta para avanzar.
+  // Hasta hoy esto estaba escrito en la base y NADIE lo leía al planificar en
+  // sala: el planificador y el pedido a la IA no sabían que el cliente venía
+  // de un tratamiento.
+  const { planes:planesClinicos } = usePlanesClinicos(activeClient?.fisio_paciente_id||null);
+  const clinicoActivo=useMemo(()=>resumenClinico({
+    planes:planesClinicos, pacienteId:activeClient?.fisio_paciente_id||null}),
+    [planesClinicos,activeClient]);
+  // Y el preventivo que corresponde arrastrar al plan de sala, con la misma
+  // forma que el bloque dirigido del escalón 2 — así lo inserta la maquinaria
+  // que ya está probada y se deshace sola.
+  const preventivosClinicos=useMemo(()=>clinicoActivo
+    .map(r=>bloquePreventivo(r)).filter(Boolean),[clinicoActivo]);
   // Tests de fuerza del cliente activo — para sugerencias de peso en sesión
   const {tests:activeClientTests}=useFuerzaTests(activeClient?.id||null);
   const {feedback:activeClientFeedback}=useFeedbackSesiones(activeClient?.id||null);
@@ -5119,7 +5180,7 @@ export default function App(){
             </div>
             <button onClick={()=>{
                 try{
-                  const r=generarPlanBase({cliente:activeClient,exs,tests:activeClientTests||[],
+                  const r=generarPlanBase({cliente:activeClient,exs,tests:activeClientTests||[],preventivos:preventivosClinicos,
                     incidencias,feedback:activeClientFeedback||[],diasSemana:gpDias,
                     division:gpDiv,divisionLibre:gpLibre,checkRestriction,genId});
                   setGpResultado(r);
@@ -5250,7 +5311,7 @@ export default function App(){
               </div>
             );
           })()}
-          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={faseInfo.idx??0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} onApply={applyAISession}/></div>}
+          {activeClient&&<div style={{marginTop:10}}><AIGeneradorSesion cliente={activeClient} periodizacion={activeClient?.periodizacion?PERIODIZACIONES[activeClient.periodizacion]:null} faseIndex={faseInfo.idx??0} tests={activeClientTests} exs={exs} historial={gymPlanes} reglas={iaReglas} ejecucion={ejecucionResumen} clinico={clinicoActivo} onApply={applyAISession}/></div>}
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10,flexWrap:'wrap',gap:6}}>
             <div style={{display:'flex',gap:6,alignItems:'center'}}>
               <span style={s.tag(NIVEL[OBJS[dia.obj].nivelKey].color)}>{OBJS[dia.obj].label}</span>
@@ -5830,7 +5891,8 @@ export default function App(){
         {tab==='hoy'&&(
           <Hoy gym={hoyGym} fisio={hoyFisio} descartes={hoyDescartes} reportes={hoyReportes} incidencias={incidencias}
             puente={hoyPuente} sueltos={hoySueltos} cambiosFase={hoyCambiosFase}
-            onPuente={aplicarPuente} onVincular={vincularPacientes}
+            planesClinicos={hoyPlanesClinicos} pacientesFisio={hoyPacientesFisio}
+            onPuente={aplicarPuente} onVincular={vincularPacientes} onPasarASala={pasarASala}
             loading={hoyLoading} config={brand||{}}
             postergar={hoyPostergar} marcarItem={hoyMarcar} quitarMarca={hoyQuitarMarca} brand={brand}
             onIr={(destino,id)=>{

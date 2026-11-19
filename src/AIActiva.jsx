@@ -82,7 +82,7 @@ const Spinner = ({ msg = "Generando..." }) => (
 );
 
 // ─── MÓDULO 1: GENERADOR DE SESIONES DE ENTRENAMIENTO ───────────────────────
-export function AIGeneradorSesion({ cliente, periodizacion, faseIndex=0, tests, exs, historial = [], reglas = [], ejecucion = [], onApply }) {
+export function AIGeneradorSesion({ cliente, periodizacion, faseIndex=0, tests, exs, historial = [], reglas = [], ejecucion = [], clinico = [], onApply }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [error, setError]     = useState(null);

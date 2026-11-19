@@ -22,6 +22,7 @@ import { PERIODIZACIONES, parseDuracionSemanas } from "./planificacion.js";
 import { estadoDe as estadoIncidencia, esPendiente, escalonDe, etiquetaEstado,
          fechaVence, zonaTexto, naturalezaTexto } from "./incidencias.js";
 import { decidir, textoAviso, sugerirVinculos, etiquetaFase } from "./puenteClinica.js";
+import { candidatosASala } from "./altaClinica.js";
 
 // ─── VENCIMIENTOS ─────────────────────────────────────────────────────────
 // Plazos por defecto; se pueden cambiar en centro_config sin tocar código.
@@ -126,7 +127,7 @@ const sumarDias = (fecha, n) => {
 const nom = (x) => `${x.nombre || ''} ${x.apellido || ''}`.trim();
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
-export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
+export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], planesClinicos = [], pacientesFisio = [], config = {}, hoy = HOY(), topeIndividual = 9 }) {
   const PZ = { ...PLAZOS, screening: config.venc_screening_dias ?? PLAZOS.screening,
     test: config.venc_test_dias ?? PLAZOS.test, aviso: config.aviso_previo_dias ?? PLAZOS.aviso };
   const items = [];
@@ -328,6 +329,29 @@ export function construirHoy({ gym = [], fisio = [], descartes = [], reportes = 
       porQue: t.porQue,
     });
   });
+
+  // ── PACIENTES DE LA CLÍNICA QUE TERMINAN Y PUEDEN SEGUIR EN SALA ───────
+  // Medido el 19/11: el único plan clínico de la base era de Natalia Cabrera,
+  // semana 11 de 12, cuatro regiones tratadas, y NO era cliente del gimnasio
+  // ni estaba vinculada a ninguno. Un paciente que termina el tratamiento y no
+  // pasa a sala se pierde en silencio, porque a una ficha dada de alta nadie
+  // la vuelve a abrir. El aviso tiene que venir a buscar al profesional.
+  candidatosASala({ planes: planesClinicos, pacientes: pacientesFisio, clientes: gym, hoy })
+    .forEach(c => {
+      const zonas = c.regiones.length ? c.regiones.join(', ') : 'sin regiones registradas';
+      add({
+        key: `a_sala:${c.pacienteId}`, sev: 'atencion', icono: '🚪',
+        titulo: c.termino
+          ? `${c.nombre} terminó su tratamiento y no es cliente del gimnasio`
+          : `${c.nombre} termina su tratamiento en ${plural(c.semanasRestantes, 'semana', 'semanas')} y no es cliente del gimnasio`,
+        detalle: `Plan clínico semana ${c.semanaActual} de ${c.semanasTotales} · ${zonas}` +
+          ` · al pasarla a sala se le arrastra el preventivo de ${plural(c.regiones.length, 'esa zona', 'esas zonas')}`,
+        rank: c.termino ? 740 : 720,
+        aSala: c,
+        accion: { label: 'Ver en clínica', tab: 'fisio' },
+        porQue: 'Es la población que paga la clínica y podría seguir entrenando, y hoy se pierde sin que nadie se entere: a una ficha dada de alta no se le vuelve a entrar. Al pasarla a sala, el trabajo de su última fase clínica se agrega como bloque preventivo del plan de gimnasio, y la IA lee qué tejido se trató antes de elegir ejercicios.',
+      });
+    });
 
   // ── LO QUE LA APP HIZO SOLA ────────────────────────────────────────────
   // Una bajada automática deja las dos fases iguales, así que la vista del

@@ -1322,11 +1322,13 @@ export function useHoy(){
   const [puente,setPuente]=useState([])
   const [sueltos,setSueltos]=useState([])
   const [cambiosFase,setCambiosFase]=useState([])
+  const [planesClinicos,setPlanesClinicos]=useState([])
+  const [pacientesFisio,setPacientesFisio]=useState([])
   const [loading,setLoading]=useState(true)
   const fetch=useCallback(async()=>{
     if(!isSupabaseReady){setLoading(false);return}
     try{
-      const[g,f,d,r,pc,sv,fh]=await Promise.all([
+      const[g,f,d,r,pc,sv,fh,plc,pac]=await Promise.all([
         supabase.from('hoy_gym').select('*'),
         supabase.from('hoy_fisio').select('*'),
         supabase.from('hoy_descartes').select('*'),
@@ -1344,6 +1346,15 @@ export function useHoy(){
         supabase.from('gym_fase_historial').select('*')
           .gte('fecha',new Date(Date.now()-14*864e5).toISOString())
           .order('fecha',{ascending:false}).limit(60),
+        // La transición clínica → sala (19/11). Los planes clínicos activos y
+        // sus pacientes, para detectar a quién le está terminando el
+        // tratamiento sin ser cliente del gimnasio. Natalia Cabrera estaba en
+        // la semana 11 de 12 y nadie lo iba a ver: a un paciente dado de alta
+        // no se le abre la ficha.
+        supabase.from('fisio_planes_clinicos')
+          .select('id,paciente_id,nombre,fecha_inicio,semanas,estado,fases_detalle')
+          .eq('estado','activo'),
+        supabase.from('fisio_pacientes').select('id,nombre,apellido,activo'),
       ])
       if(g.error)throw g.error; if(f.error)throw f.error
       if(r.error)console.error('hoy/reportes:',r.error.message)
@@ -1353,8 +1364,11 @@ export function useHoy(){
       if(pc.error)console.error('hoy/puente:',pc.error.message)
       if(sv.error)console.error('hoy/sin-vincular:',sv.error.message)
       if(fh.error)console.error('hoy/fase-historial:',fh.error.message)
+      if(plc.error)console.error('hoy/planes-clinicos:',plc.error.message)
+      if(pac.error)console.error('hoy/pacientes:',pac.error.message)
       setGym(g.data||[]);setFisio(f.data||[]);setDescartes(d.data||[]);setReportes(r.data||[])
       setPuente(pc.data||[]);setSueltos(sv.data||[]);setCambiosFase(fh.data||[])
+      setPlanesClinicos(plc.data||[]);setPacientesFisio(pac.data||[])
     }catch(e){console.error('useHoy:',e.message)}
     finally{setLoading(false)}
   },[])
@@ -1378,7 +1392,7 @@ export function useHoy(){
     if(error){console.error('quitarMarca:',error.message);fetch()}
   },[fetch])
   const postergar=useCallback((item_key,dias=7,motivo='')=>marcarItem(item_key,'descartado',motivo),[marcarItem])
-  return{gym,fisio,descartes,reportes,puente,sueltos,cambiosFase,loading,refetch:fetch,postergar,marcarItem,quitarMarca}
+  return{gym,fisio,descartes,reportes,puente,sueltos,cambiosFase,planesClinicos,pacientesFisio,loading,refetch:fetch,postergar,marcarItem,quitarMarca}
 }
 
 // ─── HOOK: datos de sala para VARIOS clientes a la vez ───────────────────

@@ -53,6 +53,8 @@
 // texto, y qa/promptSesion.mjs verifica que la instrucción esté al final, con
 // prioridad declarada, y que todos los ejercicios lleguen.
 
+import { textoClinicoParaIA } from './altaClinica.js';
+
 // Normalización para comparar nombres de ejercicios sin que las tildes
 // arruinen el match: la base mezcla "Bíceps" con "Biceps".
 const norm = (s) => String(s || '')
@@ -153,6 +155,7 @@ marcados con ⟵ : ${nombrados.join(', ')}. Incluilos.` : ''}`;
 export function armarPromptSesion({
   cliente = {}, periodizacion = null, faseIndex = 0, tests = [], exs = [],
   historial = [], reglas = [], ejecucion = [], instrucciones = '',
+  clinico = [],
 } = {}) {
   const totalFases = periodizacion?.fases?.length || 0;
   const idx = Math.min(Math.max(faseIndex, 0), Math.max(totalFases - 1, 0));
@@ -189,7 +192,7 @@ Restricciones: ${cliente?.restricciones || 'ninguna'}
 Periodización activa: ${periodizacion?.nombre || 'sin plan'}
 Fase actual: ${faseActiva ? `Fase ${idx + 1}/${totalFases} — ${faseActiva.nombre} — ${faseActiva.reps} reps, ${faseActiva.intensidad}, RIR ${faseActiva.rir}` : 'no definida'}
 ${esAdelanto ? `⚠ El profesional está ADELANTANDO trabajo: esta sesión NO es de la fase inicial del plan, es la fase ${idx + 1} de ${totalFases}. Prescribí acorde a los parámetros de ESA fase específica (reps/intensidad/RIR de arriba), no a los de una fase de adaptación inicial.\n` : ''}Tests de fuerza 1RM: ${rm1s}
-${reglasTxt}${histTxt}${ejecTxt}
+${reglasTxt}${histTxt}${ejecTxt}${textoClinicoParaIA(clinico)}
 ESTRUCTURA DE LA SESIÓN (orden de bloques):
 1. movilidad → 2. activacion → 3. fuerza/potencia/pliometria (principal) → 4. accesorios → 5. zona_media/prev_rehab → 6. cardio/flex_recovery
 Una sesión típica usa 4-6 bloques siguiendo ese flujo. El ORDEN no se altera.

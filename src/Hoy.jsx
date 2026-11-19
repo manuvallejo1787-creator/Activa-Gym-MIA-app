@@ -16,12 +16,12 @@ import { construirHoy, resumenRiel, SEV } from "./hoy.js";
 
 const BK = '#111', WH = '#fff', G4 = '#888', G2 = '#e5e5e5';
 
-export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], loading, postergar, marcarItem, quitarMarca, onIr, onPuente, onVincular, brand, config = {} }) {
+export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias = [], puente = [], sueltos = [], cambiosFase = [], planesClinicos = [], pacientesFisio = [], loading, postergar, marcarItem, quitarMarca, onIr, onPuente, onVincular, onPasarASala, brand, config = {} }) {
   const [verTodo, setVerTodo] = useState(false);
   const [abierto, setAbierto] = useState(null);
   const [copiado, setCopiado] = useState(false);
-  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, config }),
-    [gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, config]);
+  const H = useMemo(() => construirHoy({ gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, planesClinicos, pacientesFisio, config }),
+    [gym, fisio, descartes, reportes, incidencias, puente, sueltos, cambiosFase, planesClinicos, pacientesFisio, config]);
 
   const hoyTxt = new Date().toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -73,6 +73,12 @@ export default function Hoy({ gym, fisio, descartes, reportes = [], incidencias 
                 <button onClick={() => onPuente?.(it.puente)}
                   style={{ background: '#9A3412', color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
                   🔒 Bloquear el patrón de la zona
+                </button>
+              )}
+              {it.aSala && (
+                <button onClick={() => onPasarASala?.(it.aSala)}
+                  style={{ background: '#0F766E', color: WH, border: 'none', borderRadius: 6, padding: '6px 13px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>
+                  🚪 Pasar a sala con su preventivo
                 </button>
               )}
               {it.vinculos && it.vinculos.length > 0 && (

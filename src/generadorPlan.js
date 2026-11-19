@@ -28,6 +28,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PERIODIZACIONES, MACRO_PLAN_METODO, getMacroPlanSugerido, sugerirPeso, parseDuracionSemanas } from "./planificacion.js";
+// El preventivo clínico se reparte entre los días, no se repite en todos:
+// con las 4 regiones del caso real eran 12 ejercicios al principio de cada día.
+import { repartirPreventivos } from "./altaClinica.js";
 import { computarMetricas, CM_PATRONES, VIGENCIA_SCREENING_DIAS } from "./motor.js";
 
 // Bloques por fase del método (espejo de OBJS en App.jsx)
@@ -404,6 +407,7 @@ export function generarPlanBase({
   cliente, exs = [], tests = [], incidencias = [], feedback = [], evaluacion = null,
   diasSemana = 3, periodizacionId = null, faseCicloIndex = 0,
   division = 'auto', divisionLibre = '',
+  preventivos = [],
   checkRestriction = null, genId = (p) => p + '_' + Date.now().toString(36),
 }) {
   const avisos = [], bloqueantes = [], procedencia = [];
@@ -514,6 +518,39 @@ export function generarPlanBase({
         }),
       };
     }).filter(b => b.exercises.length > 0);
+
+    // ── EL PREVENTIVO QUE VIENE DEL PLAN CLÍNICO (19/11/2026) ────────────
+    // Manu: "al hacer la transferencia a la planificación de los entrenos en
+    // sala, que contemple esas cosas y las añada de preventivo".
+    //
+    // Va en TODOS los días y al principio, no al final: el preventivo de una
+    // zona recién salida de tratamiento es trabajo de preparación —control
+    // motor, tolerancia del tejido— y hacerlo al final, cansado, después de
+    // la fuerza, es hacerlo mal. El bloque dirigido del escalón 2 va al final
+    // porque REEMPLAZA a un patrón bloqueado; este no reemplaza nada.
+    (preventivos || []).forEach(pv => {
+      const exs2 = Array.isArray(pv?.exercises) ? pv.exercises : [];
+      if (!exs2.length) return;
+      blocks.unshift({
+        id: genId('blk'),
+        type: 'prev_rehab',
+        nombre: `🩺 Preventivo ${pv.region || ''} — ${pv.fase || 'plan clínico'}`.trim(),
+        preventivoClinico: true,
+        planClinicoId: pv.planId || null,
+        notaBloque: pv.nota || '',
+        params: { series: String(exs2[0]?.series || 2), reps: String(exs2[0]?.reps || ''), descanso: String(exs2[0]?.descanso || '') },
+        exercises: exs2.map(e => ({
+          exId: e.exId, nombre: e.nombre || e.exId,
+          params: { series: String(e.series || 2), reps: String(e.reps || ''), descanso: String(e.descanso || '') },
+          pesoSug: '', pesoReal: '', anotacion: e.notas || '',
+          // Sin carga sugerida a propósito: estos ejercicios no están en la
+          // tabla `ejercicios` ni tienen test de patrón, así que el motor
+          // determinista no puede calcular su carga. Inventarla sería peor.
+          pesoSugAuto: false, preventivoClinico: true,
+        })),
+      });
+      procedencia.push(`Preventivo de ${pv.region} arrastrado del plan clínico (${pv.fase}) — ${exs2.length} ejercicio${exs2.length === 1 ? '' : 's'}`);
+    });
 
     // Misma forma que blankDia() en App.jsx, para que el constructor no vea
     // diferencia entre un día generado y uno creado a mano.
