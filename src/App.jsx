@@ -1804,6 +1804,11 @@ const InformeClienteModal=({cliente,onClose,saveClient,exs,s,brand,setSession,se
           ...p,
           clienteId:cliente.id,
           cliente:`${cliente.nombre} ${cliente.apellido}`,
+          // Se limpia el plan del cliente anterior igual que en
+          // vincularCliente: acá no se puede llamar a esa función porque este
+          // setSession además arma el día con la fase sugerida por la IA, pero
+          // dejar `planId` pegado le pisaría el plan al cliente de antes.
+          ...(p.clienteId!==cliente.id?{planId:null,planNombre:'',planEstado:'activo',planEsEjemplo:false,planNotasGlobal:''}:{}),
           dias:(p.dias||[]).map((d,i)=>i!==idx?d:({
             ...d,
             obj:faseObj,
@@ -3489,7 +3494,10 @@ const ClientWizardModal=({clientWizard,saveClient,completarAlta,setClientWizard,
     );
   };
 
-const SemaforoBanner=({cliente,setSession,s})=>{
+// Recibe `vincularCliente` y no `setSession`: desvincular tiene que limpiar
+// el plan en curso igual que cualquier otro cambio de cliente. Con
+// setSession suelto, este botón era el noveno lugar que se olvidaba.
+const SemaforoBanner=({cliente,vincularCliente,s})=>{
     if(!cliente)return null;
     const sf=SF[cliente.semaforo];
     const nv=NIVEL[cliente.nivel];
@@ -3539,7 +3547,7 @@ const SemaforoBanner=({cliente,setSession,s})=>{
             )}
           </div>
         </div>
-        <button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnG,flexShrink:0,fontSize:10,padding:'3px 8px'}}>Desvincular</button>
+        <button onClick={()=>vincularCliente(null)} style={{...s.btnG,flexShrink:0,fontSize:10,padding:'3px 8px'}}>Desvincular</button>
       </div>
     );
   };
@@ -3580,7 +3588,7 @@ export default function App(){
 
   const deleteClientFn = useCallback(async (id) => {
     await dbDeleteClient(id);
-    if(session.clienteId===id) setSession(p=>({...p,clienteId:null,cliente:''}));
+    if(session.clienteId===id) vincularCliente(null);
   }, [dbDeleteClient, session.clienteId]);
 
   const updateClientFn = useCallback(async (id, updates) => {
@@ -4029,6 +4037,39 @@ export default function App(){
     }
     return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
   });
+  // ══ CAMBIAR DE CLIENTE LIMPIA EL PLAN EN CURSO ═══════════════════════════
+  //
+  // Pérdida de datos reportada el 20/11/2026: "la app me está borrando rutinas
+  // ya hechas". No las borraba: las REASIGNABA.
+  //
+  // `guardarPlanActual` hace `const id = session.planId || genId('plan')`, y
+  // ninguno de los OCHO lugares que cambiaban `session.clienteId` limpiaba
+  // `planId`. Entonces el id del plan de un cliente quedaba pegado en la
+  // sesión, y al guardar con otro cliente seleccionado el upsert por id
+  // sobreescribía la fila: el plan cambiaba de dueño y el primero lo perdía.
+  //
+  // Medido en la base: UN plan compartido por tres clientas (Vanesa Sagasti,
+  // Natalia Morales, Melanie Hellbusch), y el mismo patrón en agosto con otras
+  // dos. Las cargas del portal quedaban huérfanas apuntando a un plan ajeno.
+  //
+  // Esta función reemplaza los ocho `setSession(p=>({...p,clienteId:...}))`
+  // sueltos. Un solo lugar que sepa qué hay que limpiar es lo que evita que el
+  // noveno vuelva a olvidarse.
+  const vincularCliente=useCallback((c)=>{
+    setSession(p=>{
+      const nuevoId=c?.id||null;
+      if(p.clienteId===nuevoId)return p;        // mismo cliente: no se toca nada
+      return {...p,
+        clienteId:nuevoId,
+        cliente:c?`${c.nombre||''} ${c.apellido||''}`.trim():'',
+        // Todo lo que identifica al PLAN del cliente anterior se va. Si se
+        // conservara, el próximo guardado le pisaría el plan al otro.
+        planId:null, planNombre:'', planEstado:'activo', planEsEjemplo:false,
+        planNotasGlobal:'',
+      };
+    });
+  },[]);
+
   const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
 
   // ── REGISTRO DE PLANES (persistencia + historial) ────────────────────────
@@ -4313,7 +4354,7 @@ export default function App(){
   const completarAlta=async(client)=>{
     await saveClientFn(client);                       // lanza si falla
     setClientWizard(null);
-    setSession(p=>({...p,clienteId:client.id,cliente:`${client.nombre||''} ${client.apellido||''}`.trim()}));
+    vincularCliente(client);
     setTab('session');
   };
   // Genera (si hace falta) y copia el link del portal personal del cliente
@@ -4646,9 +4687,9 @@ export default function App(){
                     <button onClick={()=>setClientWizard({cli:c,step:5})} style={{...s.btnR,fontSize:10,padding:'4px 10px'}}>Completar evaluación →</button>
                   )}
                   {c.screeningCompleto&&!isLinked&&(
-                    <button onClick={()=>{setSession(p=>({...p,clienteId:c.id,cliente:`${c.nombre} ${c.apellido}`}));setTab('session');}} style={{...s.btnBK,fontSize:10,padding:'4px 10px'}}>Usar en sesión →</button>
+                    <button onClick={()=>{vincularCliente(c);setTab('session');}} style={{...s.btnBK,fontSize:10,padding:'4px 10px'}}>Usar en sesión →</button>
                   )}
-                  {isLinked&&<button onClick={()=>setSession(p=>({...p,clienteId:null,cliente:''}))} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
+                  {isLinked&&<button onClick={()=>vincularCliente(null)} style={{...s.btnGreen,fontSize:10,padding:'4px 10px'}}>✓ Desvincular</button>}
                   {c.screeningCompleto&&<button onClick={()=>setInformeCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#F5F3FF',color:'#7C3AED',borderColor:'#C4B5FD'}}>📊 Informe</button>}
                   {c.periodizacion&&c.periodizacionSnapshotInicio&&<button onClick={()=>setMiniEvalCliente(c)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:'#FFFBEB',color:'#92400E',borderColor:'#FDE68A'}}>🎯 Cerrar ciclo</button>}
                   {(c.screeningHistorial||[]).length>=2&&<button onClick={()=>setCheckpointCliente(checkpointCliente===c.id?null:c.id)} style={{...s.btnG,fontSize:10,padding:'4px 8px',background:checkpointCliente===c.id?brand.colorPrimary:'#EFF6FF',color:checkpointCliente===c.id?WH:'#1D4ED8',borderColor:'#93C5FD'}}>📊 Checkpoint</button>}
@@ -5003,11 +5044,11 @@ export default function App(){
         {clients.filter(c=>c.screeningCompleto&&c.activo!==false).length>0&&(
           <div style={{...s.card,marginBottom:16,borderLeft:`4px solid ${brand.colorPrimary}`}}>
             <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Vincular cliente a la sesión</div>
-            <select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%',marginBottom:activeClient?8:0}}>
+            <select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){vincularCliente(null);return;}const c=clients.find(x=>x.id===id);if(c)vincularCliente(c);}} style={{...s.sel,width:'100%',marginBottom:activeClient?8:0}}>
               <option value=''>Sin cliente vinculado</option>
               {clients.filter(c=>c.screeningCompleto&&c.activo!==false).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido} · {NIVEL[c.nivel].label}</option>)}
             </select>
-            {activeClient&&SemaforoBanner({cliente:activeClient,setSession,s})}
+            {activeClient&&SemaforoBanner({cliente:activeClient,vincularCliente,s})}
           </div>
         )}
         {clients.filter(c=>!c.screeningCompleto&&c.activo!==false).length>0&&(
@@ -5287,7 +5328,7 @@ export default function App(){
             <div>
               <span style={s.lbl}>Cliente</span>
               {clients.filter(c=>c.screeningCompleto&&c.activo!==false).length>0
-                ?<select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){setSession(p=>({...p,clienteId:null,cliente:''}));return;}const c=clients.find(x=>x.id===id);if(c)setSession(p=>({...p,clienteId:id,cliente:`${c.nombre} ${c.apellido}`}));}} style={{...s.sel,width:'100%'}}>
+                ?<select value={session.clienteId||''} onChange={e=>{const id=e.target.value;if(!id){vincularCliente(null);return;}const c=clients.find(x=>x.id===id);if(c)vincularCliente(c);}} style={{...s.sel,width:'100%'}}>
                     <option value=''>Sin cliente</option>
                     {clients.filter(c=>c.screeningCompleto&&c.activo!==false).map(c=><option key={c.id} value={c.id}>{SF[c.semaforo].emoji} {c.nombre} {c.apellido}</option>)}
                   </select>
@@ -5328,7 +5369,7 @@ export default function App(){
             </div>
           </div>
         </div>
-        {activeClient&&SemaforoBanner({cliente:activeClient,setSession,s})}
+        {activeClient&&SemaforoBanner({cliente:activeClient,vincularCliente,s})}
         {/* ── MODAL: HISTORIAL DE PLANES DEL CLIENTE ── */}
         {showHistorial&&(
           OverlayWrap({wide:true,children:(<>
@@ -5904,7 +5945,7 @@ export default function App(){
                 if(nombreCompleto)setClienteSearch(nombreCompleto);   // el directorio queda filtrado en esa persona
                 setTab('clientes');
               } else if(destino==='constructor'){
-                if(c)setSession(p=>({...p,clienteId:c.id,cliente:nombreCompleto}));
+                if(c)vincularCliente(c);
                 setTab('session');
               } else if(destino==='sala'){
                 setTab('riel');

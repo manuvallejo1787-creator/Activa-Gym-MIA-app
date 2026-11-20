@@ -147,6 +147,42 @@ const sanearCliente = (c) => {
   return out;
 };
 
+// ══════════════════════════════════════════════════════════════════════════
+// LA GUARDA DE DUEÑO — pérdida de datos reportada el 20/11/2026
+// ══════════════════════════════════════════════════════════════════════════
+// QUÉ PASABA: todo lo que se guarda acá se graba con "upsert por id": si el
+// id existe, pisa esa fila; si no, crea una nueva. Las pantallas reusan el id
+// del plan que tienen abierto. Si se cambia de cliente sin cerrar el plan, el
+// id del plan del cliente anterior queda pegado, y al guardar el upsert PISA
+// LA FILA DEL OTRO CLIENTE y el plan pasa a tener dueño nuevo.
+//
+// Medido en la base el 20/11: UN id de plan compartido por TRES clientas
+// (Melanie como dueña, con 11 cargas del portal de Vanesa y 6 de Natalia), y
+// el mismo patrón en agosto con otras dos. No era un borrado: era un robo de
+// fila. Para la clienta que lo perdía, idéntico a un borrado.
+//
+// POR QUÉ UNA SOLA FUNCIÓN PARA LAS SEIS TABLAS
+// Limpiar el id en la pantalla arregla los lugares de hoy. Esta guarda arregla
+// también el que alguien agregue el mes que viene: un upsert por id que puede
+// cambiar de dueño es una pistola cargada, y el precio de cerrarla es una
+// consulta por guardado. Una función y no seis copias, para que el séptimo
+// lugar sea una línea y no un olvido.
+const verificarDueno = async (tabla, columnaDueno, id, duenoActual, queEs) => {
+  if (!id || !duenoActual || !isSupabaseReady) return
+  const { data: previo, error } = await supabase.from(tabla)
+    .select(`id,${columnaDueno}`).eq('id', id).maybeSingle()
+  if (error) throw error
+  // Sin fila previa es un alta nueva, que es lo normal: no es un error.
+  if (!previo || !previo[columnaDueno]) return
+  if (previo[columnaDueno] !== duenoActual) {
+    throw new Error(
+      `Ese ${queEs} ya pertenece a otro cliente. No se guardó nada.\n\n` +
+      `Pasa cuando se guarda, se cambia de cliente y se vuelve a guardar sin ` +
+      `empezar uno nuevo. Tocá "Nuevo" y guardalo de nuevo: así se crea con su ` +
+      `propio registro y no se le pisa el trabajo al otro cliente.`)
+  }
+}
+
 export function useGymClients() {
   const [clients, setClients]   = useState([])
   const [loading, setLoading]   = useState(true)
@@ -610,6 +646,7 @@ export function useFuerzaTests(clientId) {
     if(!clientId) throw new Error('No hay cliente seleccionado')
     const toSave={...t, gym_client_id:clientId}
     if(isSupabaseReady){
+      await verificarDueno('fuerza_tests','gym_client_id',t?.id,clientId,'test')
       const{error}=await supabase.from('fuerza_tests').upsert(toSave,{onConflict:'id'})
       if(error) throw error
       await fetch() // refetch to update UI immediately
@@ -646,7 +683,11 @@ export function usePlanesCliente(clientId) {
     return()=>supabase.removeChannel(ch)
   },[fetch,clientId])
   const savePlan=useCallback(async(p)=>{
-    if(isSupabaseReady){const{error}=await supabase.from('planes_periodizacion').upsert({...p,gym_client_id:clientId},{onConflict:'id'});if(error)throw error}
+    if(isSupabaseReady){
+      await verificarDueno('planes_periodizacion','gym_client_id',p?.id,clientId,'plan de periodización')
+      const{error}=await supabase.from('planes_periodizacion').upsert({...p,gym_client_id:clientId},{onConflict:'id'})
+      if(error)throw error
+    }
     else setPlanes(p2=>p2.find(x=>x.id===p.id)?p2.map(x=>x.id===p.id?p:x):[p,...p2])
   },[clientId])
   const deletePlan=useCallback(async(id)=>{
@@ -681,6 +722,7 @@ export function useGymPlanes(clientId) {
     if(!clientId)throw new Error('No hay cliente seleccionado')
     const toSave={...p,gym_client_id:clientId,updated_at:new Date().toISOString()}
     if(isSupabaseReady){
+      await verificarDueno('gym_planes','gym_client_id',p?.id,clientId,'plan')
       const{error}=await supabase.from('gym_planes').upsert(toSave,{onConflict:'id'})
       if(error)throw error
       await fetch()
@@ -774,6 +816,7 @@ export function useCustomTests(clientId) {
         const slot=slots[i];const it=items[i]
         const rid=`${clientId}__${slot}`
         if(it&&it.nombre&&it.nombre.trim()){
+          await verificarDueno('fuerza_tests_custom','gym_client_id',rid,clientId,'test personalizado')
           await supabase.from('fuerza_tests_custom').upsert({id:rid,gym_client_id:clientId,slot,nombre:it.nombre.trim(),patron:it.patron||'',protocolo:it.protocolo||'',updated_at:new Date().toISOString()},{onConflict:'id'})
         }else{
           await supabase.from('fuerza_tests_custom').delete().eq('id',rid)
@@ -836,6 +879,7 @@ export function useNutricionPlanes(clientId) {
     if(!clientId)throw new Error('No hay cliente seleccionado')
     const toSave={...p,gym_client_id:clientId,updated_at:new Date().toISOString()}
     if(isSupabaseReady){
+      await verificarDueno('gym_planes_nutricion','gym_client_id',p?.id,clientId,'plan de nutrición')
       const{error}=await supabase.from('gym_planes_nutricion').upsert(toSave,{onConflict:'id'})
       if(error)throw error
       await fetch()
@@ -905,7 +949,12 @@ export function useSesionesClinicas(pacienteId) {
   const saveSesion=useCallback(async(s)=>{
     if(!pacienteId)throw new Error('Sin paciente')
     const toSave={...s,paciente_id:pacienteId}
-    if(isSupabaseReady){const{error}=await supabase.from('sesiones_clinicas').upsert(toSave,{onConflict:'id'});if(error)throw error;await fetch()}
+    if(isSupabaseReady){
+      await verificarDueno('sesiones_clinicas','paciente_id',toSave?.id,toSave?.paciente_id,'sesión clínica')
+      const{error}=await supabase.from('sesiones_clinicas').upsert(toSave,{onConflict:'id'})
+      if(error)throw error
+      await fetch()
+    }
     else setSesiones(p=>p.find(x=>x.id===s.id)?p.map(x=>x.id===s.id?toSave:x):[toSave,...p])
   },[pacienteId,fetch])
   const deleteSesion=useCallback(async(id)=>{
@@ -1111,6 +1160,7 @@ export function useIncidencias(){
   },[fetch])
   const saveIncidencia=useCallback(async(inc)=>{
     if(isSupabaseReady){
+      await verificarDueno('gym_incidencias','gym_client_id',inc?.id,inc?.gym_client_id,'reporte')
       const{error}=await supabase.from('gym_incidencias').upsert(inc,{onConflict:'id'})
       if(error)throw error
       await fetch()
@@ -1188,6 +1238,7 @@ export function usePlanesClinicos(pacienteId){
   const savePlan=useCallback(async(plan)=>{
     const toSave={...plan,paciente_id:pacienteId,updated_at:new Date().toISOString()}
     if(isSupabaseReady){
+      await verificarDueno('fisio_planes_clinicos','paciente_id',plan?.id,pacienteId,'plan clínico')
       const{error}=await supabase.from('fisio_planes_clinicos').upsert(toSave,{onConflict:'id'})
       if(error)throw error
       await fetch()
