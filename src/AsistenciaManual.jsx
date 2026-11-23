@@ -12,6 +12,11 @@ import { supabase } from "./supabase.js";
 // Un toque = presente hoy, con la hora del momento. Se puede marcar hasta 7
 // días atrás (sin hora: la hora de un día pasado sería inventada).
 //
+// 23/11 (casos Aldana Hernandez, Kidd, Savarese): la lista trae a TODOS los
+// socios activos. Por defecto se ven los que no tienen portal; buscando por
+// nombre aparecen también los que tienen portal, para marcarlos el día que
+// vinieron y no cargaron nada.
+//
 // Cuota atrasada (17/11, caso Roldan): Gestión marca "bloqueado" a quien debe
 // 20+ días. Marcarlo pide confirmación y un motivo, que viaja a Gestión.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -58,8 +63,9 @@ export default function AsistenciaManual() {
     [marcas, fecha]);
 
   const q = sinTildes(busca.trim());
+  const sinPortal = roster.filter(c => !c.con_portal);
   const lista = useMemo(() => roster
-    .filter(c => !q || sinTildes(c.nombre).includes(q))
+    .filter(c => q ? sinTildes(c.nombre).includes(q) : !c.con_portal || marcadosDia.has(Number(c.cliente_gestion_id)))
     // Primero los que faltan marcar: son los que se buscan.
     .sort((a, b) => (marcadosDia.has(Number(a.cliente_gestion_id)) - marcadosDia.has(Number(b.cliente_gestion_id)))
       || a.nombre.localeCompare(b.nombre)),
@@ -113,7 +119,7 @@ export default function AsistenciaManual() {
         <div>
           <div style={{ fontSize: 12, fontWeight: 800, color: WH }}>✅ Asistencia sin portal</div>
           <div style={{ fontSize: 10, color: G4, marginTop: 2 }}>
-            {roster.length} clientes todavía sin usuario · {nHoy} marcados hoy
+            {sinPortal.length} sin portal · {nHoy} marcados hoy · buscá a cualquier socio si vino sin cargar
           </div>
         </div>
         <span style={{ color: G4, fontSize: 12 }}>{abierta ? '▲' : '▼'}</span>
@@ -122,7 +128,7 @@ export default function AsistenciaManual() {
       {abierta && (
         <div style={{ marginTop: 9 }}>
           <div style={{ fontSize: 10, color: G4, marginBottom: 8, lineHeight: 1.45 }}>
-            Solo para quienes no cargan en el portal. Los que tienen usuario se registran solos.
+            La lista muestra a quienes no tienen portal. Si alguien con portal vino y no cargó nada, buscalo por nombre y marcalo: queda como "recepción".
           </div>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
             <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar…"
@@ -148,6 +154,7 @@ export default function AsistenciaManual() {
                   style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 9px', borderRadius: 6, background: '#1c1c1c', marginBottom: 3 }}>
                   <span style={{ fontSize: 12, color: WH }}>
                     {c.nombre}
+                    {c.con_portal && <span style={{ color: G4, fontSize: 10 }}> · tiene portal</span>}
                     {c.bloqueado && <span style={{ color: ROJO, fontSize: 10, fontWeight: 700 }}> · CUOTA VENCIDA, cobrar antes</span>}
                     {c.plan && <span style={{ color: G4, fontSize: 10 }}> · {c.plan}</span>}
                   </span>

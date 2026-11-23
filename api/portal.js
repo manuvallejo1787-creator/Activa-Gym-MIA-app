@@ -66,6 +66,20 @@ export default async function handler(req, res) {
       if (!cli) return res.status(403).json({ error: "Acceso no válido" });
       if (cli.portal_bloqueado) return res.status(423).json({ error: BLOQUEADO, bloqueado: true });
 
+      // Apertura del portal (23/11): una fila por cliente y día, la primera
+      // hora. Gestión la usa como asistencia de menor peso (abrir no prueba
+      // que esté en el gym). Si falla no corta la carga del portal.
+      try {
+        const ahora = new Date();
+        const fecha = ahora.toLocaleDateString("en-CA", { timeZone: "America/Montevideo" });
+        const hora = ahora.toLocaleTimeString("en-GB", { timeZone: "America/Montevideo", hour: "2-digit", minute: "2-digit" });
+        await sb(`portal_aperturas?on_conflict=gym_client_id,fecha`, {
+          method: "POST",
+          headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+          body: JSON.stringify([{ gym_client_id: cli.id, fecha, hora }]),
+        });
+      } catch (e) { /* sin tabla todavía o error puntual: se ignora */ }
+
       // Antes esto tomaba solo el plan 'activo' más reciente (limit=1). Si el
       // profesional arma varias sesiones por separado y las junta en bloque
       // para el PDF (función "Compilar bloque" del historial), esos planes
