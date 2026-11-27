@@ -14,7 +14,7 @@
 // tenía el bloque determinista del analizador: "sin medir" es medición
 // pendiente, jamás un mal resultado.
 import { evaluarCriterio, evaluarFase, criterioVacio, semaforoDeCarga,
-         EJES, METRICAS, SEMAFORO_CARGA, DIRECCION_ESCALA } from '../src/fisioCriterios.js';
+         EJES, METRICAS, SEMAFORO_CARGA, DIRECCION_ESCALA, IRRADIACION } from '../src/fisioCriterios.js';
 
 let fallos = 0;
 const ok = (c, d) => { if (!c) { console.log('  ✗ ' + d); fallos++; } else console.log('  ✓ ' + d); };
@@ -180,7 +180,72 @@ console.log('\n4. Lo que NO se puede automatizar se dice, no se finge');
   ok(noAuto.length === 2 && noAuto.includes('sin_empeorar') && noAuto.includes('confirmacion'),
     `solo 2 métricas son manuales (${noAuto.join(', ')}): el resto se mide de verdad`);
   const auto = Object.entries(METRICAS).filter(([, m]) => m.auto).length;
-  ok(auto === 8, `${auto} métricas se evalúan solas contra la evaluación guardada`);
+  ok(auto === 9, `${auto} métricas se evalúan solas contra la evaluación guardada, incluido el eje neural`);
+}
+
+console.log('\n4b. EL CRITERIO NEURAL — de tilde a medición');
+{
+  // EL CRITERIO 2 DEL DOCUMENTO DE MANU, el que él marca como "especialmente
+  // importante": no avanzar si aparece mayor irradiación distal, parestesias
+  // nuevas o pérdida de fuerza. Era una tilde de confianza porque la sesión
+  // guardaba la respuesta como texto libre.
+  const cr = criterioVacio({ eje: 'neural', metrica: 'neural', que: 'Síntomas neurales sin empeorar' });
+
+  const estable = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'proximal', parestesias: false, perdida_fuerza: false } },
+    { neural: { irradiacion: 'proximal', parestesias: false, perdida_fuerza: false } },
+  ]});
+  ok(estable.estado === 'cumplido' && estable.valor === 'estable',
+    'misma irradiación entre dos sesiones → cumplido');
+
+  const peor = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'hasta_mano', parestesias: false, perdida_fuerza: false } },
+    { neural: { irradiacion: 'hasta_codo', parestesias: false, perdida_fuerza: false } },
+  ]});
+  ok(peor.estado === 'no_cumplido',
+    'LA ESCALA ES ORDINAL: la irradiación pasó del codo a la mano → no cumple, la fase no avanza');
+  ok(/no avanzar de fase y revisar la dosis/i.test(peor.detalle), 'y dice qué hacer');
+
+  const mejor = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'proximal' } }, { neural: { irradiacion: 'hasta_mano' } },
+  ]});
+  ok(mejor.estado === 'cumplido',
+    'y si la irradiación RETROCEDE en la escala, cumple: el orden distingue mejorar de empeorar, que como texto libre era indistinguible');
+
+  const parest = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'proximal', parestesias: true } },
+    { neural: { irradiacion: 'proximal', parestesias: false } },
+  ]});
+  ok(parest.estado === 'no_cumplido',
+    'parestesias nuevas con la misma irradiación → tampoco avanza: cualquiera de las tres señales alcanza');
+
+  const fuerza = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'no', perdida_fuerza: true } },
+    { neural: { irradiacion: 'no', perdida_fuerza: false } },
+  ]});
+  ok(fuerza.estado === 'no_cumplido', 'y pérdida de fuerza nueva tampoco, aun sin irradiación');
+}
+{
+  const cr = criterioVacio({ eje: 'neural', metrica: 'neural', que: 'Síntomas neurales' });
+  const unaSola = evaluarCriterio(cr, { ...CTX, sesiones: [{ neural: { irradiacion: 'no' } }] });
+  ok(unaSola.estado === 'pendiente',
+    'EL CONTROL QUE IMPORTA: con UNA sola sesión no hay con qué comparar → pendiente, nunca "estable por defecto". Dar por bueno lo que no se midió es lo que hace avanzar de fase a un paciente con la irradiación creciendo');
+  ok(/dos sesiones con los síntomas neurales cargados/.test(unaSola.detalle),
+    'y dice exactamente qué falta cargar');
+
+  const sinCampo = evaluarCriterio(cr, { ...CTX, sesiones: [{ eva_fin: 3 }, { eva_fin: 4 }] });
+  ok(sinCampo.estado === 'pendiente',
+    'las 42 sesiones viejas, sin el campo cargado, quedan pendientes y no bloquean a nadie');
+
+  const basura = evaluarCriterio(cr, { ...CTX, sesiones: [
+    { neural: { irradiacion: 'cualquier_cosa' } }, { neural: { irradiacion: 'no' } }]});
+  ok(basura.estado === 'pendiente',
+    'un valor fuera de la escala queda pendiente en lugar de compararse mal (la base además lo rechaza)');
+
+  ok(METRICAS.neural.auto === true,
+    'y la métrica queda marcada como automática: el criterio 2 dejó de ser una tilde de confianza');
+  ok(IRRADIACION.length === 4 && IRRADIACION[0] === 'no' && IRRADIACION[3] === 'hasta_mano',
+    `la escala tiene ${IRRADIACION.length} niveles de menor a mayor: ${IRRADIACION.join(' < ')}`);
 }
 
 console.log('\n5. El veredicto de fase — tres resultados, no dos');

@@ -9,6 +9,7 @@ import { useFisioPacientes, useSesionesClinicas, useTodasSesionesClinicas, useCr
 import PlanClinico from "./PlanClinico.jsx";
 import { FASE_A_PROT, prescripcionDeHoy, PROT_SESION, generarSesionClinica, tipoItemRehab } from "./planClinicoMotor.js";
 import { AIRazonadorClinico, AIAnalisisEvaluacion } from "./AIActiva.jsx";
+import { IRRADIACION, IRRADIACION_LABEL, semaforoDeCarga } from "./fisioCriterios.js";
 // Las medidas y el serializador de la evaluación se mudaron a su propio archivo
 // para que la capa de IA pueda importarlos: encerrados acá adentro, el
 // generador de planes clínicos no podía leer la evaluación y tenía que
@@ -292,6 +293,12 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[], guardarPlan
     region: regionActual,
     eva_inicio: 0,
     eva_fin: 0,
+    // Síntomas neurales estructurados. Hacen exigible el criterio 2 de avance
+    // de fase; como texto libre en `respuesta` solo se podía tildar a mano.
+    // Arranca en null a propósito: null = sin registrar, que el evaluador lee
+    // como pendiente. Si arrancara en "no" diría que no hay irradiación sin
+    // que nadie la haya mirado.
+    neural: null,
     objetivo_sesion: ultimaEval?.objetivos_tratamiento || '',
     // Auto-carga ejercicios del protocolo como array editable
     ejercicios_lista: [...protocoloEjercicios],
@@ -410,6 +417,71 @@ function SesionClienteComp({ paciente, reglas=[], planesClinicos=[], guardarPlan
                 {form.eva_fin<form.eva_inicio?`↓ Mejoró ${form.eva_inicio-form.eva_fin} pto/s en sesión`:`↑ Empeoró ${form.eva_fin-form.eva_inicio} pto/s`}
               </div>
             )}
+
+            {/* ── SÍNTOMAS NEURALES ─────────────────────────────────────────
+                El criterio 2 de avance de fase: no avanzar si aparece mayor
+                irradiación distal, parestesias nuevas o pérdida de fuerza.
+                Antes esto se escribía en `respuesta` como texto libre y el
+                criterio solo podía tildarse a mano, que no es distinto de la
+                frase de texto que teníamos. Con estos tres campos el sistema
+                compara esta sesión contra la anterior y el pase de fase deja
+                de decidirse a ojo. */}
+            <div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${GL}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <span style={fs.lbl}>⚡ Síntomas neurales</span>
+                {!form.neural&&(
+                  <button type="button" onClick={()=>setF(f=>({...f,neural:{irradiacion:'no',parestesias:false,perdida_fuerza:false}}))}
+                    style={{...s2.btnG,fontSize:10}}>+ Registrar</button>
+                )}
+              </div>
+              {!form.neural
+                ? <div style={{fontSize:10,color:GM}}>Sin registrar. Mientras no se cargue en dos sesiones, el criterio neural queda pendiente y no habilita el pase de fase.</div>
+                : (
+                <div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'end'}}>
+                    <div>
+                      <span style={{...fs.lbl,fontSize:9}}>Irradiación</span>
+                      <select value={form.neural.irradiacion||'no'}
+                        onChange={e=>setF(f=>({...f,neural:{...f.neural,irradiacion:e.target.value}}))}
+                        style={fs.sel}>
+                        {IRRADIACION.map(k=><option key={k} value={k}>{IRRADIACION_LABEL[k]}</option>)}
+                      </select>
+                    </div>
+                    <button type="button" onClick={()=>setF(f=>({...f,neural:null}))}
+                      style={{...s2.btnG,fontSize:10,color:RJ}}>Quitar</button>
+                  </div>
+                  <div style={{display:'flex',gap:14,marginTop:7}}>
+                    <label style={{fontSize:11,display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}>
+                      <input type="checkbox" checked={!!form.neural.parestesias}
+                        onChange={e=>setF(f=>({...f,neural:{...f.neural,parestesias:e.target.checked}}))}/>
+                      Parestesias
+                    </label>
+                    <label style={{fontSize:11,display:'flex',alignItems:'center',gap:5,cursor:'pointer'}}>
+                      <input type="checkbox" checked={!!form.neural.perdida_fuerza}
+                        onChange={e=>setF(f=>({...f,neural:{...f.neural,perdida_fuerza:e.target.checked}}))}/>
+                      Pérdida de fuerza
+                    </label>
+                  </div>
+                  <input value={form.neural.nota||''}
+                    onChange={e=>setF(f=>({...f,neural:{...f.neural,nota:e.target.value}}))}
+                    placeholder="Territorio, distancia, lo que quieras anotar..."
+                    style={{...fs.inp,marginTop:7,fontSize:10}}/>
+                  {/* El semáforo de carga de la sesión: el síntoma neural manda
+                      sobre el número de EVA. Un paciente con EVA 1 y parestesias
+                      nuevas es rojo, no verde. */}
+                  {(()=>{
+                    const sem=semaforoDeCarga(form.eva_fin, !!form.neural.parestesias||!!form.neural.perdida_fuerza);
+                    if(!sem)return null;
+                    return <div style={{marginTop:8,padding:'6px 10px',borderRadius:5,fontSize:10,
+                      background:sem.k==='verde'?'#DCFCE7':sem.k==='amarillo'?'#FEF3C7':'#FEF2F2',
+                      color:sem.color,fontWeight:700}}>
+                      {sem.rango} · {sem.accion}
+                      <div style={{fontWeight:400,color:'#555',marginTop:2}}>{sem.regla}</div>
+                    </div>;
+                  })()}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* GENERADOR IA DE PROTOCOLO */}

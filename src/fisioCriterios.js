@@ -74,6 +74,10 @@ export const METRICAS = {
     label: 'Prueba especial', unidad: '', auto: true,
     pide: 'ref = nombre exacto de la prueba, region, lado',
   },
+  neural: {
+    label: 'Síntomas neurales (no empeoraron)', unidad: '', auto: true,
+    pide: 'nada: compara la última sesión contra la anterior',
+  },
   // ── Las que NO se pueden automatizar hoy ──────────────────────────────────
   // No es una limitación de diseño: es que la sesión clínica no guarda estos
   // datos de forma estructurada. `respuesta` es un campo de texto libre, así
@@ -110,6 +114,21 @@ export const criterioVacio = (over = {}) => ({
   origen: 'ia',       // 'ia' | 'manu' — para ver quién puso cada uno
   ...over,
 });
+
+// ─── La escala de irradiación, que es ORDINAL ──────────────────────────────
+// "no" < "proximal" < "hasta_codo" < "hasta_mano". El criterio neural compara
+// la irradiación de esta sesión contra la anterior: si avanzó en la escala, no
+// se cumple y la fase no avanza. Sin un orden, "cambió la irradiación" no dice
+// si mejoró o empeoró, y era exactamente el problema de tenerlo como texto.
+export const IRRADIACION = ['no', 'proximal', 'hasta_codo', 'hasta_mano'];
+export const IRRADIACION_LABEL = {
+  no: 'sin irradiación', proximal: 'proximal (hombro/brazo)',
+  hasta_codo: 'hasta el codo', hasta_mano: 'hasta la mano',
+};
+const nivelIrradiacion = (v) => {
+  const i = IRRADIACION.indexOf(v);
+  return i < 0 ? null : i;
+};
 
 // ─── La unidad de cada escala funcional ────────────────────────────────────
 // No todas se expresan igual y escribir "puntos" en todas es un error clínico
@@ -221,6 +240,30 @@ function leerValor(cr, ctx) {
       return vals.includes('positivo') ? 'positivo' : 'negativo';
     }
 
+    // ─── EL CRITERIO 2 DEL DOCUMENTO DE MANU, AHORA EXIGIBLE ───────────────
+    // "No avanzar si aparecen: mayor irradiación distal, parestesias nuevas,
+    // pérdida de fuerza, aumento persistente de síntomas después de la
+    // sesión." Él lo marca como el criterio especialmente importante.
+    // Devuelve 'estable' o 'empeoro', comparando la última sesión registrada
+    // contra la anterior. Hace falta que el campo `neural` esté cargado en las
+    // DOS: con una sola sesión no hay con qué comparar, y eso es 'pendiente',
+    // nunca "estable por defecto". Dar por bueno lo que no se midió es
+    // precisamente lo que hace que un paciente avance de fase con la
+    // irradiación creciendo.
+    case 'neural': {
+      const conNeural = sesiones.filter(s2 => s2 && s2.neural);
+      if (conNeural.length < 2) return null;
+      const [ahora, antes] = conNeural;   // sesiones vienen de la más nueva
+      const nAhora = nivelIrradiacion(ahora.neural.irradiacion);
+      const nAntes = nivelIrradiacion(antes.neural.irradiacion);
+      if (nAhora == null || nAntes == null) return null;
+      // Cualquiera de las tres señales empeorando alcanza para no avanzar.
+      const peor = nAhora > nAntes
+        || (ahora.neural.parestesias && !antes.neural.parestesias)
+        || (ahora.neural.perdida_fuerza && !antes.neural.perdida_fuerza);
+      return peor ? 'empeoro' : 'estable';
+    }
+
     default:
       return null;
   }
@@ -255,7 +298,23 @@ export function evaluarCriterio(cr, ctx) {
       esperado: `${cr.operador} ${cr.umbral}${unidad}`,
       // Esta frase importa: le dice al clínico qué ir a medir, en lugar de
       // dejarlo adivinando por qué el criterio no avanza.
-      detalle: `Falta medir: ${met.label}${cr.ref ? ` (${cr.ref})` : ''}`,
+      detalle: cr.metrica === 'neural'
+        ? 'Faltan dos sesiones con los síntomas neurales cargados para poder comparar'
+        : `Falta medir: ${met.label}${cr.ref ? ` (${cr.ref})` : ''}`,
+    };
+  }
+
+  // El eje neural se evalúa por estable/empeoró, no contra un umbral.
+  if (cr.metrica === 'neural') {
+    const bien = valor === 'estable';
+    return {
+      ...base, auto: true,
+      estado: bien ? 'cumplido' : 'no_cumplido',
+      valor: bien ? 'estable' : 'empeoró',
+      esperado: 'sin empeorar',
+      detalle: bien
+        ? 'La irradiación, las parestesias y la fuerza no empeoraron respecto de la sesión anterior'
+        : 'EMPEORÓ respecto de la sesión anterior: no avanzar de fase y revisar la dosis',
     };
   }
 
