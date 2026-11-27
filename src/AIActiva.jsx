@@ -54,6 +54,15 @@ async function callClaude(userPrompt, maxTokens = 2000) {
   }
 }
 
+// ─── Lo que necesita el razonador clínico ─────────────────────────────────────
+// Los prompts, la forma de los criterios y la validación contra la biblioteca
+// viven afuera para que se puedan probar sin montar React: los arneses
+// qa/fisioCriterios.mjs y qa/fisioRazonamiento.mjs los ejercitan directo.
+import { promptAnalisisClinico, promptPlanRehab, validarPlanContraBiblioteca,
+         nombreDeEjercicio } from "./fisioRazonamiento.js";
+import { criterioVacio, evaluarFase, EJES, METRICAS } from "./fisioCriterios.js";
+import { informeRehabHTML } from "./pdfRehab.js";
+
 // ─── COLORES / ESTILOS ────────────────────────────────────────────────────────
 const AI = "#6D28D9";  // violeta IA
 const AI_LIGHT = "#F5F3FF";
@@ -180,121 +189,420 @@ export function AIGeneradorSesion({ cliente, periodizacion, faseIndex=0, tests, 
 }
 
 // ─── MÓDULO 2: GENERADOR DE PROTOCOLO CLÍNICO ────────────────────────────────
-export function AIGeneradorProtocolo({ paciente, region, fase, evaluacion, reglas = [], historial = [], onApply }) {
-  const [loading, setLoading] = useState(false);
-  const [result, setResult]   = useState(null);
-  const [error, setError]     = useState(null);
-  const [instrucciones, setInstrucciones] = useState("");
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 2: EL RAZONADOR CLÍNICO — DOS PASOS
+// ═══════════════════════════════════════════════════════════════════════════
+// REEMPLAZA a AIGeneradorProtocolo, que pedía "5-8 ejercicios para la fase X
+// en región Y" con tres campos de la evaluación y la fase de NEGOCIO. Devolvía
+// una lista de ejercicios inventados y tres frases de criterio. Manu el
+// 27/11/2026: "la IA no genera planes ni sesiones claras en función de la
+// lesión cargada, los criterios no están bien establecidos y el PDF no brinda
+// información suficiente". El PDF era pobre porque no había nada que imprimir.
+//
+// PASO 1 — Análisis: interpretación, hipótesis rankeadas con su fundamento,
+//          qué no dejar pasar, Fase 0 si las señales la justifican, criterios
+//          de avance con umbral, y qué falta medir.
+// PASO 2 — Programa: fases y sesiones sobre el análisis YA VALIDADO por el
+//          clínico, prescribiendo SOLO de la biblioteca de rehab.
+//
+// Los dos pasos están separados porque la hipótesis todavía no está cerrada
+// cuando se arranca: si la IA genera 12 semanas de una pasada sobre una
+// hipótesis equivocada, son 12 semanas de plan equivocado. Decisión de Manu.
+export function AIRazonadorClinico({
+  paciente, regiones = [], evaluacion, resumenDeterminista = '',
+  sesionesDisponibles = null, reglas = [], historial = [], onAplicar,
+  marca = {}, evaluador = '',
+}) {
   const [show, setShow]       = useState(false);
+  const [paso, setPaso]       = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState(null);
+  const [analisis, setAnalisis] = useState(null);
+  const [criterios, setCriterios] = useState([]);
+  const [programa, setPrograma]   = useState(null);
+  const [chequeo, setChequeo]     = useState(null);
+  const [frecuencia, setFrecuencia] = useState(2);
 
-  const generar = async () => {
-    setLoading(true); setError(null); setResult(null);
+  const regs = regiones.length ? regiones : (evaluacion?.region ? [evaluacion.region] : []);
+
+  // ─── PASO 1 ──────────────────────────────────────────────────────────────
+  const analizar = async () => {
+    setLoading(true); setError(null);
     try {
-      const eva = evaluacion?.escalas_dolor?.eva_actual || evaluacion?.eva || "no registrado";
-      const dx  = evaluacion?.diagnosticoPT || evaluacion?.diagnostico || "no registrado";
-      const obj = evaluacion?.objetivos_tratamiento || "no especificados";
-
-      const prompt = `Generá un protocolo de rehabilitación en JSON para este paciente de FisioActiva Colonia:
-
-Paciente: ${paciente?.nombre} ${paciente?.apellido}
-Región: ${region}
-Fase del Método Activa Integra: ${fase?.toUpperCase()}
-Diagnóstico fisioterapéutico: ${dx}
-EVA actual: ${eva}/10
-Objetivos de tratamiento: ${obj}
-Instrucciones adicionales: ${instrucciones || "ninguna"}
-${ctxReglas(reglas,'rehab')}${ctxHistorial(historial,'SESIONES CLÍNICAS PREVIAS DE ESTE PACIENTE')}
-Respondé ÚNICAMENTE con este JSON:
-{
-  "titulo": "nombre del protocolo",
-  "objetivo": "objetivo clínico principal",
-  "duracion_sesion": "X minutos",
-  "frecuencia": "X sesiones por semana",
-  "ejercicios": [
-    {
-      "nombre": "nombre del ejercicio",
-      "desc": "descripción detallada del procedimiento (posición, ejecución, puntos clave)",
-      "param": "parámetros (ej: 3×12 rep · hold 5 seg · RPE 4-5)",
-      "progresion": "cómo progresar cuando se domine",
-      "precaucion": "qué evitar o vigilar"
-    }
-  ],
-  "criterios_alta_fase": ["criterio 1", "criterio 2", "criterio 3"],
-  "precauciones_generales": "precauciones para toda la sesión",
-  "razonamiento": "justificación clínica basada en evidencia (2-3 líneas)"
-}
-
-Incluí 5-8 ejercicios apropiados para la fase ${fase} en región ${region}. Basate en evidencia fisioterapéutica actual.`;
-
-      const data = await callClaude(prompt, 2500);
-      setResult(data);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+      const data = await callClaude(promptAnalisisClinico({
+        resumenDeterminista, regiones: regs,
+        testsEsp: evaluacion?.testsEsp || {},
+        faseRehabActual: evaluacion?.faseRehab || '',
+        historial, ctxReglasTexto: ctxReglas(reglas, 'rehab'),
+      }), 4000);
+      setAnalisis(data);
+      // Los criterios se vuelven editables al toque: la IA elige los ejes y
+      // Manu agrega, cambia o borra. Es lo que pidió explícitamente.
+      setCriterios((data.criterios_propuestos || []).map(c => criterioVacio({ ...c, origen: 'ia' })));
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   };
+
+  // ─── PASO 2 ──────────────────────────────────────────────────────────────
+  const construir = async () => {
+    setLoading(true); setError(null);
+    try {
+      const data = await callClaude(promptPlanRehab({
+        analisis: { ...analisis, criterios_propuestos: criterios },
+        resumenDeterminista, regiones: regs, sesionesDisponibles, frecuencia,
+        ocupacion: evaluacion?.ocupacion || '', deporte: evaluacion?.deporte || '',
+        objetivoPaciente: evaluacion?.objetivo || '',
+        ctxReglasTexto: ctxReglas(reglas, 'rehab'),
+      }), 8000);
+      // Se verifica que cada ejercicio exista ANTES de mostrar el programa: un
+      // id inventado es un fisio mirando una línea vacía con el paciente
+      // adelante.
+      setChequeo(validarPlanContraBiblioteca(data, regs));
+      setPrograma(data); setPaso(2);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  // El criterio se evalúa EN VIVO contra la evaluación guardada, así Manu ve
+  // al escribirlo si es exigible o si le falta el dato. Eso es lo que enseña
+  // cuál criterio sirve: "falta medir la fuerza del supraespinoso" le dice qué
+  // ir a medir, en lugar de dejarlo con una frase linda que nadie puede usar.
+  const ctxCrit = { ev: evaluacion || {}, region: regs[0] || '', sesiones: [], confirmaciones: {} };
+  const veredicto = evaluarFase(criterios, ctxCrit);
+
+  const setCr = (id, k, v) => setCriterios(cs => cs.map(c => c.id === id ? { ...c, [k]: v, origen: 'manu' } : c));
+  const delCr = (id) => setCriterios(cs => cs.filter(c => c.id !== id));
+  const addCr = () => setCriterios(cs => [...cs, criterioVacio({ origen: 'manu', que: '', porque: '' })]);
+
+  const COLOR_PROB = { alta:R, 'moderada-alta':AM, moderada:'#CA8A04', baja:G3 };
+  const COLOR_EST  = { cumplido:GN, no_cumplido:R, pendiente:G3 };
+  const ICONO_EST  = { cumplido:'✓', no_cumplido:'✗', pendiente:'○' };
 
   if (!show) return (
     <button onClick={()=>setShow(true)} style={{...as.btn(),marginBottom:8,width:'100%',justifyContent:'center'}}>
-      🤖 Generar protocolo con IA
+      🩺 Razonar el caso y armar el programa de rehabilitación
     </button>
   );
 
   return (
     <div style={{...as.card,marginBottom:12}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontSize:13,fontWeight:800,color:AI}}>🤖 Asistente IA — Protocolo clínico</div>
-        <button onClick={()=>{setShow(false);setResult(null);setError(null);}} style={as.btnOutline}>✕</button>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+        <div style={{fontSize:13,fontWeight:800,color:AI}}>
+          🩺 Razonamiento clínico — paso {paso} de 2: {paso===1?'análisis del caso':'programa por fases'}
+        </div>
+        <button onClick={()=>{setShow(false);setAnalisis(null);setPrograma(null);setError(null);setPaso(1);}} style={as.btnOutline}>✕</button>
       </div>
-      <div style={{fontSize:11,color:G4,marginBottom:8}}>
-        Genera un protocolo de rehabilitación personalizado basado en el perfil clínico del paciente, región, fase y diagnóstico registrado.
+      <div style={{fontSize:10,color:G4,marginBottom:10}}>
+        {paso===1
+          ? `Lee la evaluación completa de ${regs.length} región(es) con sus pruebas, su sensibilidad y su especificidad. Primero razona el caso; el programa se arma después, cuando vos valides el análisis.`
+          : `Construido sobre el análisis que validaste, prescribiendo solo de la biblioteca de rehabilitación.`}
       </div>
-      <div style={{marginBottom:8}}>
-        <span style={as.lbl}>Instrucciones adicionales (opcional)</span>
-        <input value={instrucciones} onChange={e=>setInstrucciones(e.target.value)}
-          placeholder="Ej: paciente deportista, trabajo de pie, intolerancia al dolor..."
-          style={as.inp}/>
-      </div>
-      {!loading&&!result&&(
-        <button onClick={generar} style={{...as.btn(),width:'100%',justifyContent:'center'}}>
-          ✨ Generar protocolo — {region} · {fase?.toUpperCase()}
+
+      {!resumenDeterminista && (
+        <div style={{background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:6,padding:'8px 10px',fontSize:11,marginBottom:8}}>
+          ⚠ No hay una evaluación cargada para este paciente. Sin evaluación la IA no tiene de dónde razonar: cargá una primero.
+        </div>
+      )}
+
+      {error && (
+        <div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,color:R,marginBottom:8}}>
+          <strong>Error:</strong> {error}
+          <br/><button onClick={paso===1?analizar:construir} style={{...as.btn(R),marginTop:5,fontSize:10}}>Reintentar</button>
+        </div>
+      )}
+
+      {loading && <Spinner msg={paso===1?'Interpretando hallazgos y rankeando hipótesis...':'Armando fases, sesiones y criterios...'}/>}
+
+      {/* ─── PASO 1: EL ANÁLISIS ─────────────────────────────────────────── */}
+      {!loading && paso===1 && !analisis && resumenDeterminista && (
+        <button onClick={analizar} style={{...as.btn(),width:'100%',justifyContent:'center'}}>
+          ✨ Analizar el caso — {regs.length} región(es)
         </button>
       )}
-      {loading&&<Spinner msg="Generando protocolo basado en evidencia clínica..."/>}
-      {error&&<div style={{background:'#FEF2F2',border:'1px solid #FCA5A5',borderRadius:6,padding:'8px 10px',fontSize:11,color:'#DC2626'}}><strong>Error:</strong> {error}<br/><button onClick={generar} style={{...as.btn(R),marginTop:5,fontSize:10}}>Reintentar</button></div>}
-      {result&&(
+
+      {!loading && paso===1 && analisis && (
         <div>
-          <div style={{background:WH,border:`1px solid ${AI_BORDER}`,borderRadius:7,padding:'10px 12px',marginBottom:8}}>
-            <div style={{fontSize:12,fontWeight:700,color:AI,marginBottom:2}}>{result.titulo}</div>
-            <div style={{fontSize:11,color:G4,marginBottom:6}}>{result.objetivo}</div>
-            <div style={{display:'flex',gap:10,fontSize:10,color:G3,marginBottom:8}}>
-              <span>⏱ {result.duracion_sesion}</span>
-              <span>📅 {result.frecuencia}</span>
+          {/* Lo que no se puede dejar pasar va PRIMERO: si hay que derivar, eso
+              manda sobre cualquier programa de ejercicios. */}
+          {(analisis.no_dejar_pasar||[]).length>0 && (
+            <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:7,padding:'10px 12px',marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:800,color:R,marginBottom:6}}>⚠ NO DEJAR PASAR — antes de tratar</div>
+              {analisis.no_dejar_pasar.map((x,i)=>(
+                <div key={i} style={{marginBottom:6,fontSize:11}}>
+                  <div style={{fontWeight:700}}>{x.que}</div>
+                  <div style={{color:G4,fontSize:10}}>{x.por_que}</div>
+                  <div style={{color:R,fontSize:10,fontWeight:700}}>→ Derivar si: {x.derivar_si}</div>
+                </div>
+              ))}
             </div>
-            {result.ejercicios?.map((e,i)=>(
-              <div key={i} style={{padding:'7px 10px',background:i%2===0?G1:WH,borderRadius:5,marginBottom:4,borderLeft:`3px solid ${AI}`}}>
-                <div style={{fontSize:11,fontWeight:700,marginBottom:2}}>{i+1}. {e.nombre}</div>
-                <div style={{fontSize:10,color:G4,marginBottom:2}}>{e.desc}</div>
-                <div style={{fontSize:10,fontWeight:700,color:AI}}>{e.param}</div>
-                {e.progresion&&<div style={{fontSize:9,color:GN,marginTop:2}}>↑ Progresión: {e.progresion}</div>}
-                {e.precaucion&&<div style={{fontSize:9,color:AM,marginTop:1}}>⚠ {e.precaucion}</div>}
+          )}
+
+          {analisis.lectura_global && (
+            <div style={{background:WH,border:`1px solid ${AI_BORDER}`,borderRadius:7,padding:'10px 12px',marginBottom:10}}>
+              <div style={{fontSize:9,color:G3,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,marginBottom:4}}>Lectura global del caso</div>
+              <div style={{fontSize:11,lineHeight:1.6}}>{analisis.lectura_global}</div>
+            </div>
+          )}
+
+          {(analisis.interpretacion||[]).map((s,i)=>(
+            <div key={i} style={{background:WH,borderRadius:6,padding:'8px 10px',marginBottom:6,borderLeft:`3px solid ${AI}`}}>
+              <div style={{fontSize:11,fontWeight:800,marginBottom:3}}>{s.sistema}</div>
+              {(s.hallazgos||[]).map((h,j)=><div key={j} style={{fontSize:10,color:G4}}>· {h}</div>)}
+              {s.lectura && <div style={{fontSize:10,marginTop:4,fontStyle:'italic',color:'#1D4ED8',lineHeight:1.5}}>{s.lectura}</div>}
+            </div>
+          ))}
+
+          {(analisis.hipotesis||[]).length>0 && (
+            <div style={{marginTop:10,marginBottom:10}}>
+              <div style={{fontSize:9,color:G3,textTransform:'uppercase',letterSpacing:'.04em',fontWeight:700,marginBottom:5}}>Hipótesis de trabajo, en orden</div>
+              {analisis.hipotesis.map((h,i)=>(
+                <div key={i} style={{background:WH,borderRadius:6,padding:'9px 11px',marginBottom:6,border:`1px solid ${G2}`}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:4}}>
+                    <span style={{background:COLOR_PROB[h.probabilidad]||G3,color:WH,fontSize:8,fontWeight:800,padding:'2px 7px',borderRadius:99,textTransform:'uppercase'}}>{h.probabilidad}</span>
+                    <span style={{fontSize:11,fontWeight:800}}>{h.n}. {h.titulo}</span>
+                  </div>
+                  {h.fundamento && <div style={{fontSize:10,color:G4,marginBottom:4,lineHeight:1.5}}>{h.fundamento}</div>}
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,fontSize:9}}>
+                    <div>
+                      <div style={{color:GN,fontWeight:700,marginBottom:2}}>A favor</div>
+                      {(h.a_favor||[]).map((x,j)=><div key={j} style={{color:G4}}>+ {x}</div>)}
+                    </div>
+                    <div>
+                      <div style={{color:AM,fontWeight:700,marginBottom:2}}>En contra / falta</div>
+                      {(h.en_contra||[]).map((x,j)=><div key={j} style={{color:G4}}>− {x}</div>)}
+                    </div>
+                  </div>
+                  {(h.como_confirmar||[]).length>0 && (
+                    <div style={{marginTop:5,fontSize:9,background:'#EFF6FF',borderRadius:4,padding:'4px 7px'}}>
+                      <strong style={{color:'#1D4ED8'}}>Para confirmarla:</strong> {h.como_confirmar.join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {analisis.fase0?.necesaria && (
+            <div style={{background:'#EFF6FF',border:'1px solid #93C5FD',borderRadius:7,padding:'10px 12px',marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:800,color:'#1D4ED8',marginBottom:3}}>
+                🔍 Fase 0 — confirmación clínica ({analisis.fase0.sesiones} sesión{analisis.fase0.sesiones>1?'es':''})
               </div>
-            ))}
-            {result.criterios_alta_fase?.length>0&&(
-              <div style={{marginTop:6,background:'#EFF6FF',borderRadius:5,padding:'6px 8px',fontSize:10}}>
-                <strong style={{color:'#1D4ED8'}}>📋 Criterios para avanzar de fase:</strong>
-                {result.criterios_alta_fase.map((c,i)=><div key={i} style={{color:'#1D4ED8',marginTop:2}}>→ {c}</div>)}
-              </div>
-            )}
-            {result.precauciones_generales&&(
-              <div style={{marginTop:6,background:'#FFF9EC',borderRadius:5,padding:'6px 8px',fontSize:10,color:'#78350F',border:'1px solid #FCD34D'}}>⚠ {result.precauciones_generales}</div>
-            )}
-            {result.razonamiento&&<div style={{marginTop:6,background:'#F5F3FF',borderRadius:5,padding:'6px 8px',fontSize:10,color:G4,borderLeft:`3px solid ${AI}`}}><strong>💡 Razonamiento clínico:</strong> {result.razonamiento}</div>}
+              <div style={{fontSize:10,color:G4,marginBottom:5}}>{analisis.fase0.por_que}</div>
+              {(analisis.fase0.bateria||[]).map((b,i)=>(
+                <div key={i} style={{fontSize:10,marginBottom:2}}>
+                  <strong>{b.area}:</strong> {(b.pruebas||[]).join(', ')}
+                </div>
+              ))}
+              {analisis.fase0.que_decide && <div style={{fontSize:10,marginTop:5,fontStyle:'italic',color:'#1D4ED8'}}>Qué decide: {analisis.fase0.que_decide}</div>}
+            </div>
+          )}
+
+          {/* ─── CRITERIOS EDITABLES, EVALUADOS EN VIVO ─────────────────────
+              Acá está el arreglo del reclamo "los criterios no los contempla la
+              programación": cada criterio es un dato con umbral, y el estado
+              que se ve al costado lo calcula el sistema contra la evaluación
+              guardada. Si dice "falta medir", eso es lo que hay que ir a medir. */}
+          <div style={{background:WH,border:`1px solid ${AI_BORDER}`,borderRadius:7,padding:'10px 12px',marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <div style={{fontSize:10,fontWeight:800,color:AI}}>Criterios para pasar de fase ({criterios.length})</div>
+              <button onClick={addCr} style={{...as.btnOutline,fontSize:10}}>+ Agregar criterio</button>
+            </div>
+            <div style={{fontSize:9,color:G3,marginBottom:8}}>
+              Los eligió la IA para este caso. Cambialos, agregá o borrá los que quieras: el estado de la derecha lo calcula el sistema contra la evaluación cargada.
+            </div>
+            {veredicto.criterios.map((ev,i)=>{
+              const cr = criterios[i]; if(!cr) return null;
+              return (
+                <div key={cr.id} style={{background:G1,borderRadius:6,padding:'7px 9px',marginBottom:5}}>
+                  <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:4}}>
+                    <select value={cr.eje} onChange={e=>setCr(cr.id,'eje',e.target.value)} style={{...as.inp,width:120,fontSize:10}}>
+                      {Object.entries(EJES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+                    </select>
+                    <input value={cr.que} onChange={e=>setCr(cr.id,'que',e.target.value)} placeholder="qué se mide, en palabras" style={{...as.inp,flex:1,fontSize:10}}/>
+                    <span style={{color:COLOR_EST[ev.estado],fontWeight:800,fontSize:11,whiteSpace:'nowrap'}}>
+                      {ICONO_EST[ev.estado]} {ev.valor||'—'}
+                    </span>
+                    <button onClick={()=>delCr(cr.id)} style={{background:'none',border:'none',color:R,cursor:'pointer',fontSize:13}} title="Borrar este criterio">✕</button>
+                  </div>
+                  <div style={{display:'flex',gap:5,alignItems:'center'}}>
+                    <select value={cr.metrica} onChange={e=>setCr(cr.id,'metrica',e.target.value)} style={{...as.inp,width:155,fontSize:9}}>
+                      {Object.entries(METRICAS).map(([k,m])=><option key={k} value={k}>{m.label}{m.auto?'':' (a mano)'}</option>)}
+                    </select>
+                    <input value={cr.ref||''} onChange={e=>setCr(cr.id,'ref',e.target.value)} placeholder="qué (mov./músculo/escala)" style={{...as.inp,flex:1,fontSize:9}}/>
+                    <select value={cr.operador} onChange={e=>setCr(cr.id,'operador',e.target.value)} style={{...as.inp,width:62,fontSize:9}}>
+                      {['>=','<=','==','negativo'].map(o=><option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <input type="number" value={cr.umbral??''} onChange={e=>setCr(cr.id,'umbral',e.target.value)} placeholder="umbral" style={{...as.inp,width:70,fontSize:9}}/>
+                    <select value={cr.lado||''} onChange={e=>setCr(cr.id,'lado',e.target.value||null)} style={{...as.inp,width:88,fontSize:9}}>
+                      <option value="">sin lado</option><option value="derecho">derecho</option>
+                      <option value="izquierdo">izquierdo</option><option value="bilateral">bilateral</option>
+                    </select>
+                    <label style={{fontSize:9,color:G4,display:'flex',alignItems:'center',gap:3,whiteSpace:'nowrap'}}>
+                      <input type="checkbox" checked={cr.obligatorio!==false} onChange={e=>setCr(cr.id,'obligatorio',e.target.checked)}/>oblig.
+                    </label>
+                  </div>
+                  <div style={{fontSize:9,color:ev.estado==='pendiente'?AM:G3,marginTop:3}}>
+                    {ev.detalle}{cr.porque?` · ${cr.porque}`:''}
+                    {cr.origen==='manu'&&<span style={{marginLeft:5,color:AI,fontWeight:700}}>editado por vos</span>}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{marginTop:7,padding:'6px 9px',borderRadius:5,fontSize:10,fontWeight:700,
+              background:veredicto.veredicto==='avanza'?'#DCFCE7':veredicto.veredicto==='no_avanza'?'#FEF2F2':'#FEF3C7',
+              color:veredicto.veredicto==='avanza'?GN:veredicto.veredicto==='no_avanza'?R:AM}}>
+              Hoy: {veredicto.motivo}
+            </div>
           </div>
-          <div style={{display:'flex',gap:6}}>
-            <button onClick={()=>{onApply(result);setResult(null);setShow(false);}} style={{...as.btn(GN),flex:2}}>✅ Aplicar protocolo</button>
-            <button onClick={generar} style={{...as.btnOutline,flex:1}}>🔄 Regenerar</button>
+
+          {(analisis.faltantes_evaluacion||[]).length>0 && (
+            <div style={{background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:7,padding:'9px 11px',marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:800,color:AM,marginBottom:4}}>📋 Falta en la evaluación</div>
+              {analisis.faltantes_evaluacion.map((f,i)=>(
+                <div key={i} style={{fontSize:10,marginBottom:3}}>
+                  <strong>{f.que}</strong> <span style={{color:G4}}>— {f.por_que}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {analisis.advertencia && (
+            <div style={{fontSize:9,color:G4,fontStyle:'italic',marginBottom:10,padding:'6px 9px',background:G1,borderRadius:5}}>
+              {analisis.advertencia}
+            </div>
+          )}
+
+          <div style={{display:'flex',gap:7,alignItems:'center'}}>
+            <label style={{fontSize:10,color:G4,whiteSpace:'nowrap'}}>Frecuencia:</label>
+            <select value={frecuencia} onChange={e=>setFrecuencia(parseInt(e.target.value))} style={{...as.inp,width:110,fontSize:10}}>
+              {[1,2,3].map(n=><option key={n} value={n}>{n}/semana</option>)}
+            </select>
+            <button onClick={analizar} style={{...as.btnOutline,fontSize:10}}>↻ Reanalizar</button>
+            <button onClick={construir} style={{...as.btn(),flex:1,justifyContent:'center'}}>
+              ✓ Validar el análisis y construir el programa →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── PASO 2: EL PROGRAMA ─────────────────────────────────────────── */}
+      {!loading && paso===2 && programa && (
+        <div>
+          {chequeo && !chequeo.ok && (
+            <div style={{background:'#FEF2F2',border:`2px solid ${R}`,borderRadius:7,padding:'9px 11px',marginBottom:9,fontSize:11,color:R}}>
+              <strong>⚠ El programa tiene ejercicios que no existen en la biblioteca.</strong>
+              <div style={{fontSize:10,marginTop:3}}>{chequeo.mensaje}</div>
+              <button onClick={construir} style={{...as.btn(R),marginTop:5,fontSize:10}}>↻ Regenerar el programa</button>
+            </div>
+          )}
+
+          <div style={{background:WH,border:`1px solid ${AI_BORDER}`,borderRadius:7,padding:'10px 12px',marginBottom:9}}>
+            <div style={{fontSize:12,fontWeight:800,color:AI}}>{programa.titulo}</div>
+            <div style={{fontSize:11,color:G4,marginTop:3,lineHeight:1.5}}>{programa.objetivo_global}</div>
+            <div style={{display:'flex',gap:12,fontSize:10,color:G3,marginTop:6}}>
+              <span>📅 {programa.semanas_total} semanas</span>
+              <span>🔁 {programa.sesiones_total} sesiones</span>
+              <span>📚 {chequeo?.total||0} ejercicios{chequeo?.ok?' ✓ verificados':''}</span>
+            </div>
+          </div>
+
+          {(programa.progresion||[]).length>0 && (
+            <div style={{background:G1,borderRadius:6,padding:'8px 10px',marginBottom:9}}>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',marginBottom:4}}>Progresión de carga</div>
+              <div style={{fontSize:10,color:G4,lineHeight:1.7}}>{programa.progresion.join('  →  ')}</div>
+            </div>
+          )}
+
+          {(programa.fases||[]).map((f,i)=>(
+            <div key={i} style={{background:WH,borderRadius:7,padding:'9px 11px',marginBottom:7,borderLeft:`4px solid ${AI}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{fontSize:11,fontWeight:800}}>{f.label}</div>
+                <div style={{fontSize:9,color:G3}}>sem {f.semanas} · {f.sesiones} ses · {f.frecuencia}</div>
+              </div>
+              <div style={{fontSize:10,color:G4,marginTop:2,marginBottom:5}}>{f.objetivo}</div>
+
+              {(f.criterios_para_salir||[]).length>0 && (
+                <div style={{background:'#EFF6FF',borderRadius:5,padding:'5px 8px',marginBottom:5,fontSize:9}}>
+                  <strong style={{color:'#1D4ED8'}}>Para salir de esta fase:</strong>
+                  {f.criterios_para_salir.map((c,j)=>(
+                    <div key={j} style={{color:'#1D4ED8'}}>→ {c.que} ({c.operador} {c.umbral})</div>
+                  ))}
+                </div>
+              )}
+
+              {(f.sesiones_detalle||[]).map((s,j)=>(
+                <div key={j} style={{background:G1,borderRadius:5,padding:'6px 8px',marginBottom:4}}>
+                  <div style={{fontSize:10,fontWeight:700,marginBottom:3}}>Sesión {s.n} — {s.titulo}</div>
+                  {(s.bloques||[]).map((b,k)=>(
+                    <div key={k} style={{marginBottom:3}}>
+                      <div style={{fontSize:9,color:AI,fontWeight:700,textTransform:'uppercase'}}>{b.tipo}</div>
+                      {(b.ejercicios||[]).map((e,l)=>(
+                        <div key={l} style={{fontSize:9,color:G4}}>
+                          · {nombreDeEjercicio(e.id)} — <strong>{e.param}</strong>
+                          {e.nota?<span style={{color:'#1D4ED8'}}> · {e.nota}</span>:null}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {s.vigilar && <div style={{fontSize:9,color:AM,marginTop:2}}>⚠ Vigilar: {s.vigilar}</div>}
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {(programa.faltan_en_biblioteca||[]).length>0 && (
+            <div style={{background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:7,padding:'9px 11px',marginBottom:9}}>
+              <div style={{fontSize:10,fontWeight:800,color:AM,marginBottom:4}}>📚 Le faltó en la biblioteca</div>
+              <div style={{fontSize:9,color:G4,marginBottom:4}}>No los inventó dentro del programa. Agregalos a la biblioteca y reconstruí si los querés incluir.</div>
+              {programa.faltan_en_biblioteca.map((x,i)=>(
+                <div key={i} style={{fontSize:10}}>· <strong>{x.nombre}</strong> — {x.para_que} <span style={{color:G3}}>({x.fase})</span></div>
+              ))}
+            </div>
+          )}
+
+          {programa.dosis_fuera_de_sesion && (
+            <div style={{background:WH,borderRadius:6,padding:'8px 10px',marginBottom:7,border:`1px solid ${G2}`}}>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',marginBottom:3}}>Fuera de la sesión</div>
+              <div style={{fontSize:10,color:G4,lineHeight:1.5}}>{programa.dosis_fuera_de_sesion}</div>
+            </div>
+          )}
+
+          {(programa.educacion_paciente||[]).length>0 && (
+            <div style={{background:WH,borderRadius:6,padding:'8px 10px',marginBottom:7,border:`1px solid ${G2}`}}>
+              <div style={{fontSize:9,color:G3,fontWeight:700,textTransform:'uppercase',marginBottom:3}}>Para explicarle al paciente</div>
+              {programa.educacion_paciente.map((x,i)=><div key={i} style={{fontSize:10,color:G4}}>· {x}</div>)}
+            </div>
+          )}
+
+          {programa.razonamiento && (
+            <div style={{fontSize:10,color:G4,fontStyle:'italic',padding:'7px 10px',background:G1,borderRadius:5,marginBottom:9,lineHeight:1.5}}>
+              {programa.razonamiento}
+            </div>
+          )}
+
+          <div style={{display:'flex',gap:7}}>
+            <button onClick={()=>setPaso(1)} style={{...as.btnOutline,fontSize:10}}>← Volver al análisis</button>
+            <button onClick={construir} style={{...as.btnOutline,fontSize:10}}>↻ Reconstruir</button>
+            {/* El informe imprime el razonamiento ENTERO: hipótesis, criterios
+                con su umbral y cada ejercicio con su procedimiento. El PDF
+                viejo salía pobre porque la IA no producía nada más que una
+                lista de nombres. */}
+            <button onClick={()=>{
+              const html=informeRehabHTML({
+                paciente, evaluacion, analisis, criterios, programa,
+                evaluados:veredicto, marca, evaluador,
+              });
+              const w=window.open('','_blank');
+              if(!w){alert('El navegador bloqueó la ventana del informe. Habilitá las ventanas emergentes para este sitio.');return;}
+              w.document.write(html);w.document.close();
+            }} style={{...as.btnOutline,fontSize:10}}>🖨 Informe</button>
+            <button
+              onClick={()=>onAplicar&&onAplicar({analisis,criterios,programa,chequeo})}
+              disabled={chequeo&&!chequeo.ok}
+              style={{...as.btn(chequeo&&!chequeo.ok?G3:GN),flex:1,justifyContent:'center',
+                cursor:chequeo&&!chequeo.ok?'not-allowed':'pointer'}}>
+              {chequeo&&!chequeo.ok?'Corregí los ejercicios inventados primero':'💾 Guardar el programa en el plan clínico'}
+            </button>
           </div>
         </div>
       )}

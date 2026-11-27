@@ -3588,8 +3588,11 @@ export default function App(){
 
   const deleteClientFn = useCallback(async (id) => {
     await dbDeleteClient(id);
+    // Borrar al cliente seleccionado tiene que limpiar el plan en curso, o el
+    // id del plan del cliente borrado queda pegado en la sesión. Es el mismo
+    // camino que el robo de filas del 20/11, por la puerta de atrás.
     if(session.clienteId===id) vincularCliente(null);
-  }, [dbDeleteClient, session.clienteId]);
+  }, [dbDeleteClient, session.clienteId, vincularCliente]);
 
   const updateClientFn = useCallback(async (id, updates) => {
     await dbUpdateClient(id, updates);
