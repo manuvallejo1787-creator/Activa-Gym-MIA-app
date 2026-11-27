@@ -64,6 +64,30 @@ etapa(3, 'vite build')
   if (!r.ok) { mal('el build falló'); console.log(r.out.trim()) } else bien('compila')
 }
 
+// ── 3b. QUE LA APP ARRANQUE DE VERDAD ──────────────────────────────────────
+// EL AGUJERO QUE TAPA ESTA ETAPA (27/11/2026)
+// Salud dijo "✓ Salud OK — se puede desplegar" y la app no abría: pantalla de
+// error, "Cannot access 'vincularCliente' before initialization". Compilaba,
+// eslint estaba limpio, los 14 arneses pasaban. Ninguna de esas cosas abre la
+// aplicación.
+//
+// La causa fue una variable nombrada en la lista de dependencias de un
+// useCallback declarado 472 líneas ANTES que ella. Una dependencia se evalúa
+// durante el render, no cuando la función se llama, así que React lee el
+// nombre antes de que exista. Es un error que SOLO aparece ejecutando: el
+// compilador no lo ve porque el código es sintácticamente correcto, y eslint
+// no lo ve porque pedir esa dependencia es justamente lo que la regla
+// exhaustive-deps recomienda.
+//
+// Así que acá se levanta la app compilada en un navegador de verdad y se
+// mira si arranca. Es la diferencia entre "compila" y "funciona".
+etapa('3b', 'la app arranca en un navegador')
+{
+  const r = correr('node', ['verificar-arranque.mjs'])
+  if (!r.ok) { mal('LA APP NO ARRANCA'); console.log(r.out.trim()) }
+  else bien('arranca sin errores de consola y pinta la pantalla')
+}
+
 // ── 4. arneses de lógica ───────────────────────────────────────────────────
 etapa(4, 'qa/: arneses de lógica contra datos reales')
 {

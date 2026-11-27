@@ -3586,6 +3586,46 @@ export default function App(){
     await dbSaveClient(client);
   }, [dbSaveClient]);
 
+  // ── POR QUÉ ESTÁ ACÁ ARRIBA Y NO MÁS ABAJO ──────────────────────────────
+  // Tiene que declararse ANTES de deleteClientFn, que la nombra en su lista de
+  // dependencias. Una dependencia se evalúa DURANTE EL RENDER, no cuando la
+  // función se llama: con la declaración más abajo, React lee el nombre antes
+  // de que exista y la app no arranca ("Cannot access 'vincularCliente' before
+  // initialization", pantalla de error, 27/11/2026). Si se mueve de lugar, se
+  // mueve con deleteClientFn o se rompe de nuevo.
+  // ══ CAMBIAR DE CLIENTE LIMPIA EL PLAN EN CURSO ═══════════════════════════
+  //
+  // Pérdida de datos reportada el 20/11/2026: "la app me está borrando rutinas
+  // ya hechas". No las borraba: las REASIGNABA.
+  //
+  // `guardarPlanActual` hace `const id = session.planId || genId('plan')`, y
+  // ninguno de los OCHO lugares que cambiaban `session.clienteId` limpiaba
+  // `planId`. Entonces el id del plan de un cliente quedaba pegado en la
+  // sesión, y al guardar con otro cliente seleccionado el upsert por id
+  // sobreescribía la fila: el plan cambiaba de dueño y el primero lo perdía.
+  //
+  // Medido en la base: UN plan compartido por tres clientas (Vanesa Sagasti,
+  // Natalia Morales, Melanie Hellbusch), y el mismo patrón en agosto con otras
+  // dos. Las cargas del portal quedaban huérfanas apuntando a un plan ajeno.
+  //
+  // Esta función reemplaza los ocho `setSession(p=>({...p,clienteId:...}))`
+  // sueltos. Un solo lugar que sepa qué hay que limpiar es lo que evita que el
+  // noveno vuelva a olvidarse.
+  const vincularCliente=useCallback((c)=>{
+    setSession(p=>{
+      const nuevoId=c?.id||null;
+      if(p.clienteId===nuevoId)return p;        // mismo cliente: no se toca nada
+      return {...p,
+        clienteId:nuevoId,
+        cliente:c?`${c.nombre||''} ${c.apellido||''}`.trim():'',
+        // Todo lo que identifica al PLAN del cliente anterior se va. Si se
+        // conservara, el próximo guardado le pisaría el plan al otro.
+        planId:null, planNombre:'', planEstado:'activo', planEsEjemplo:false,
+        planNotasGlobal:'',
+      };
+    });
+  },[]);
+
   const deleteClientFn = useCallback(async (id) => {
     await dbDeleteClient(id);
     // Borrar al cliente seleccionado tiene que limpiar el plan en curso, o el
@@ -4040,38 +4080,6 @@ export default function App(){
     }
     return {...p,dias:p.dias.slice(0,target),activeDia:Math.min(p.activeDia,target-1)};
   });
-  // ══ CAMBIAR DE CLIENTE LIMPIA EL PLAN EN CURSO ═══════════════════════════
-  //
-  // Pérdida de datos reportada el 20/11/2026: "la app me está borrando rutinas
-  // ya hechas". No las borraba: las REASIGNABA.
-  //
-  // `guardarPlanActual` hace `const id = session.planId || genId('plan')`, y
-  // ninguno de los OCHO lugares que cambiaban `session.clienteId` limpiaba
-  // `planId`. Entonces el id del plan de un cliente quedaba pegado en la
-  // sesión, y al guardar con otro cliente seleccionado el upsert por id
-  // sobreescribía la fila: el plan cambiaba de dueño y el primero lo perdía.
-  //
-  // Medido en la base: UN plan compartido por tres clientas (Vanesa Sagasti,
-  // Natalia Morales, Melanie Hellbusch), y el mismo patrón en agosto con otras
-  // dos. Las cargas del portal quedaban huérfanas apuntando a un plan ajeno.
-  //
-  // Esta función reemplaza los ocho `setSession(p=>({...p,clienteId:...}))`
-  // sueltos. Un solo lugar que sepa qué hay que limpiar es lo que evita que el
-  // noveno vuelva a olvidarse.
-  const vincularCliente=useCallback((c)=>{
-    setSession(p=>{
-      const nuevoId=c?.id||null;
-      if(p.clienteId===nuevoId)return p;        // mismo cliente: no se toca nada
-      return {...p,
-        clienteId:nuevoId,
-        cliente:c?`${c.nombre||''} ${c.apellido||''}`.trim():'',
-        // Todo lo que identifica al PLAN del cliente anterior se va. Si se
-        // conservara, el próximo guardado le pisaría el plan al otro.
-        planId:null, planNombre:'', planEstado:'activo', planEsEjemplo:false,
-        planNotasGlobal:'',
-      };
-    });
-  },[]);
 
   const resetPlan=()=>{setSession({cliente:'',clienteId:null,fecha:new Date().toISOString().split('T')[0],planNombre:'',dias:[blankDia(1)],activeDia:0});setExpandedBlock(null);setSelBlock(null);};
 
